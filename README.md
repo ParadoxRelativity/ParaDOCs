@@ -497,11 +497,18 @@ because that is the moment every installed client starts seeing the update.
 # 1. Bump the version electron-builder reads. The tag must match it.
 npm version 0.1.1 --workspace=@paradocs/desktop --no-git-tag-version
 
-# 2. Commit, tag, push.
+# 2. Commit and tag. Use -a: `git push --follow-tags` ignores lightweight tags,
+#    so a plain `git tag` would stay on your machine and never trigger a build.
 git commit -am "Release 0.1.1"
-git tag v0.1.1
-git push origin main --follow-tags
+git tag -a v0.1.1 -m "ParaDOCs 0.1.1"
+
+# 3. Push the branch and the tag. Pushing the tag is what starts the release.
+git push origin main
+git push origin v0.1.1
 ```
+
+If the Actions tab shows no run after pushing the tag, the tag did not reach
+GitHub — check with `git ls-remote --tags origin`.
 
 `.github/workflows/release.yml` then runs a typecheck, refuses the build if the
 tag and `apps/desktop/package.json` disagree, and builds on macOS and Windows

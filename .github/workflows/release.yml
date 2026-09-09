@@ -77,20 +77,48 @@ jobs:
       - name: Bundle desktop main process
         run: npm run build --workspace=@paradocs/desktop
 
+      # Signing is optional, but an *empty* CSC_LINK is not the same as an
+      # absent one: electron-builder treats the variable as defined, resolves
+      # the empty path to the working directory and dies with "not a file".
+      # So the signing variables are exported only when a certificate actually
+      # exists, and are left genuinely unset otherwise.
+      - name: Configure signing
+        shell: bash
+        env:
+          CERT: ${{ secrets.CSC_LINK }}
+          CERT_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CERT" ]; then
+            echo "No signing certificate configured; building unsigned."
+            # Stop electron-builder reaching for some unrelated identity that
+            # happens to be on the runner.
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "Signing certificate found."
+          # Heredoc form: a base64 certificate may span several lines.
+          {
+            echo "CSC_LINK<<__PARADOCS_EOF__"
+            echo "$CERT"
+            echo "__PARADOCS_EOF__"
+          } >> "$GITHUB_ENV"
+          if [ -n "$CERT_PASSWORD" ]; then
+            echo "CSC_KEY_PASSWORD=$CERT_PASSWORD" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM_ID" ]; then
+            echo "APPLE_ID=$NOTARY_APPLE_ID" >> "$GITHUB_ENV"
+            echo "APPLE_APP_SPECIFIC_PASSWORD=$NOTARY_PASSWORD" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$NOTARY_TEAM_ID" >> "$GITHUB_ENV"
+            echo "Notarisation credentials found."
+          else
+            echo "Notarisation credentials incomplete; skipping notarisation."
+          fi
+
       - name: Build installers and upload to draft release
         working-directory: apps/desktop
         run: npx electron-builder ${{ matrix.flag }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing is wired but optional. Each of these is empty until the
-          # corresponding secret exists, and electron-builder then skips signing
-          # rather than failing, so adding certificates later is a secrets
-          # change with no edit to this file.
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Without a certificate, stop electron-builder from picking up some
-          # unrelated identity that happens to be on the runner.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
