@@ -1,0 +1,96 @@
+# Cuts a release from a version tag.
+#
+# Pushing `vX.Y.Z` builds the desktop app on each platform and uploads the
+# installers, together with the latest*.yml manifests the auto-updater reads,
+# to a DRAFT GitHub Release. Publishing that draft is a deliberate second step,
+# because publishing is what makes every installed client start updating.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a build be exercised without tagging. Artifacts are still uploaded to a
+  # draft, so this is safe to run against main.
+  workflow_dispatch:
+
+permissions:
+  contents: write # required to create the release
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  verify:
+    name: Typecheck and version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+      # A tag that disagrees with package.json is the quiet failure worth
+      # catching: electron-builder takes the version from package.json, so the
+      # release would be named v0.1.2 while latest.yml advertised 0.1.1 and no
+      # client would ever see an update.
+      - name: Tag matches apps/desktop/package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag $TAG does not match apps/desktop/package.json ($PKG)."
+            exit 1
+          fi
+          echo "Releasing $PKG"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: verify
+    strategy:
+      # One platform failing should not discard the other's artifacts; the draft
+      # can be completed by re-running the failed job.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14 # Apple silicon; builds both arm64 and x64
+            platform: macOS
+            flag: --mac
+          - os: windows-latest
+            platform: Windows
+            flag: --win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - name: Build web client
+        run: npm run build --workspace=@paradocs/web
+      - name: Bundle desktop main process
+        run: npm run build --workspace=@paradocs/desktop
+
+      - name: Build installers and upload to draft release
+        working-directory: apps/desktop
+        run: npx electron-builder ${{ matrix.flag }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing is wired but optional. Each of these is empty until the
+          # corresponding secret exists, and electron-builder then skips signing
+          # rather than failing, so adding certificates later is a secrets
+          # change with no edit to this file.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Without a certificate, stop electron-builder from picking up some
+          # unrelated identity that happens to be on the runner.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}

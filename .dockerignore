@@ -1,0 +1,29 @@
+# Never copy secrets or local state into an image layer.
+.env
+.env.*
+!.env.example
+
+# Installed inside the image for the target platform.
+node_modules
+**/node_modules
+
+# Build output, regenerated during the image build.
+dist
+**/dist
+apps/web/dist
+
+# The desktop app is not in the server image. Its packaged installers are large
+# enough to matter to the build context, and only its manifest is needed.
+apps/desktop
+!apps/desktop/package.json
+
+# Local runtime state: uploaded files live in a volume, not the image.
+data
+
+.git
+.gitignore
+*.log
+.DS_Store
+coverage
+.vite
+**/.vite

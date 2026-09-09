@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+# The desktop app's build/ holds icons and entitlements: inputs, not output.
+!apps/desktop/build/
+apps/desktop/release/
+.env
+.env.local
+data/
+*.log
+.DS_Store
+.vite/
+coverage/
