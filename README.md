@@ -32,6 +32,9 @@ Multi-user, multi-workspace. Working today:
 - **Canvas mode** — an infinite board per document: sticky notes, text, document
   cards, webpage/video embeds, images, audio, shapes, mind maps, connectors
   and presentation frames
+- **Desktop app** — a native macOS and Windows build that connects to any number
+  of self-hosted servers, keeps local single-user workspaces that need no server
+  at all, and updates itself from GitHub Releases or a channel you host
 
 Not yet built: OIDC single sign-on (stubbed, see below) and the automated backup
 integrations (Backblaze/NAS) described below.
@@ -252,6 +255,108 @@ produces, so your content is never trapped in a proprietary shape. If a document
 is written by an API client that omits editor-specific fields, the web client
 normalizes the blocks before rendering rather than failing.
 
+## Desktop app
+
+`apps/desktop` packages ParaDOCs as a native application for macOS and Windows.
+It is the same web client, so nothing about the interface changes — what the
+desktop adds is a place to keep more than one ParaDOCs, and the option of not
+running a server at all.
+
+**Connections.** The app opens on a list of workspaces. One is a *server*: the
+address of a ParaDOCs you host, checked against `/api/health` before it is
+saved. The other is a *local workspace*, which lives entirely on the computer.
+Add as many of either as you like; each opens in its own window and each keeps
+its own login, because every connection gets its own Chromium session
+partition. Signing out of one leaves the others alone. `⌘⇧O` / `Ctrl+Shift+O`
+reopens the list, and `⌘1`…`⌘9` jump straight to a workspace.
+
+**Local workspaces** run the whole server inside the app: the same Fastify
+routes, the same migrations, the same collaboration layer, with
+[PGlite](https://pglite.dev) — Postgres 16 compiled to WebAssembly — in place of
+a Postgres server. Generated `tsvector` search, `ts_headline` snippets,
+`pg_trgm` and recursive folder queries all behave as they do on a real server,
+because it is a real Postgres. Everything is written under the OS application
+data directory, one folder per workspace:
+
+```
+macOS    ~/Library/Application Support/ParaDOCs/local/<id>/
+Windows  %APPDATA%\ParaDOCs\local\<id>\
+```
+
+with `pgdata/` for the database and `uploads/` for files, so one folder is the
+whole backup. A local workspace signs itself in — asking for an account and a
+password to read your own files would protect nothing, since the database sits
+unencrypted beside them. It is for one person: sharing, invites and live
+collaboration need a server. Removing a local workspace from the list only
+forgets it; the documents stay on disk.
+
+**How it works.** The main process serves the bundled client and reverse-proxies
+`/api`, `/uploads` and the `/collab` websocket to whichever server that window
+is connected to — the same arrangement as the Vite dev server. The renderer
+therefore sees one origin, exactly as a browser hitting a self-hosted
+deployment does, and the session cookie is an ordinary same-origin cookie
+rather than a third-party one. A local workspace is proxied identically; it is
+just a server that happens to live in the same process.
+
+The proxy listens on a random loopback port, refuses requests whose `Host` is
+not loopback (which is what defeats DNS rebinding), and strips `Secure` and
+`Domain` from cookies on their way back, since they were minted for an https
+origin and are being replayed over `http://127.0.0.1`. The hop from the app to
+the server keeps its TLS. Windows showing the client are given no preload
+bridge at all, may only navigate within the proxy origin — every other link
+opens in the real browser — and run under a content security policy that
+allows scripts only from the bundled client.
+
+**Updates.** An installed build checks for a new version shortly after launch
+and every six hours after that, downloads it in the background, and offers to
+restart — the update is applied on the next quit either way, so nothing
+interrupts you mid-sentence. Local workspaces are shut down cleanly before the
+installer runs, so pending document saves are flushed first. Both behaviours
+are switches in the workspace list, and **Check for Updates…** in the
+application menu (Help on Windows) forces a check with visible results.
+
+Where updates come from is not fixed to GitHub. A build published with
+electron-builder carries its own channel; a deployment that would rather serve
+its own can point the app at any static directory holding the release artifacts
+and their `latest*.yml`:
+
+```bash
+PARADOCS_UPDATE_URL=https://updates.example.com/paradocs/
+```
+
+Set `publish.owner` and `publish.repo` in `apps/desktop/electron-builder.yml` to
+your own repository before releasing. A build made without a publish target
+carries no update metadata, and the app then says so plainly instead of
+reporting an error on every launch.
+
+Two things are worth knowing before relying on this. **An unsigned build cannot
+update itself**: macOS refuses to replace an application whose signature it
+cannot verify, and the app reports exactly that rather than failing silently.
+And updates are only as trustworthy as the channel — electron-updater verifies
+the sha512 in `latest*.yml`, so serve that file over HTTPS.
+
+**Building it.**
+
+```bash
+npm install
+npm run desktop              # build and run against the current source
+npm run desktop:dist:mac     # .dmg and .zip, arm64 and x64
+npm run desktop:dist:win     # NSIS installers, x64 and arm64
+```
+
+Windows installers can be produced from macOS or Linux; the macOS build has to
+run on macOS. Builds are unsigned unless signing credentials are present.
+For macOS set `CSC_LINK` and `CSC_KEY_PASSWORD` to a Developer ID certificate,
+and `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` to notarise;
+the hardened runtime entitlements in `apps/desktop/build` already allow the JIT
+that Chromium and PGlite's WebAssembly need. For Windows set `CSC_LINK` and
+`CSC_KEY_PASSWORD` to a code signing certificate. Without signing, both systems
+will warn on first launch.
+
+The app icon is generated from one script, `apps/desktop/build/make-icons.py`;
+the generated `.icns`, `.ico` and `.png` are committed so packaging does not
+need Python.
+
 ## Requirements
 
 - Node.js 20+
@@ -372,6 +477,8 @@ GET /api/documents/:id/markdown
 ```
 apps/api        Fastify + node-postgres. Raw SQL, numbered migrations.
 apps/web        React SPA. Vite, TanStack Query, BlockNote, Tailwind.
+apps/desktop    Electron shell for macOS and Windows. Bundles apps/web and,
+                for local workspaces, apps/api on PGlite.
 packages/shared TypeScript types and zod schemas used by both sides.
 ```
 

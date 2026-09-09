@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { PoolClient } from 'pg';
+import type { DbClient } from '../db/pool.js';
 import { createDocumentSchema, isoDate, updateDocumentSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
@@ -12,7 +12,7 @@ const DOC_COLUMNS = `${DOCUMENT_SUMMARY_COLUMNS}, d.body, d.body_md AS "bodyMd",
   (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email)
      FROM users u WHERE u.id = d.created_by) AS owner`;
 
-async function replaceTags(client: PoolClient, documentId: string, workspaceId: string, tagIds: string[]) {
+async function replaceTags(client: DbClient, documentId: string, workspaceId: string, tagIds: string[]) {
   // Reject tags from another workspace rather than silently dropping them.
   if (tagIds.length) {
     const { rows } = await client.query<{ count: number }>(

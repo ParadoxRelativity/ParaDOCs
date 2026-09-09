@@ -1,43 +1,45 @@
-import pg from 'pg';
 import { config } from '../config.js';
+import type { DbClient, DbDriver, DbResult } from './driver.js';
 
-// node-postgres returns DATE as a local-midnight Date, which shifts journal
-// dates across timezones. Keep them as the plain YYYY-MM-DD string we stored.
-pg.types.setTypeParser(pg.types.builtins.DATE, (value) => value);
-// Return bigint counts as JS numbers; our counts never approach 2^53.
-pg.types.setTypeParser(pg.types.builtins.INT8, (value) => Number(value));
-// Hand timestamps to the app as ISO strings rather than Date objects. JSON
-// responses looked right either way, but anything that string-interpolates a
-// timestamp (markdown export frontmatter) would otherwise emit a locale string.
-for (const oid of [pg.types.builtins.TIMESTAMPTZ, pg.types.builtins.TIMESTAMP]) {
-  const base = pg.types.getTypeParser(oid);
-  pg.types.setTypeParser(oid, (value: string) => {
-    const parsed = (base as (v: string) => unknown)(value);
-    return parsed instanceof Date ? parsed.toISOString() : parsed;
-  });
+export type { DbClient, DbDriver, DbResult } from './driver.js';
+
+let driver: Promise<DbDriver> | null = null;
+
+/**
+ * Supplies the driver to use instead of connecting to Postgres. The desktop app
+ * calls this with a PGlite-backed driver before building the app, so a local
+ * workspace runs the same routes with no database server present.
+ */
+export function useDriver(next: DbDriver): void {
+  driver = Promise.resolve(next);
 }
 
-export const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 10 });
+/**
+ * Postgres is imported lazily so the desktop bundle, which injects its own
+ * driver, never has to carry `pg` or dial a socket that isn't there.
+ */
+function active(): Promise<DbDriver> {
+  if (!driver) {
+    driver = import('./pgDriver.js').then((m) => m.createPgDriver(config.databaseUrl));
+  }
+  return driver;
+}
 
-export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
+export async function query<T = Record<string, unknown>>(
   text: string,
   params: unknown[] = [],
-): Promise<pg.QueryResult<T>> {
-  return pool.query<T>(text, params as never[]);
+): Promise<DbResult<T>> {
+  return (await active()).query<T>(text, params);
 }
 
 /** Runs `fn` inside a transaction, rolling back on any throw. */
-export async function transaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+export async function transaction<T>(fn: (client: DbClient) => Promise<T>): Promise<T> {
+  return (await active()).transaction(fn);
+}
+
+export async function closeDb(): Promise<void> {
+  if (!driver) return;
+  const current = driver;
+  driver = null;
+  await (await current).close();
 }

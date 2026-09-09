@@ -52,6 +52,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
          VALUES ($1, $2, $3, $4) RETURNING id`,
         [created.id, 'Personal', slugify('Personal'), '🏠'],
       );
+      // Access is membership, not ownership: without this row the new account
+      // is not a member of the workspace it just got and every request for it
+      // answers 404.
+      await client.query(
+        `INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+        [wsRows[0].id, created.id],
+      );
       await client.query(
         `INSERT INTO folders (workspace_id, name, position) VALUES ($1, 'Journal', 0), ($1, 'Notes', 1)`,
         [wsRows[0].id],

@@ -70,22 +70,31 @@ export function createCollabServer(log: FastifyBaseLogger) {
       connection.readOnly = !roleAtLeast(access.role, 'editor');
     },
 
-    async onLoadDocument({ documentName }) {
+    /**
+     * Seeds the document Hocuspocus just created.
+     *
+     * The update is applied to the `document` we are handed rather than to a
+     * fresh Y.Doc that gets returned. Hocuspocus recognises a returned document
+     * by `constructor.name === 'Doc'`, which any bundler that renames classes
+     * quietly breaks — in the desktop build the class is emitted as `Doc2`, so
+     * a returned document was discarded and every document opened blank.
+     * Mutating the one we are given does not depend on the class name at all.
+     */
+    async onLoadDocument({ documentName, document }) {
       const { rows } = await query<{ ydoc: Buffer | null; body: unknown; mode: string }>(
         'SELECT ydoc, body, mode FROM documents WHERE id = $1',
         [documentName],
       );
-      const ydoc = new Y.Doc();
       const row = rows[0];
-      if (!row) return ydoc;
+      if (!row) return;
 
       if (row.ydoc) {
-        Y.applyUpdate(ydoc, new Uint8Array(row.ydoc));
-        return ydoc;
+        Y.applyUpdate(document, new Uint8Array(row.ydoc));
+        return;
       }
 
       // A canvas has no blocks to seed from; it starts empty.
-      if (row.mode === 'canvas') return ydoc;
+      if (row.mode === 'canvas') return;
 
       // First collaborative session for this document: seed the Y.Doc from the
       // blocks that were saved before collaboration existed.
@@ -93,12 +102,11 @@ export function createCollabServer(log: FastifyBaseLogger) {
       if (blocks) {
         try {
           const seeded = serverEditor.blocksToYDoc(blocks as never, COLLAB_FRAGMENT);
-          Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(seeded));
+          Y.applyUpdate(document, Y.encodeStateAsUpdate(seeded));
         } catch (err) {
           log.warn({ err, documentName }, 'could not seed collaborative document from stored blocks');
         }
       }
-      return ydoc;
     },
 
     async onStoreDocument({ documentName, document, context }) {

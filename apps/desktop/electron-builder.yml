@@ -1,0 +1,73 @@
+appId: com.paradocs.desktop
+# Stated explicitly: electron lives in the workspace root's node_modules, where
+# electron-builder's own lookup does not find it.
+electronVersion: 33.4.11
+productName: ParaDOCs
+copyright: Copyright © ParaDOCs contributors
+
+directories:
+  output: release
+  buildResources: build
+
+# Where the app looks for updates. Building with a publish target is what writes
+# app-update.yml into the package and latest*.yml beside the artifacts; without
+# them the app disables updates rather than reporting an error each launch.
+#
+# Set `owner` and `repo` to your own fork before releasing. A deployment that
+# would rather not depend on GitHub can ignore this and point the app at any
+# static directory holding the artifacts and their latest*.yml, with
+# PARADOCS_UPDATE_URL.
+publish:
+  - provider: github
+    owner: paradocs
+    repo: paradocs
+
+# The main process is bundled into dist/, so only that, the package manifest and
+# the few dependencies that cannot be bundled need to ship.
+files:
+  - dist/**
+  - package.json
+  - '!**/*.map'
+
+# PGlite reads its wasm and extension archives from disk and jsdom spawns a
+# worker from its own directory, so neither can be served from inside the asar.
+asarUnpack:
+  - node_modules/@electric-sql/pglite/**
+  - node_modules/jsdom/**
+
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Hardened runtime is required for notarisation. The JIT entitlement is what
+  # lets Chromium and PGlite's WebAssembly run under it.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  gatekeeperAssess: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+  shortcutName: ParaDOCs
+
+linux:
+  icon: build/icon.png
+  category: Office
+  target:
+    - AppImage

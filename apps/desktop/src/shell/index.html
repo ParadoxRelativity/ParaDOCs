@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- The shell renders only local markup, so nothing external may load. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;"
+    />
+    <title>ParaDOCs</title>
+    <link rel="stylesheet" href="shell.css" />
+  </head>
+  <body>
+    <main id="app" aria-live="polite"></main>
+    <script src="shell.js"></script>
+  </body>
+</html>

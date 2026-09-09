@@ -1,6 +1,6 @@
 import { buildApp } from './app.js';
 import { config } from './config.js';
-import { pool, query } from './db/pool.js';
+import { closeDb, query } from './db/pool.js';
 import { createCollabServer } from './collab/server.js';
 
 const app = await buildApp();
@@ -29,7 +29,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     // Closing Hocuspocus flushes any debounced document saves.
     await collab.close();
     await app.close();
-    await pool.end();
+    await closeDb();
     process.exit(0);
   });
 }

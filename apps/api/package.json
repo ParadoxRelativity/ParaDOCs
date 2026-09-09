@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "comment": "Consumed as TypeScript source by the desktop app, which bundles the API into its main process to run local workspaces.",
+  "exports": {
+    "./app": "./src/app.ts",
+    "./config": "./src/config.ts",
+    "./collab": "./src/collab/server.ts",
+    "./db/driver": "./src/db/driver.ts",
+    "./db/pool": "./src/db/pool.ts",
+    "./db/migrate": "./src/db/migrate.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",

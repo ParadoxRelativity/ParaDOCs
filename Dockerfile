@@ -8,7 +8,11 @@ COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
-RUN npm ci
+# The desktop app is not part of the server image, but npm ci refuses to run
+# unless every workspace in the lockfile is present. Copying its manifest and
+# then excluding it from the install keeps Electron out of the build.
+COPY apps/desktop/package.json apps/desktop/
+RUN npm ci --workspace=@paradocs/api --workspace=@paradocs/web --include-workspace-root
 
 # --- build the web client --------------------------------------------------
 FROM node:22-alpine AS build
@@ -29,6 +33,7 @@ COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
+COPY apps/desktop/package.json apps/desktop/
 RUN npm ci --omit=dev --workspace=@paradocs/api --include-workspace-root
 
 # --- runtime ---------------------------------------------------------------

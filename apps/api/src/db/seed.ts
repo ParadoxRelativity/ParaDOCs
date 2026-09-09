@@ -2,7 +2,7 @@
  * Creates a demo account with sample content. Development convenience only —
  * refuses to touch a database that already has users.
  */
-import { pool, query, transaction } from './pool.js';
+import { closeDb, query, transaction } from './pool.js';
 import { hashPassword, slugify } from '../lib/auth.js';
 import { blocksToMarkdown } from '../lib/blocksToMarkdown.js';
 
@@ -121,4 +121,4 @@ main()
     console.error(err instanceof Error ? err.message : err);
     process.exitCode = 1;
   })
-  .finally(() => pool.end());
+  .finally(() => closeDb());

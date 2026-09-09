@@ -1,0 +1,34 @@
+{
+  "name": "@paradocs/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "productName": "ParaDOCs",
+  "description": "ParaDOCs desktop app for macOS and Windows",
+  "main": "dist/index.mjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "start": "npm run build && electron .",
+    "pack": "npm run build:all && electron-builder --dir",
+    "dist:mac": "npm run build:all && electron-builder --mac",
+    "dist:win": "npm run build:all && electron-builder --win",
+    "build:all": "npm run build --workspace=@paradocs/web && npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "electron-updater": "^6.8.9",
+    "jsdom": "^25.0.1"
+  },
+  "devDependencies": {
+    "@paradocs/api": "*",
+    "@paradocs/shared": "*",
+    "@types/node": "^22.9.0",
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  },
+  "author": "ParaDOCs contributors",
+  "license": "AGPL-3.0-or-later"
+}
