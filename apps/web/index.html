@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ParaDOCs</title>
+    <meta name="description" content="Self-hosted document management" />
+    <script>
+      // Apply the saved theme before first paint so there is no wrong-theme flash.
+      // The app stores this with JSON.stringify, so the value arrives quoted.
+      (function () {
+        var raw = localStorage.getItem('paradocs.theme');
+        var t = 'system';
+        try {
+          t = raw ? JSON.parse(raw) : 'system';
+        } catch (e) {
+          t = raw || 'system';
+        }
+        var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

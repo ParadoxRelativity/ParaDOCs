@@ -1,0 +1,18 @@
+{
+  "name": "paradocs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted, open-source document management system",
+  "license": "AGPL-3.0-or-later",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npm run dev --workspace=@paradocs/api & npm run dev --workspace=@paradocs/web",
+    "dev:api": "npm run dev --workspace=@paradocs/api",
+    "dev:web": "npm run dev --workspace=@paradocs/web",
+    "build": "npm run build --workspace=@paradocs/shared && npm run build --workspace=@paradocs/api && npm run build --workspace=@paradocs/web",
+    "migrate": "npm run migrate --workspace=@paradocs/api",
+    "seed": "npm run seed --workspace=@paradocs/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

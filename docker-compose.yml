@@ -1,0 +1,64 @@
+# ParaDOCs, self-hosted: one app container plus Postgres.
+#
+#   cp .env.example .env      # then set POSTGRES_PASSWORD and SESSION_SECRET
+#   docker compose up -d --build
+#
+# Values come from a .env file beside this one. Both secrets are required on
+# purpose: a default password on an internet-facing deployment is not a default,
+# it is a vulnerability.
+
+name: paradocs
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: paradocs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: paradocs
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U paradocs -d paradocs']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # Not published: only the app container needs to reach the database.
+    expose:
+      - '5432'
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Waiting for a healthy database means the migrations on boot cannot race
+    # Postgres still starting up.
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://paradocs:${POSTGRES_PASSWORD}@db:5432/paradocs
+      API_PORT: 4000
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      # The API serves the SPA, so requests are same-origin and CORS is unused.
+      CORS_ORIGIN: ''
+      # Leave false behind plain HTTP; the TLS overlay turns it on.
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      UPLOAD_DIR: /data/uploads
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - uploads:/data/uploads
+    # Bound to every interface by default so a fresh install is reachable.
+    # Behind the TLS overlay, set BIND_ADDR=127.0.0.1 so only Caddy can reach it.
+    ports:
+      - '${BIND_ADDR:-0.0.0.0}:${PORT:-4000}:4000'
+    # Reap orphaned processes; tini in the image handles signals.
+    init: true
+
+volumes:
+  db-data:
+  uploads:

@@ -1,0 +1,13 @@
+# Terminates TLS and proxies to the app container.
+# Caddy obtains and renews certificates automatically.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Uploaded files can be cached; they are content-addressed by a random name.
+	@uploads path /uploads/*
+	header @uploads Cache-Control "public, max-age=31536000, immutable"
+
+	# reverse_proxy passes websockets through, which the collaboration
+	# connection on /collab needs.
+	reverse_proxy app:4000
+}

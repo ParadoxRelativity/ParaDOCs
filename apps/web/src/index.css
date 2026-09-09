@@ -1,0 +1,112 @@
+@import 'tailwindcss';
+@import '@blocknote/core/fonts/inter.css';
+@import '@blocknote/mantine/style.css';
+
+/* Tailwind v4 needs to be told that `dark:` follows our root class, which the
+   inline script in index.html sets before first paint. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-canvas: #ffffff;
+  --color-surface: #f7f7f8;
+  --color-raised: #ffffff;
+  --color-line: #e4e4e7;
+  --color-ink: #18181b;
+  --color-muted: #71717a;
+  --color-accent: #6366f1;
+  --color-accent-soft: #eef2ff;
+}
+
+.dark {
+  --color-canvas: #0f0f11;
+  --color-surface: #16161a;
+  --color-raised: #1c1c21;
+  --color-line: #2a2a31;
+  --color-ink: #ededf0;
+  --color-muted: #8f8f9c;
+  --color-accent: #818cf8;
+  --color-accent-soft: #1e1b3a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin, unobtrusive scrollbars in the sidebars. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Let BlockNote inherit the app surface instead of its own white card. */
+.bn-container,
+.bn-editor {
+  background: transparent !important;
+}
+.bn-editor {
+  padding-inline: 0 !important;
+}
+
+@keyframes paradocs-toast {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* BlockNote inside a canvas card. Page-scale typography would make a card
+   unreadable, so the whole embedded editor is stepped down a size. */
+.paradocs-embedded-doc .bn-editor {
+  padding: 8px 10px !important;
+  font-size: 12px;
+}
+.paradocs-embedded-doc .bn-block-content {
+  font-size: 12px;
+  line-height: 1.45;
+}
+.paradocs-embedded-doc h1 {
+  font-size: 16px !important;
+  line-height: 1.25 !important;
+}
+.paradocs-embedded-doc h2 {
+  font-size: 14px !important;
+  line-height: 1.3 !important;
+}
+.paradocs-embedded-doc h3 {
+  font-size: 13px !important;
+  line-height: 1.3 !important;
+}
+.paradocs-embedded-doc .bn-block-outer {
+  margin-top: 2px;
+}
+/* The block insert and drag handles need room a card does not have. */
+.paradocs-embedded-doc .bn-side-menu {
+  display: none;
+}
+
+mark {
+  background: var(--color-accent-soft);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
