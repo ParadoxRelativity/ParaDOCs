@@ -134,6 +134,10 @@ export function initUpdates(): void {
   });
 
   autoUpdater.on('error', (err: Error) => {
+    if (isEmptyChannel(err)) {
+      setStatus({ phase: 'idle', newVersion: undefined, message: undefined });
+      return;
+    }
     setStatus({ phase: 'error', message: friendlyError(err) });
   });
 
@@ -142,6 +146,15 @@ export function initUpdates(): void {
     setTimeout(() => void check({ explicit: false }), 10_000).unref();
     setInterval(() => void check({ explicit: false }), SIX_HOURS).unref();
   }
+}
+
+/**
+ * A channel with nothing published yet is the normal state of a project before
+ * its first release, not a failure. Reporting it in red on every launch would
+ * make the first release look broken to everyone who installed it.
+ */
+function isEmptyChannel(err: Error): boolean {
+  return /no published versions|404/i.test(err?.message ?? String(err));
 }
 
 /**
@@ -190,14 +203,15 @@ export async function check({ explicit }: { explicit: boolean }): Promise<Update
       await promptDownload(version);
     }
   } catch (err) {
+    const empty = isEmptyChannel(err as Error);
     const message = friendlyError(err as Error);
-    setStatus({ phase: 'error', message });
+    setStatus(empty ? { phase: 'idle', message: undefined } : { phase: 'error', message });
     if (explicit) {
       await dialog.showMessageBox({
-        type: 'warning',
-        title: 'Could not check for updates',
-        message: 'Could not check for updates.',
-        detail: message,
+        type: empty ? 'info' : 'warning',
+        title: empty ? 'Updates' : 'Could not check for updates',
+        message: empty ? 'No releases have been published yet.' : 'Could not check for updates.',
+        detail: empty ? `You are running ${app.getVersion()}.` : message,
       });
     }
   }

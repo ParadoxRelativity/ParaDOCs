@@ -486,6 +486,49 @@ The API is a plain REST surface under `/api` and is usable without the web clien
 Sessions are an HttpOnly cookie backed by a `sessions` table; passwords are hashed
 with scrypt.
 
+## Releasing
+
+Pushing a version tag builds the desktop app on both platforms and uploads the
+installers, along with the `latest*.yml` manifests the updater reads, to a
+**draft** GitHub Release. Publishing the draft is a separate, deliberate step,
+because that is the moment every installed client starts seeing the update.
+
+```bash
+# 1. Bump the version electron-builder reads. The tag must match it.
+npm version 0.1.1 --workspace=@paradocs/desktop --no-git-tag-version
+
+# 2. Commit, tag, push.
+git commit -am "Release 0.1.1"
+git tag v0.1.1
+git push origin main --follow-tags
+```
+
+`.github/workflows/release.yml` then runs a typecheck, refuses the build if the
+tag and `apps/desktop/package.json` disagree, and builds on macOS and Windows
+runners. Review the draft release, write the notes, and publish it.
+
+Signing is wired but optional: the workflow reads `CSC_LINK`,
+`CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
+`APPLE_TEAM_ID` from repository secrets and skips signing when they are absent,
+so adding certificates later needs no change to the workflow. Enabling Apple
+notarisation additionally means setting `notarize: true` under `mac:` in
+`apps/desktop/electron-builder.yml`.
+
+Until macOS builds are signed, say so on the release page: **Mac users have to
+download new versions manually**, because macOS refuses to replace an
+application whose signature it cannot verify. The app reports this rather than
+failing silently. Windows updates itself unsigned, with a SmartScreen warning on
+first install.
+
+To cut a release without CI, build locally and attach the files from
+`apps/desktop/release/` — including `latest-mac.yml` and `latest.yml`, without
+which nothing can update:
+
+```bash
+npm run desktop:dist:mac
+npm run desktop:dist:win
+```
+
 ## License
 
-AGPL-3.0-or-later.
+AGPL-3.0-or-later. The full text is in [LICENSE](LICENSE).
