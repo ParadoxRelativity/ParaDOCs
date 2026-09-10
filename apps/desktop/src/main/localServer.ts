@@ -56,12 +56,14 @@ export async function startLocalServer(connectionId: string): Promise<LocalServe
   // invite endpoint here already has the user's account.
   process.env.ALLOW_REGISTRATION = 'true';
 
-  const [{ buildApp }, { createCollabServer }, { useDriver, closeDb }, { runMigrations }] = await Promise.all([
-    import('@paradocs/api/app'),
-    import('@paradocs/api/collab'),
-    import('@paradocs/api/db/pool'),
-    import('@paradocs/api/db/migrate'),
-  ]);
+  const [{ buildApp }, { createCollabServer }, { createChatServer }, { useDriver, closeDb }, { runMigrations }] =
+    await Promise.all([
+      import('@paradocs/api/app'),
+      import('@paradocs/api/collab'),
+      import('@paradocs/api/chat'),
+      import('@paradocs/api/db/pool'),
+      import('@paradocs/api/db/migrate'),
+    ]);
 
   let database: LocalDatabase | undefined;
   try {
@@ -72,6 +74,8 @@ export async function startLocalServer(connectionId: string): Promise<LocalServe
     const app = await buildApp();
     const collab = createCollabServer(app.log);
     collab.attach(app.server);
+    const chat = createChatServer(app.log);
+    chat.attach(app.server);
     await app.listen({ port: 0, host: '127.0.0.1' });
 
     const address = app.server.address();
@@ -89,6 +93,7 @@ export async function startLocalServer(connectionId: string): Promise<LocalServe
         closed = true;
         // Closing Hocuspocus first flushes any debounced document saves.
         await collab.close();
+        await chat.close();
         await app.close();
         await closeDb();
       },

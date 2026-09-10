@@ -15,6 +15,8 @@ import { documentRoutes } from './routes/documents.js';
 import { searchRoutes } from './routes/search.js';
 import { tagRoutes } from './routes/tags.js';
 import { commentRoutes } from './routes/comments.js';
+import { channelRoutes } from './routes/channels.js';
+import { voiceRoutes } from './routes/voice.js';
 import { eventRoutes } from './routes/events.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { inviteRoutes, memberRoutes } from './routes/members.js';
@@ -78,6 +80,8 @@ export async function buildApp() {
     searchRoutes,
     tagRoutes,
     commentRoutes,
+    channelRoutes,
+    voiceRoutes,
     eventRoutes,
     uploadRoutes,
     memberRoutes,

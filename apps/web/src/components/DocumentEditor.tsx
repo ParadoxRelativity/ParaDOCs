@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
-import { useCreateBlockNote } from '@blocknote/react';
+import { SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
 import type { Block } from '@blocknote/core';
 import type { Doc } from '@paradocs/shared';
-import type { DocumentPatch } from '../api/hooks';
+import { useChannels, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
 import { useCollaboration, type CollabSession, type Peer } from '../lib/collaboration';
 import DocumentMeta from './DocumentMeta';
@@ -19,6 +19,8 @@ interface Props {
   onPatch: (patch: DocumentPatch) => void;
   onBlocksChange: (blocks: unknown[]) => void;
   onOpenDocument: (documentId: string) => void;
+  /** Follows an in-app link (a channel or document) from inside the editor. */
+  onOpenInternalLink: (path: string) => void;
 }
 
 export default function DocumentEditor(props: Props) {
@@ -65,6 +67,7 @@ function EditorSurface({
   canEdit,
   onPatch,
   onBlocksChange,
+  onOpenInternalLink,
   session,
   collabUser,
   status,
@@ -94,6 +97,10 @@ function EditorSurface({
     const trimmed = value.trim();
     if (trimmed && trimmed !== doc.title) onPatch({ title: trimmed });
   }, 600);
+
+  // Typing `#` in a document offers the workspace's channels, the same way it
+  // does in chat, and inserts a link that opens the channel in place.
+  const channels = useChannels(workspaceId);
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -147,13 +154,49 @@ function EditorSurface({
 
         <DocumentMeta doc={doc} workspaceId={workspaceId} onPatch={onPatch} readOnly={!canEdit} />
 
-        <div className="-mx-12 mt-6">
+        <div
+          className="-mx-12 mt-6"
+          onClick={(e) => {
+            // A channel or document link inside the editor is an in-app route;
+            // letting the browser follow it would reload the whole client.
+            const anchor = (e.target as HTMLElement).closest('a');
+            const href = anchor?.getAttribute('href');
+            if (!href?.startsWith('/w/')) return;
+            e.preventDefault();
+            onOpenInternalLink(href);
+          }}
+        >
           <BlockNoteView
             editor={editor}
             editable={canEdit}
             theme={dark ? 'dark' : 'light'}
             onChange={() => onBlocksChange(editor.document as Block[])}
-          />
+          >
+            <SuggestionMenuController
+              triggerCharacter="#"
+              getItems={async (queryText) => {
+                const needle = queryText.toLowerCase();
+                return (channels.data ?? [])
+                  .filter((channel) => channel.name.includes(needle))
+                  .slice(0, 8)
+                  .map((channel) => ({
+                    title: `#${channel.name}`,
+                    subtext: channel.topic ?? undefined,
+                    group: 'Channels',
+                    onItemClick: () => {
+                      editor.insertInlineContent([
+                        {
+                          type: 'link',
+                          href: `/w/${workspaceId}/c/${channel.id}`,
+                          content: `#${channel.name}`,
+                        },
+                        ' ',
+                      ]);
+                    },
+                  }));
+              }}
+            />
+          </BlockNoteView>
         </div>
       </div>
     </div>

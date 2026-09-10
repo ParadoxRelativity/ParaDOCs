@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DocumentSummary, FolderNode, Tag } from '@paradocs/shared';
+import type { Channel, DocumentSummary, FolderNode, Tag } from '@paradocs/shared';
 import {
   useCreateDocument,
   useCreateFolder,
@@ -16,6 +16,7 @@ import { ConfirmDialog, Modal } from './Modal';
 import type { SettingsSection } from './SettingsDialog';
 import WorkspaceIcon from './WorkspaceIcon';
 import { useToast } from './Toast';
+import { ChannelList } from './chat/ChannelList';
 
 interface Props {
   workspaces: WorkspaceSummary[];
@@ -32,6 +33,27 @@ interface Props {
   onToggleTag: (id: string) => void;
   onSignOut: () => void;
   onOpenSettings: (section: SettingsSection) => void;
+  /** Which half of the workspace is showing: the knowledge base, or chat. */
+  section: 'docs' | 'chat';
+  onSelectSection: (section: 'docs' | 'chat') => void;
+  channels: Channel[];
+  activeChannelId: string | null;
+  onSelectChannel: (id: string) => void;
+  canManageChannels: boolean;
+  unreadTotal: number;
+  mentionTotal: number;
+  voiceEnabled: boolean;
+  voiceOccupancy: Record<string, string[]>;
+  connectedChannelId: string | null;
+  /** The call in progress, shown as a bar above the footer. Null when idle. */
+  callBar: {
+    channelName: string;
+    connecting: boolean;
+    mic: boolean;
+    onToggleMic: () => void;
+    onLeave: () => void;
+    onOpen: () => void;
+  } | null;
 }
 
 export default function LeftSidebar(props: Props) {
@@ -119,6 +141,37 @@ export default function LeftSidebar(props: Props) {
         )}
       </div>
 
+      {/* Knowledge base / chat */}
+      <div className="flex gap-1 border-b border-[var(--color-line)] p-2">
+        <SectionTab
+          active={props.section === 'docs'}
+          label="Docs"
+          icon="📚"
+          onClick={() => props.onSelectSection('docs')}
+        />
+        <SectionTab
+          active={props.section === 'chat'}
+          label="Chat"
+          icon="💬"
+          badge={props.unreadTotal}
+          mentions={props.mentionTotal}
+          onClick={() => props.onSelectSection('chat')}
+        />
+      </div>
+
+      {props.section === 'chat' ? (
+        <ChannelList
+          workspaceId={workspaceId}
+          channels={props.channels}
+          activeChannelId={props.activeChannelId}
+          canManage={props.canManageChannels}
+          voiceEnabled={props.voiceEnabled}
+          occupancy={props.voiceOccupancy}
+          connectedChannelId={props.connectedChannelId}
+          onSelect={props.onSelectChannel}
+        />
+      ) : (
+        <>
       {/* Quick actions */}
       <div className="space-y-0.5 p-2">
         <SidebarAction icon="🔍" label="Search" hint="⌘K" onClick={props.onOpenSearch} />
@@ -202,6 +255,34 @@ export default function LeftSidebar(props: Props) {
           </div>
         )}
       </div>
+        </>
+      )}
+
+      {/* A call outlives the view it started in, so it needs somewhere
+          permanent to live: this stays put while you read documents or move
+          between channels. */}
+      {props.callBar && (
+        <div className="flex items-center gap-1.5 border-t border-[var(--color-line)] bg-[var(--color-surface)] px-2 py-1.5">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+          <button
+            onClick={props.callBar.onOpen}
+            className="min-w-0 flex-1 truncate text-left text-xs"
+            title={`Open ${props.callBar.channelName}`}
+          >
+            <span className="font-medium">{props.callBar.connecting ? 'Connecting…' : 'In call'}</span>
+            <span className="text-[var(--color-muted)]"> · 🔊 {props.callBar.channelName}</span>
+          </button>
+          <IconButton
+            label={props.callBar.mic ? 'Mute' : 'Unmute'}
+            onClick={props.callBar.onToggleMic}
+          >
+            {props.callBar.mic ? '🎙' : '🔇'}
+          </IconButton>
+          <IconButton label="Leave call" onClick={props.callBar.onLeave}>
+            📴
+          </IconButton>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="flex items-center gap-1 border-t border-[var(--color-line)] p-2">
@@ -523,6 +604,51 @@ function DocumentRow({
       {doc.tags.slice(0, 2).map((tag) => (
         <span key={tag.id} className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tag.color }} />
       ))}
+    </button>
+  );
+}
+
+
+function SectionTab({
+  active,
+  label,
+  icon,
+  badge,
+  mentions = 0,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  icon: string;
+  badge?: number;
+  mentions?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cx(
+        'flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
+        active ? 'bg-[var(--color-line)]/70 font-medium' : 'text-[var(--color-muted)] hover:bg-[var(--color-line)]/40',
+      )}
+    >
+      <span>{icon}</span>
+      <span>{label}</span>
+      {/* Unread only matters when you are not already looking at chat, and a
+          mention outranks it. */}
+      {!active && mentions > 0 ? (
+        <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
+          @{mentions > 99 ? '99+' : mentions}
+        </span>
+      ) : (
+        !active &&
+        badge !== undefined &&
+        badge > 0 && (
+          <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[11px] font-semibold text-white">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )
+      )}
     </button>
   );
 }

@@ -63,6 +63,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         `INSERT INTO folders (workspace_id, name, position) VALUES ($1, 'Journal', 0), ($1, 'Notes', 1)`,
         [wsRows[0].id],
       );
+      // Somewhere to talk, so the chat tab is never an empty room.
+      await client.query(
+        `INSERT INTO channels (workspace_id, name, topic, created_by) VALUES ($1, 'general', $2, $3)`,
+        [wsRows[0].id, 'Everything else', created.id],
+      );
       return created;
     });
 

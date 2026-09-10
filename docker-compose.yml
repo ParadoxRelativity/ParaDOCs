@@ -50,6 +50,13 @@ services:
       UPLOAD_DIR: /data/uploads
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Voice and video. Unset means voice channels are simply unavailable, so
+      # a deployment that only wants documents and chat changes nothing.
+      # LIVEKIT_URL is dialled by browsers, not by this container, so it has to
+      # be an address they can reach — not the compose service name.
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
     volumes:
       - uploads:/data/uploads
     # Bound to every interface by default so a fresh install is reachable.
@@ -58,6 +65,32 @@ services:
       - '${BIND_ADDR:-0.0.0.0}:${PORT:-4000}:4000'
     # Reap orphaned processes; tini in the image handles signals.
     init: true
+
+  # Voice and video, behind a profile so it is opt-in:
+  #
+  #   docker compose --profile voice up -d
+  #
+  # Media travels over UDP directly between browsers and this container, which
+  # is why the port range is published rather than proxied: WebRTC media cannot
+  # go through an HTTP reverse proxy.
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    profiles: ['voice']
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml --node-ip ${LIVEKIT_NODE_IP:?set LIVEKIT_NODE_IP to this host's address}
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}"
+    ports:
+      # Signalling. Behind the TLS overlay Caddy reaches this over the compose
+      # network, so set LIVEKIT_BIND=127.0.0.1 to keep it off the public
+      # interface — the same treatment BIND_ADDR gives the app.
+      - '${LIVEKIT_BIND:-0.0.0.0}:${LIVEKIT_PORT:-7880}:7880'
+      - '${LIVEKIT_BIND:-0.0.0.0}:7881:7881'
+      # Media. Must stay reachable from browsers directly: WebRTC over UDP
+      # cannot be proxied, so this range is published whatever else changes.
+      - '50000-50100:50000-50100/udp'
 
 volumes:
   db-data:

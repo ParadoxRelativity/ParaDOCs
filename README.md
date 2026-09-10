@@ -35,6 +35,11 @@ Multi-user, multi-workspace. Working today:
 - **Desktop app** — a native macOS and Windows build that connects to any number
   of self-hosted servers, keeps local single-user workspaces that need no server
   at all, and updates itself from GitHub Releases or a channel you host
+- **Chat** — per-workspace channels alongside the knowledge base, with live
+  delivery, unread and mention counts, and links that work in both directions
+  between documents and channels
+- **Voice, video and screen sharing** — optional voice channels carried by a
+  LiveKit server you run alongside the app
 
 Not yet built: OIDC single sign-on (stubbed, see below) and the automated backup
 integrations (Backblaze/NAS) described below.
@@ -170,6 +175,129 @@ that is the site's policy, not a ParaDOCs limitation.
 
 Canvas text is searchable: notes, text, frame names, linked document titles,
 embed URLs and connector labels are folded into the document's searchable body.
+
+## Chat
+
+Every workspace has channels as well as documents. The **Chat** tab in the
+sidebar replaces the knowledge base with a chat client: the folder tree becomes
+a channel list, and the document details panel goes away, since none of it
+applies to a conversation. Switching back to **Docs** restores everything.
+
+Owners and admins create and delete channels; everyone else reads and posts.
+Channel names are addresses, so they are normalised the way a slug is —
+"Design & Ops" becomes `#design-ops` — and have to be unique within the
+workspace. A workspace always keeps at least one channel, because a chat tab
+with nowhere to talk is a dead end. New workspaces start with `#general`.
+
+Messages arrive over a websocket on `/chat`, on the same port and the same
+session cookie as everything else. History is paged newest-first from the
+database rather than held in a CRDT: a channel is an append-only log that grows
+without bound, and a Yjs document would make every client load the whole thing
+to show the last twenty lines. Unread counts are per person, and a channel you
+are looking at never accumulates one.
+
+**Links work in both directions.** In a message, `@` offers people, `#` offers
+channels and `[[` offers documents; typing `#general` by hand links it too. In a
+document, typing `#` offers the same channel list and inserts a link that opens
+the channel in place rather than reloading the client.
+
+Being mentioned is meant to be findable at a glance: your own name is painted
+differently from anyone else's, and the whole message carries a highlight and a
+marker down its edge. Mentions of other people are just links.
+
+**Mentions are counted apart from unread.** A channel with unread messages shows
+how many; a channel where someone named you shows an amber `@` count instead,
+and the same rule applies to the Chat tab itself — being addressed directly
+outranks ordinary chatter, and two numbers on one row would only be a puzzle.
+Counts come from the server, matched on the stored id token, so someone renaming
+themselves cannot change what counts as a mention.
+
+The chat socket subscribes to every channel in the workspace rather than only
+the open one. That is what lets a mention reach you while you are reading a
+document or sitting in a different channel, and it keeps the unread counts live
+without polling. Being mentioned also raises a desktop notification, which is
+off until you ask for it: the chat header offers it once, and never again once
+the browser has an answer. Nothing interrupts you for a channel you are already
+looking at.
+
+References are stored as ids — `<doc:…>`, `<#…>` and `<@…>` — and resolved when
+the message is rendered, so renaming a document, or someone changing their
+display name, updates every message that mentions them instead of leaving stale
+names through the history. Resolution is scoped to the channel's workspace, and
+people are resolved through workspace membership: an id pasted from somewhere
+else simply does not resolve, so a message can never be used to read back a
+title, or find out who somebody is, from a workspace the reader cannot see. A
+reference to something since deleted renders as muted text rather than a broken
+link.
+
+## Voice and video
+
+A workspace can also have voice channels, which sit in their own group in the
+sidebar. They hold no messages — a voice channel is a room you drop into.
+**Clicking one in the sidebar joins it**, with your microphone on and camera
+and screen off until you turn them on. The people already inside are listed
+under the channel, because whether anyone is in there is the thing you want to
+know before joining, and a dot marks the one you are actually in.
+
+The call belongs to the session rather than to the view, so wandering off to
+read a document does not hang up on anyone. A bar above the sidebar footer
+shows the call wherever you are, with mute and leave, and clicking it returns
+you to the room. Clicking a different voice channel moves you: the old room is
+left first, the way walking into another room works.
+
+Media is carried by [LiveKit](https://livekit.io), an SFU: each participant
+sends one copy of their stream and the server fans it out, rather than everyone
+sending to everyone. That is what makes a call with a dozen people work.
+Screen sharing is an ordinary track alongside camera and microphone, and a
+shared screen takes over the tile it is shared from.
+
+**It is optional.** With `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET` unset, the voice section disappears and everything else is
+unaffected — a deployment that only wants documents and chat runs exactly as
+before. The bundled server sits behind a compose profile so it is not started
+unless asked for:
+
+```bash
+# in .env
+LIVEKIT_URL=ws://192.168.1.10:7880      # what browsers dial, not a service name
+LIVEKIT_API_KEY=paradocs
+LIVEKIT_API_SECRET=$(openssl rand -hex 32)
+LIVEKIT_NODE_IP=192.168.1.10            # the address this host answers on
+
+docker compose --profile voice up -d
+```
+
+`LIVEKIT_URL` is dialled by *browsers*, so it has to be an address they can
+reach — the compose service name will not do.
+
+**With TLS**, a page served over https may only open `wss://`, so voice goes
+through Caddy alongside everything else:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tls.yml \
+  --profile voice up -d --build
+```
+
+The Caddyfile proxies LiveKit's `/rtc` (the signalling websocket) and `/twirp`
+(its management API) to the voice container, which means `LIVEKIT_URL` is just
+`wss://your-domain` — no second hostname and no second certificate. Set
+`LIVEKIT_BIND=127.0.0.1` so the signalling port is reachable only by Caddy.
+
+What cannot go through Caddy is the media. WebRTC audio and video travel over
+UDP directly between browsers and the LiveKit container, so its published UDP
+range stays open whatever else you lock down, and `LIVEKIT_NODE_IP` has to be
+the address browsers actually reach this host on — a reverse proxy has no part
+in it.
+
+Joining is authorised the same way everything else is: the server mints a
+LiveKit token scoped to one room, named for the channel id, only after checking
+workspace membership. The token is the only way into a room, identity is the
+user id so a second tab replaces the first rather than appearing twice, and it
+expires after six hours.
+
+In the desktop app, screen sharing goes through the macOS system picker where
+that exists and an explicit list of windows elsewhere — never an automatic
+choice, since which screen you reveal should always be deliberate.
 
 ## Users, roles and sharing
 

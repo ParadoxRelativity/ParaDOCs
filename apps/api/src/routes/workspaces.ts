@@ -59,6 +59,11 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         `INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
         [rows[0].id, req.user!.id],
       );
+      // Somewhere to talk, so the chat tab is never an empty room.
+      await client.query(
+        `INSERT INTO channels (workspace_id, name, topic, created_by) VALUES ($1, 'general', $2, $3)`,
+        [rows[0].id, 'Everything else', req.user!.id],
+      );
       return rows[0];
     });
     reply.status(201);

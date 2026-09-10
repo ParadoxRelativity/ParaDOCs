@@ -22,8 +22,10 @@ export default defineConfig(({ mode }) => {
         // Same-origin in dev so the session cookie behaves exactly as in production.
         '/api': { target: apiUrl, changeOrigin: true },
         '/uploads': { target: apiUrl, changeOrigin: true },
-        // Collaboration websocket. Same origin so the session cookie is sent.
+        // Collaboration and chat websockets. Same origin so the session cookie
+        // is sent with the handshake.
         '/collab': { target: apiUrl, ws: true, changeOrigin: true },
+        '/chat': { target: apiUrl, ws: true, changeOrigin: true },
       },
     },
   };

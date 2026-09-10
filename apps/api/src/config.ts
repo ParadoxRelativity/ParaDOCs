@@ -24,6 +24,18 @@ export const config = {
   uploadDir: path.resolve(here, '../../..', process.env.UPLOAD_DIR ?? './data/uploads'),
   allowRegistration: process.env.ALLOW_REGISTRATION !== 'false',
   sessionTtlDays: 30,
+  /**
+   * Voice and video. Optional: with no LiveKit server configured the feature
+   * turns itself off and the client says so, rather than offering a call that
+   * cannot connect. `url` is what browsers dial, so it has to be reachable
+   * from them, not just from this process.
+   */
+  livekit: {
+    url: process.env.LIVEKIT_URL ?? '',
+    apiKey: process.env.LIVEKIT_API_KEY ?? '',
+    apiSecret: process.env.LIVEKIT_API_SECRET ?? '',
+  },
+
   // OIDC is stubbed in Phase 1; these are read so deployments can be configured
   // ahead of the implementation landing. See routes/oidc.ts.
   oidc: {

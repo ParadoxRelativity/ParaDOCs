@@ -14,7 +14,7 @@ import type { Duplex } from 'node:stream';
  * cookie is a plain same-origin cookie rather than a third-party one.
  */
 
-const PROXIED = ['/api', '/uploads', '/collab'];
+const PROXIED = ['/api', '/uploads', '/collab', '/chat'];
 
 function isProxied(url: string): boolean {
   const pathname = url.split('?')[0];

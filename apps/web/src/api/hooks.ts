@@ -1,21 +1,24 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import type {
   ActivityDay,
-  DocumentMode,
-  InvitePreview,
-  Role,
-  WorkspaceInvite,
-  WorkspaceMember,
   CalendarEvent,
+  Channel,
   Comment,
   Doc,
+  DocumentMode,
   DocumentSummary,
   Folder,
   FolderNode,
+  InvitePreview,
+  Message,
+  MessageReferences,
+  Role,
   SearchHit,
   Tag,
   User,
   Workspace,
+  WorkspaceInvite,
+  WorkspaceMember,
 } from '@paradocs/shared';
 import { api, qs } from './client';
 
@@ -49,6 +52,8 @@ export const keys = {
   events: (ws: string, from: string, to: string) => ['events', ws, from, to] as const,
   activity: (ws: string, from: string, to: string) => ['activity', ws, from, to] as const,
   search: (ws: string, key: string) => ['search', ws, key] as const,
+  channels: (ws: string) => ['channels', ws] as const,
+  messages: (channelId: string) => ['messages', channelId] as const,
 };
 
 // --- session ---------------------------------------------------------------
@@ -562,5 +567,126 @@ export function useDeleteEvent(workspaceId: string) {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/events/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['events', workspaceId] }),
+  });
+}
+
+// --- chat ------------------------------------------------------------------
+
+export function useChannels(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.channels(workspaceId ?? ''),
+    queryFn: () => api.get<Channel[]>(`/workspaces/${workspaceId}/channels`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useCreateChannel(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; topic?: string | null; kind?: 'text' | 'voice' }) =>
+      api.post<Channel>(`/workspaces/${workspaceId}/channels`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.channels(workspaceId) }),
+  });
+}
+
+export function useUpdateChannel(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string; name?: string; topic?: string | null }) =>
+      api.patch<Channel>(`/channels/${id}`, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.channels(workspaceId) }),
+  });
+}
+
+export function useDeleteChannel(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/channels/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.channels(workspaceId) }),
+  });
+}
+
+export interface MessagePage {
+  messages: Message[];
+  hasMore: boolean;
+  references: MessageReferences;
+}
+
+export function useMessages(channelId: string | undefined) {
+  return useQuery({
+    queryKey: keys.messages(channelId ?? ''),
+    queryFn: () => api.get<MessagePage>(`/channels/${channelId}/messages?limit=50`),
+    enabled: Boolean(channelId),
+    // The socket delivers anything newer, so a refetch on focus would only
+    // duplicate work and jump the scroll position.
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useSendMessage(channelId: string) {
+  return useMutation({
+    // The reply is ignored: the same message arrives over the socket, which is
+    // the single path that appends to the list, so there is nothing to de-dupe.
+    mutationFn: (body: string) => api.post<MessagePage>(`/channels/${channelId}/messages`, { body }),
+  });
+}
+
+export function useEditMessage() {
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: string }) => api.patch(`/messages/${id}`, { body }),
+  });
+}
+
+export function useDeleteMessage() {
+  return useMutation({ mutationFn: (id: string) => api.delete(`/messages/${id}`) });
+}
+
+export function useMarkChannelRead(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (channelId: string) => api.post(`/channels/${channelId}/read`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.channels(workspaceId) }),
+  });
+}
+
+// --- voice and video -------------------------------------------------------
+
+export interface VoiceConfig {
+  enabled: boolean;
+  url: string | null;
+}
+
+export interface CallCredentials {
+  url: string;
+  token: string;
+  room: string;
+  channelName: string;
+}
+
+export function useVoiceConfig() {
+  return useQuery({
+    queryKey: ['voiceConfig'],
+    queryFn: () => api.get<VoiceConfig>('/voice/config'),
+    // Whether the server has a voice service is a deployment fact, not
+    // something that changes while someone is looking at it.
+    staleTime: Infinity,
+  });
+}
+
+/** Who is in each voice channel, keyed by channel id. */
+export function useVoiceParticipants(workspaceId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['voiceParticipants', workspaceId],
+    queryFn: () => api.get<Record<string, string[]>>(`/workspaces/${workspaceId}/voice/participants`),
+    enabled: Boolean(workspaceId) && enabled,
+    // Rooms fill and empty without telling us, so this is polled while the
+    // chat tab is open and not at all otherwise.
+    refetchInterval: 10_000,
+  });
+}
+
+export function useJoinCall() {
+  return useMutation({
+    mutationFn: (channelId: string) => api.post<CallCredentials>(`/channels/${channelId}/call`),
   });
 }

@@ -4,6 +4,7 @@ import { bundlePath, paths, resourcePath } from './paths.js';
 import { readJson, writeJson } from './store.js';
 import { startProxy, type ProxyHandle } from './proxy.js';
 import { startLocalServer, type LocalServer } from './localServer.js';
+import { enableScreenSharing } from './screenShare.js';
 
 interface OpenWindow {
   window: BrowserWindow;
@@ -108,13 +109,20 @@ function confineNavigation(window: BrowserWindow, allowedOrigin: string): void {
   });
 }
 
-/** Nothing in ParaDOCs needs the camera, microphone or location. */
-function denyDevicePermissions(partition: string): void {
+/**
+ * Voice channels need the microphone and camera; nothing needs location, MIDI
+ * or notifications-by-default. Screen sharing is not a permission here — it is
+ * the display-media handler above, which asks every time.
+ */
+const ALLOWED_PERMISSIONS = new Set(['media', 'audioCapture', 'videoCapture', 'clipboard-sanitized-write']);
+
+function configurePermissions(partition: string): void {
   electronSession
     .fromPartition(partition)
     .setPermissionRequestHandler((_contents, permission, callback) => {
-      callback(permission === 'clipboard-sanitized-write');
+      callback(ALLOWED_PERMISSIONS.has(permission));
     });
+  enableScreenSharing(partition);
 }
 
 /**
@@ -150,7 +158,7 @@ export async function openConnection(connection: Connection): Promise<BrowserWin
     proxy = await startProxy({ target, webDist: resourcePath('web') });
 
     const partition = partitionFor(connection);
-    denyDevicePermissions(partition);
+    configurePermissions(partition);
     // A local workspace signs itself in: the account exists only to satisfy the
     // server's own model, and there is nobody else on this machine to keep out.
     if (local) await adoptSession(partition, proxy.origin, local.sessionToken);

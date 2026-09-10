@@ -8,6 +8,7 @@
     "./app": "./src/app.ts",
     "./config": "./src/config.ts",
     "./collab": "./src/collab/server.ts",
+    "./chat": "./src/chat/server.ts",
     "./db/driver": "./src/db/driver.ts",
     "./db/pool": "./src/db/pool.ts",
     "./db/migrate": "./src/db/migrate.ts"
@@ -31,6 +32,7 @@
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
     "fastify-plugin": "^4.5.1",
+    "livekit-server-sdk": "^2.19.0",
     "pg": "^8.13.1",
     "tsx": "^4.19.2",
     "ws": "^8.21.3",
