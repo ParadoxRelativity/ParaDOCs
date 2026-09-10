@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Thumbnails arrive as data URLs from the main process; nothing else loads. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src data:;"
+    />
+    <title>Share your screen</title>
+    <link rel="stylesheet" href="picker.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Choose what to share</h1>
+      <p>Everyone in the call sees it until you stop sharing.</p>
+      <div class="tabs" role="tablist" aria-label="What kind of source">
+        <button type="button" role="tab" data-tab="screen" aria-selected="true">
+          Entire screen<span class="count"></span>
+        </button>
+        <button type="button" role="tab" data-tab="window" aria-selected="false">
+          Window<span class="count"></span>
+        </button>
+      </div>
+    </header>
+    <main id="grid" role="listbox" aria-label="Sources"></main>
+    <footer>
+      <label id="audio-option" class="audio" hidden>
+        <input id="audio" type="checkbox" checked /> Share system audio
+      </label>
+      <span class="spacer"></span>
+      <button id="cancel" type="button">Cancel</button>
+      <button id="share" type="button" class="primary" disabled>Share</button>
+    </footer>
+    <script src="picker.js"></script>
+  </body>
+</html>

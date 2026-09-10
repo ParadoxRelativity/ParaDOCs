@@ -10,11 +10,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // Form data sets its own multipart content type, boundary included.
+  const form = body instanceof FormData;
   const res = await fetch(`/api${path}`, {
     method,
     credentials: 'include',
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined || form ? undefined : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : form ? body : JSON.stringify(body),
   });
 
   if (res.status === 204) return undefined as T;
@@ -44,6 +46,12 @@ export const api = {
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   delete: (path: string) => request<void>('DELETE', path),
+  /** Sends one file as multipart form data. */
+  upload: <T>(method: 'POST' | 'PUT', path: string, file: Blob) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<T>(method, path, form);
+  },
   /** Returns the raw text body, for the markdown export endpoint. */
   text: async (path: string) => {
     const res = await fetch(`/api${path}`, { credentials: 'include' });

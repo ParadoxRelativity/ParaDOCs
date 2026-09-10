@@ -1,5 +1,6 @@
 import { parseMessage, type MessageReferences } from '@paradocs/shared';
 import { cx } from '../../lib/util';
+import { DocumentIcon } from '../Icon';
 
 /**
  * Renders a message body, turning `<doc:…>` and `<#…>` tokens into links.
@@ -37,7 +38,7 @@ export function MessageBody({
           if (!doc) return <UnknownRef key={index} label="unknown document" />;
           return (
             <Chip key={index} onClick={() => onOpenDocument(doc.id)}>
-              {doc.icon ?? (doc.mode === 'canvas' ? '🎨' : '📄')} {doc.title || 'Untitled'}
+              <DocumentIcon doc={doc} /> {doc.title || 'Untitled'}
             </Chip>
           );
         }

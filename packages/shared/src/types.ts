@@ -6,6 +6,8 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  /** Served path of the profile picture. Null draws a lettered avatar. */
+  avatarUrl: string | null;
   createdAt: string;
 }
 
@@ -16,6 +18,8 @@ export interface Workspace {
   name: string;
   slug: string;
   icon: string | null;
+  /** Served path of the workspace picture, which takes the place of the icon. */
+  avatarUrl: string | null;
   createdAt: string;
 }
 
@@ -23,6 +27,7 @@ export interface WorkspaceMember {
   userId: string;
   name: string;
   email: string;
+  avatarUrl: string | null;
   role: Role;
   joinedAt: string;
   /** True for the account making the request. */
@@ -45,6 +50,7 @@ export interface WorkspaceInvite {
 export interface InvitePreview {
   workspaceName: string;
   workspaceIcon: string | null;
+  workspaceAvatarUrl: string | null;
   role: Role;
   email: string | null;
   invitedBy: string | null;
@@ -130,7 +136,7 @@ export interface Comment {
   resolved: boolean;
   createdAt: string;
   updatedAt: string;
-  author: Pick<User, 'id' | 'name' | 'email'>;
+  author: Pick<User, 'id' | 'name' | 'email' | 'avatarUrl'>;
   replies?: Comment[];
 }
 

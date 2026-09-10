@@ -16,7 +16,7 @@ export default function AcceptInvite() {
   if (preview.error) {
     return (
       <EmptyState
-        icon="🔗"
+        icon="link-45deg"
         title="This invite is not valid"
         hint={(preview.error as Error).message}
       />
@@ -29,7 +29,12 @@ export default function AcceptInvite() {
     <div className="flex h-full items-center justify-center bg-[var(--color-surface)] p-6">
       <div className="w-full max-w-sm rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-6 text-center shadow-sm">
         <div className="flex justify-center">
-          <WorkspaceIcon name={invite.workspaceName} icon={invite.workspaceIcon} size="lg" />
+          <WorkspaceIcon
+            name={invite.workspaceName}
+            icon={invite.workspaceIcon}
+            avatarUrl={invite.workspaceAvatarUrl}
+            size="lg"
+          />
         </div>
         <h1 className="mt-2 text-lg font-semibold">{invite.workspaceName}</h1>
         <p className="mt-1 text-sm text-[var(--color-muted)]">

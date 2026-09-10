@@ -6,6 +6,7 @@ import { keys, useDocument } from '../../api/hooks';
 import { useCollaboration } from '../../lib/collaboration';
 import { renderMarkdownPreview } from '../../lib/markdownPreview';
 import { cx } from '../../lib/util';
+import Icon from '../Icon';
 
 interface Props {
   documentId: string;
@@ -48,7 +49,7 @@ export default function EmbeddedDocument({
   return (
     <div className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)]">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--color-line)] px-2.5 py-1.5">
-        <span className="text-[11px]">{doc.data?.mode === 'canvas' ? '🎨' : '📄'}</span>
+        <Icon name={doc.data?.mode === 'canvas' ? 'easel' : 'file-earmark-text'} className="text-[11px]" />
         <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
         <button
           // Pointer events are enabled on this button even when the card body is
@@ -58,7 +59,7 @@ export default function EmbeddedDocument({
           title="Open as a full page"
           className="pointer-events-auto rounded px-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
         >
-          ⇱
+          <Icon name="arrows-angle-expand" />
         </button>
       </div>
 

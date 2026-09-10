@@ -6,6 +6,11 @@ import { badRequest, conflict, forbidden, parse, unauthorized } from '../lib/htt
 import { SESSION_COOKIE, sessionCookieOptions } from '../plugins/session.js';
 import { config } from '../config.js';
 import { oidcStatus } from './oidc.js';
+import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
+import { uploadUrlSql } from '../lib/storage.js';
+
+/** The account as the client sees it. */
+const USER_COLUMNS = `id, email, name, ${uploadUrlSql('avatar_key')} AS "avatarUrl"`;
 
 async function createSession(userId: string): Promise<string> {
   const token = newSessionToken();
@@ -73,15 +78,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     const token = await createSession(user.id);
     reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
-    return { user };
+    return { user: { ...user, avatarUrl: null } };
   });
 
   app.post('/auth/login', async (req, reply) => {
     const input = parse(loginSchema, req.body);
-    const { rows } = await query<{ id: string; email: string; name: string; password_hash: string }>(
-      'SELECT id, email, name, password_hash FROM users WHERE lower(email) = lower($1)',
-      [input.email],
-    );
+    const { rows } = await query<{
+      id: string;
+      email: string;
+      name: string;
+      avatarUrl: string | null;
+      password_hash: string;
+    }>(`SELECT ${USER_COLUMNS}, password_hash FROM users WHERE lower(email) = lower($1)`, [input.email]);
     const row = rows[0];
     // Hash even when the user is missing, so timing does not reveal which emails exist.
     const ok = await verifyPassword(input.password, row?.password_hash ?? 'scrypt$00$00');
@@ -89,7 +97,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     const token = await createSession(row.id);
     reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
-    return { user: { id: row.id, email: row.email, name: row.name } };
+    return { user: { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatarUrl } };
   });
 
   app.patch('/auth/me', async (req) => {
@@ -104,12 +112,24 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       if (rows.length) throw conflict('Another account already uses that email');
     }
 
-    const { rows } = await query<{ id: string; email: string; name: string }>(
+    const { rows } = await query(
       `UPDATE users SET name = COALESCE($2, name), email = COALESCE($3, email)
-        WHERE id = $1 RETURNING id, email, name`,
+        WHERE id = $1 RETURNING ${USER_COLUMNS}`,
       [req.user.id, input.name ?? null, input.email ?? null],
     );
     return { user: rows[0] };
+  });
+
+  /** Sets the profile picture. The picture it replaces is deleted. */
+  app.put('/auth/me/avatar', async (req) => {
+    if (!req.user) throw unauthorized();
+    const key = await storeAvatar(req, 'users');
+    return { user: await replaceAvatar('users', req.user.id, key, USER_COLUMNS) };
+  });
+
+  app.delete('/auth/me/avatar', async (req) => {
+    if (!req.user) throw unauthorized();
+    return { user: await replaceAvatar('users', req.user.id, null, USER_COLUMNS) };
   });
 
   app.post('/auth/password', async (req, reply) => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Channel, DocumentSummary, FolderNode, Tag } from '@paradocs/shared';
+import type { Channel, DocumentSummary, FolderNode, Tag, User, VoiceOccupant } from '@paradocs/shared';
 import {
   useCreateDocument,
   useCreateFolder,
@@ -12,6 +12,8 @@ import {
 } from '../api/hooks';
 import { cx, useLocalStorage } from '../lib/util';
 import { Button, IconButton, InlineIconNameForm, InlineInput, TagChip } from './ui';
+import Icon, { DocumentIcon, type IconName } from './Icon';
+import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
 import type { SettingsSection } from './SettingsDialog';
 import WorkspaceIcon from './WorkspaceIcon';
@@ -19,6 +21,8 @@ import { useToast } from './Toast';
 import { ChannelList } from './chat/ChannelList';
 
 interface Props {
+  /** The signed-in account, shown at the foot of the sidebar. */
+  user: User;
   workspaces: WorkspaceSummary[];
   workspaceId: string;
   onSelectWorkspace: (id: string) => void;
@@ -43,7 +47,7 @@ interface Props {
   unreadTotal: number;
   mentionTotal: number;
   voiceEnabled: boolean;
-  voiceOccupancy: Record<string, string[]>;
+  voiceOccupancy: Record<string, VoiceOccupant[]>;
   connectedChannelId: string | null;
   /** The call in progress, shown as a bar above the footer. Null when idle. */
   callBar: {
@@ -104,9 +108,9 @@ export default function LeftSidebar(props: Props) {
           onClick={() => setSwitcherOpen((v) => !v)}
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-line)]/50"
         >
-          <WorkspaceIcon name={current?.name ?? 'Workspace'} icon={current?.icon} />
+          <WorkspaceIcon name={current?.name ?? 'Workspace'} icon={current?.icon} avatarUrl={current?.avatarUrl} />
           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{current?.name ?? 'Workspace'}</span>
-          <span className="text-xs text-[var(--color-muted)]">▾</span>
+          <Icon name="chevron-down" className="text-xs text-[var(--color-muted)]" />
         </button>
 
         {switcherOpen && (
@@ -123,7 +127,7 @@ export default function LeftSidebar(props: Props) {
                   w.id === workspaceId && 'bg-[var(--color-surface)]',
                 )}
               >
-                <WorkspaceIcon name={w.name} icon={w.icon} size="sm" />
+                <WorkspaceIcon name={w.name} icon={w.icon} avatarUrl={w.avatarUrl} size="sm" />
                 <span className="min-w-0 flex-1 truncate">{w.name}</span>
                 <span className="text-xs text-[var(--color-muted)]">{w.documentCount}</span>
               </button>
@@ -135,7 +139,7 @@ export default function LeftSidebar(props: Props) {
               }}
               className="w-full border-t border-[var(--color-line)] px-3 py-2 text-left text-sm text-[var(--color-accent)] hover:bg-[var(--color-surface)]"
             >
-              + New workspace
+              <Icon name="plus-lg" /> New workspace
             </button>
           </div>
         )}
@@ -146,13 +150,13 @@ export default function LeftSidebar(props: Props) {
         <SectionTab
           active={props.section === 'docs'}
           label="Docs"
-          icon="📚"
+          icon="journals"
           onClick={() => props.onSelectSection('docs')}
         />
         <SectionTab
           active={props.section === 'chat'}
           label="Chat"
-          icon="💬"
+          icon="chat-dots"
           badge={props.unreadTotal}
           mentions={props.mentionTotal}
           onClick={() => props.onSelectSection('chat')}
@@ -174,19 +178,19 @@ export default function LeftSidebar(props: Props) {
         <>
       {/* Quick actions */}
       <div className="space-y-0.5 p-2">
-        <SidebarAction icon="🔍" label="Search" hint="⌘K" onClick={props.onOpenSearch} />
+        <SidebarAction icon="search" label="Search" hint="⌘K" onClick={props.onOpenSearch} />
         <SidebarAction
-          icon="🗄"
+          icon="collection"
           label="All documents"
           hint={String(props.documentCount)}
           active={props.allDocumentsActive}
           onClick={props.onOpenAllDocuments}
         />
-        <SidebarAction icon="📔" label="Today's journal" onClick={props.onOpenJournal} />
-        <SidebarAction icon="📄" label="New document" onClick={() => addDocument(null)} />
-        <SidebarAction icon="🎨" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
+        <SidebarAction icon="journal-text" label="Today's journal" onClick={props.onOpenJournal} />
+        <SidebarAction icon="file-earmark-plus" label="New document" onClick={() => addDocument(null)} />
+        <SidebarAction icon="easel" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
         <SidebarAction
-          icon="👥"
+          icon="people"
           label="Members"
           hint={current ? String(current.memberCount) : undefined}
           onClick={() => props.onOpenSettings('members')}
@@ -200,7 +204,7 @@ export default function LeftSidebar(props: Props) {
             Folders
           </span>
           <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
-            +
+            <Icon name="folder-plus" />
           </IconButton>
         </div>
 
@@ -270,16 +274,16 @@ export default function LeftSidebar(props: Props) {
             title={`Open ${props.callBar.channelName}`}
           >
             <span className="font-medium">{props.callBar.connecting ? 'Connecting…' : 'In call'}</span>
-            <span className="text-[var(--color-muted)]"> · 🔊 {props.callBar.channelName}</span>
+            <span className="text-[var(--color-muted)]"> · <Icon name="volume-up" /> {props.callBar.channelName}</span>
           </button>
           <IconButton
             label={props.callBar.mic ? 'Mute' : 'Unmute'}
             onClick={props.callBar.onToggleMic}
           >
-            {props.callBar.mic ? '🎙' : '🔇'}
+            <Icon name={props.callBar.mic ? 'mic' : 'mic-mute'} />
           </IconButton>
           <IconButton label="Leave call" onClick={props.callBar.onLeave}>
-            📴
+            <Icon name="telephone-x" />
           </IconButton>
         </div>
       )}
@@ -288,13 +292,16 @@ export default function LeftSidebar(props: Props) {
       <div className="flex items-center gap-1 border-t border-[var(--color-line)] p-2">
         <Button
           variant="ghost"
-          className="flex-1 justify-start text-xs"
+          className="min-w-0 flex-1 justify-start text-xs"
+          title="Settings"
           onClick={() => props.onOpenSettings('account')}
         >
-          ⚙️ Settings
+          <Avatar name={props.user.name} url={props.user.avatarUrl} seed={props.user.id} size="sm" />
+          <span className="min-w-0 flex-1 truncate text-left">{props.user.name}</span>
+          <Icon name="gear" className="text-[var(--color-muted)]" />
         </Button>
         <IconButton label="Sign out" onClick={props.onSignOut}>
-          ⏻
+          <Icon name="box-arrow-right" />
         </IconButton>
       </div>
 
@@ -387,7 +394,7 @@ function SidebarAction({
   onClick,
   active,
 }: {
-  icon: string;
+  icon: IconName;
   label: string;
   hint?: string;
   onClick: () => void;
@@ -403,7 +410,9 @@ function SidebarAction({
           : 'hover:bg-[var(--color-line)]/50',
       )}
     >
-      <span className="w-4 text-center text-xs">{icon}</span>
+      <span className="w-4 text-center text-xs">
+        <Icon name={icon} />
+      </span>
       <span className="flex-1 text-left">{label}</span>
       {hint && <span className="text-[10px] text-[var(--color-muted)]">{hint}</span>}
     </button>
@@ -476,7 +485,7 @@ function FolderRow({
             <span
               className={cx('w-3 text-[10px] text-[var(--color-muted)] transition-transform', expanded && 'rotate-90')}
             >
-              ▶
+              <Icon name="chevron-right" />
             </span>
             {/* Folder icons are optional; without one the name simply sits closer in. */}
             {folder.icon && <span className="shrink-0 text-xs">{folder.icon}</span>}
@@ -487,7 +496,7 @@ function FolderRow({
 
         <div className={cx('items-center', renaming ? 'hidden' : 'hidden group-hover:flex')}>
           <IconButton label="New document here" onClick={() => onAddDocument(folder.id)}>
-            +
+            <Icon name="file-earmark-plus" />
           </IconButton>
           <IconButton
             label="New subfolder"
@@ -496,13 +505,13 @@ function FolderRow({
               onStartCreate(folder.id);
             }}
           >
-            📁
+            <Icon name="folder-plus" />
           </IconButton>
           <IconButton label="Rename folder or change its icon" onClick={() => setRenaming(true)}>
-            ✎
+            <Icon name="pencil" />
           </IconButton>
           <IconButton label="Delete folder" onClick={() => setConfirmingDelete(true)}>
-            ×
+            <Icon name="trash3" />
           </IconButton>
         </div>
       </div>
@@ -598,7 +607,7 @@ function DocumentRow({
       style={{ paddingLeft: depth * 12 + 22 }}
     >
       <span className="text-xs">
-        {doc.icon ?? (doc.isJournal ? '📔' : doc.mode === 'canvas' ? '🎨' : '📄')}
+        <DocumentIcon doc={doc} />
       </span>
       <span className="min-w-0 flex-1 truncate">{doc.title}</span>
       {doc.tags.slice(0, 2).map((tag) => (
@@ -619,7 +628,7 @@ function SectionTab({
 }: {
   active: boolean;
   label: string;
-  icon: string;
+  icon: IconName;
   badge?: number;
   mentions?: number;
   onClick: () => void;
@@ -632,7 +641,7 @@ function SectionTab({
         active ? 'bg-[var(--color-line)]/70 font-medium' : 'text-[var(--color-muted)] hover:bg-[var(--color-line)]/40',
       )}
     >
-      <span>{icon}</span>
+      <Icon name={icon} />
       <span>{label}</span>
       {/* Unread only matters when you are not already looking at chat, and a
           mention outranks it. */}

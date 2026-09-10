@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import type { Channel } from '@paradocs/shared';
+import type { Channel, VoiceOccupant } from '@paradocs/shared';
 import { useCreateChannel, useDeleteChannel } from '../../api/hooks';
 import { useToast } from '../Toast';
 import { IconButton, InlineInput } from '../ui';
+import Avatar from '../Avatar';
+import Icon from '../Icon';
 import { cx } from '../../lib/util';
 
 /**
@@ -27,7 +29,7 @@ export function ChannelList({
   /** Whether this server has a voice service at all. */
   voiceEnabled: boolean;
   /** Who is currently in each voice channel, keyed by channel id. */
-  occupancy: Record<string, string[]>;
+  occupancy: Record<string, VoiceOccupant[]>;
   /** The voice channel this session is connected to, if any. */
   connectedChannelId: string | null;
   onSelect: (id: string) => void;
@@ -43,7 +45,7 @@ export function ChannelList({
     try {
       const channel = await createChannel.mutateAsync({ name, kind });
       onSelect(channel.id);
-      toast(`${kind === 'voice' ? '🔊 ' : '#'}${channel.name} created`);
+      toast(`${kind === 'voice' ? 'Voice channel ' : '#'}${channel.name} created`);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not create the channel', 'error');
     }
@@ -153,7 +155,7 @@ function Group({
         </span>
         {canAdd && (
           <IconButton label={`New ${label.toLowerCase()} channel`} onClick={onAdd}>
-            +
+            <Icon name="plus-lg" />
           </IconButton>
         )}
       </div>
@@ -231,14 +233,14 @@ function VoiceRow({
   active: boolean;
   connected: boolean;
   canManage: boolean;
-  people: string[];
+  people: VoiceOccupant[];
   onSelect: (id: string) => void;
   onDelete: (channel: Channel) => void;
 }) {
   return (
     <>
       <Row channel={channel} active={active} canManage={canManage} onSelect={onSelect} onDelete={onDelete}>
-        <span className="text-[var(--color-muted)]">🔊</span>
+        <Icon name="volume-up" className="text-[var(--color-muted)]" />
         <span className="min-w-0 flex-1 truncate">{channel.name}</span>
         {/* Which room you are actually in, as distinct from which one you are
             looking at — they are often not the same once a call outlives the
@@ -255,12 +257,13 @@ function VoiceRow({
       </Row>
       {/* Names under the channel, the way a voice channel reads elsewhere: the
           useful question is who is in there, not how many. */}
-      {people.map((name) => (
-        <div key={name} className="flex items-center gap-2 py-0.5 pl-8 text-xs text-[var(--color-muted)]">
-          <span className="grid h-4 w-4 place-items-center rounded-full bg-[var(--color-accent)] text-[9px] font-semibold text-white">
-            {name.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="truncate">{name}</span>
+      {people.map((person, index) => (
+        <div
+          key={`${index}-${person.name}`}
+          className="flex items-center gap-2 py-0.5 pl-8 text-xs text-[var(--color-muted)]"
+        >
+          <Avatar name={person.name} url={person.avatarUrl} size="xs" />
+          <span className="truncate">{person.name}</span>
         </div>
       ))}
     </>
@@ -298,7 +301,7 @@ function Row({
       {canManage && (
         <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
           <IconButton label={`Delete ${channel.name}`} onClick={() => onDelete(channel)}>
-            ×
+            <Icon name="trash3" />
           </IconButton>
         </span>
       )}

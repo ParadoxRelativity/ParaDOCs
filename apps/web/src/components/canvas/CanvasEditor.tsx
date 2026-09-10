@@ -28,6 +28,8 @@ import CanvasSurface, { type Viewport } from './CanvasSurface';
 import PresentMode from './PresentMode';
 import { Modal } from '../Modal';
 import { Button, Tooltip } from '../ui';
+import Avatar from '../Avatar';
+import Icon, { type IconName } from '../Icon';
 
 interface Props {
   doc: Doc;
@@ -42,11 +44,11 @@ interface Props {
 
 type Inserting = { type: 'embed' | 'image' | 'audio' | 'video' | 'link' } | null;
 
-const SHAPE_ICONS: Record<ShapeKind, string> = {
-  rectangle: '▭',
-  ellipse: '◯',
-  diamond: '◇',
-  triangle: '△',
+const SHAPE_ICONS: Record<ShapeKind, IconName> = {
+  rectangle: 'square',
+  ellipse: 'circle',
+  diamond: 'diamond',
+  triangle: 'triangle',
 };
 
 export default function CanvasEditor({
@@ -300,28 +302,28 @@ export default function CanvasEditor({
           <>
             <Divider />
             <ToolButton label="Sticky note — or double-click the board" onClick={() => addElement('note', { text: '', color: NOTE_COLORS[0] })}>
-              🗒
+              <Icon name="sticky" />
             </ToolButton>
             <ToolButton label="Text label" onClick={() => addElement('text', { text: '' })}>
-              T
+              <Icon name="fonts" />
             </ToolButton>
             <ToolButton label="Create a document and place it here" onClick={createDocumentCard}>
-              ✚
+              <Icon name="file-earmark-plus" />
             </ToolButton>
             <ToolButton label="Place an existing document on the board" onClick={() => setInserting({ type: 'link' })}>
-              📄
+              <Icon name="file-earmark-text" />
             </ToolButton>
             <ToolButton label="Embed a webpage or video by URL" onClick={() => setInserting({ type: 'embed' })}>
-              ▶
+              <Icon name="play-btn" />
             </ToolButton>
             <ToolButton label="Image — by URL, upload, paste or drop" onClick={() => setInserting({ type: 'image' })}>
-              🖼
+              <Icon name="image" />
             </ToolButton>
             <ToolButton label="Audio — by URL or upload" onClick={() => setInserting({ type: 'audio' })}>
-              🎵
+              <Icon name="music-note-beamed" />
             </ToolButton>
             <ToolButton label="Video — by URL or upload" onClick={() => setInserting({ type: 'video' })}>
-              🎬
+              <Icon name="film" />
             </ToolButton>
             <ToolButton
               label="Mind map — drops a root node you can branch from"
@@ -333,7 +335,7 @@ export default function CanvasEditor({
                 setEditRequestId(id);
               }}
             >
-              🌳
+              <Icon name="diagram-3" />
             </ToolButton>
             <ToolButton
               label={
@@ -347,13 +349,13 @@ export default function CanvasEditor({
                 setConnectorTool(false);
               }}
             >
-              ▭
+              <Icon name="square" />
             </ToolButton>
             <ToolButton
               label="Frame (presentation slide)"
               onClick={() => addElement('frame', { name: `Frame ${frames.length + 1}`, order: frames.length })}
             >
-              ⬚
+              <Icon name="aspect-ratio" />
             </ToolButton>
             <Divider />
             <ToolButton
@@ -368,10 +370,10 @@ export default function CanvasEditor({
                 setShapeTool(null);
               }}
             >
-              ↔
+              <Icon name="arrow-left-right" />
             </ToolButton>
             <ToolButton label="Delete selection (or press Delete)" disabled={selectedIds.size === 0} onClick={deleteSelection}>
-              🗑
+              <Icon name="trash3" />
             </ToolButton>
           </>
         )}
@@ -396,7 +398,7 @@ export default function CanvasEditor({
             ))}
             <Tooltip label="Add a child node">
               <Button variant="subtle" className="text-xs" onClick={() => addChild(selectedNode.id)}>
-                + Child
+                <Icon name="plus-lg" /> Child
               </Button>
             </Tooltip>
           </>
@@ -425,14 +427,14 @@ export default function CanvasEditor({
           {peers.length > 0 && (
             <div className="mr-1 flex -space-x-1.5">
               {peers.slice(0, 4).map((peer) => (
-                <span
+                <Avatar
                   key={peer.clientId}
+                  name={peer.name}
+                  url={peer.avatarUrl}
                   title={peer.name}
-                  className="grid h-6 w-6 place-items-center rounded-full border-2 border-[var(--color-canvas)] text-[10px] font-semibold text-white"
+                  className="border-2 border-[var(--color-canvas)]"
                   style={{ background: peer.color }}
-                >
-                  {peer.name.slice(0, 1).toUpperCase()}
-                </span>
+                />
               ))}
             </div>
           )}
@@ -440,11 +442,11 @@ export default function CanvasEditor({
             {elements.length} item{elements.length === 1 ? '' : 's'} · {Math.round(viewport.scale * 100)}%
           </span>
           <ToolButton label="Zoom to fit everything on the board" onClick={zoomToFit}>
-            ⤢
+            <Icon name="arrows-fullscreen" />
           </ToolButton>
           <Tooltip label="Present the frames as slides">
             <Button variant="subtle" className="text-sm" onClick={() => setPresenting(0)}>
-              ▶ Present
+              <Icon name="play-fill" /> Present
             </Button>
           </Tooltip>
         </div>
@@ -462,7 +464,7 @@ export default function CanvasEditor({
           <span className="text-[var(--color-muted)]">Draw</span>
           {SHAPE_KINDS.map((kind) => (
             <Chip key={kind} label={kind} active={shapeTool === kind} onClick={() => setShapeTool(kind)}>
-              {SHAPE_ICONS[kind]}
+              <Icon name={SHAPE_ICONS[kind]} />
             </Chip>
           ))}
           <span className="text-[var(--color-muted)]">
@@ -598,17 +600,22 @@ export default function CanvasEditor({
 
 const Divider = () => <span className="mx-1 h-5 w-px bg-[var(--color-line)]" />;
 
-const SHAPES: { id: ConnectorShape; label: string; icon: string }[] = [
-  { id: 'straight', label: 'Straight', icon: '╱' },
-  { id: 'curved', label: 'Curved', icon: '∿' },
-  { id: 'elbow', label: 'Right angles', icon: '⌐' },
+const SHAPES: { id: ConnectorShape; label: string; icon: IconName }[] = [
+  { id: 'straight', label: 'Straight', icon: 'slash-lg' },
+  { id: 'curved', label: 'Curved', icon: 'bezier2' },
+  { id: 'elbow', label: 'Right angles', icon: 'arrow-90deg-right' },
 ];
 
-const DASHES: { id: ConnectorDash; label: string; icon: string }[] = [
-  { id: 'solid', label: 'Solid', icon: '───' },
-  { id: 'dashed', label: 'Dashed', icon: '╌╌╌' },
-  { id: 'dotted', label: 'Dotted', icon: '┈┈┈' },
+const DASHES: { id: ConnectorDash; label: string }[] = [
+  { id: 'solid', label: 'Solid' },
+  { id: 'dashed', label: 'Dashed' },
+  { id: 'dotted', label: 'Dotted' },
 ];
+
+/** Bootstrap Icons has no dashed-line glyphs, so each style draws a sample of itself. */
+const LineSample = ({ dash }: { dash: ConnectorDash }) => (
+  <span aria-hidden className="block w-5 border-t-2 border-current" style={{ borderTopStyle: dash }} />
+);
 
 /** Contextual controls for whichever shape is selected. */
 function ShapeBar({
@@ -623,7 +630,7 @@ function ShapeBar({
       <span className="text-[var(--color-muted)]">Shape</span>
       {SHAPE_KINDS.map((kind) => (
         <Chip key={kind} label={kind} active={shape.shape === kind} onClick={() => onChange({ shape: kind })}>
-          {SHAPE_ICONS[kind]}
+          <Icon name={SHAPE_ICONS[kind]} />
         </Chip>
       ))}
 
@@ -660,7 +667,7 @@ function ShapeBar({
           active={(shape.dash ?? 'solid') === dash.id}
           onClick={() => onChange({ dash: dash.id })}
         >
-          {dash.icon}
+          <LineSample dash={dash.id} />
         </Chip>
       ))}
       {CONNECTOR_COLORS.map((color) => (
@@ -717,17 +724,17 @@ function ConnectorBar({
           active={(connector.shape ?? 'straight') === shape.id}
           onClick={() => onChange({ shape: shape.id })}
         >
-          {shape.icon}
+          <Icon name={shape.icon} />
         </Chip>
       ))}
 
       <Divider />
       <span className="text-[var(--color-muted)]">Ends</span>
       <Chip label="Arrow at start" active={arrowStart} onClick={() => onChange({ arrowStart: !arrowStart })}>
-        ←
+        <Icon name="arrow-left" />
       </Chip>
       <Chip label="Arrow at end" active={arrowEnd} onClick={() => onChange({ arrowEnd: !arrowEnd })}>
-        →
+        <Icon name="arrow-right" />
       </Chip>
 
       <Divider />
@@ -739,7 +746,7 @@ function ConnectorBar({
           active={(connector.dash ?? 'solid') === dash.id}
           onClick={() => onChange({ dash: dash.id })}
         >
-          {dash.icon}
+          <LineSample dash={dash.id} />
         </Chip>
       ))}
 

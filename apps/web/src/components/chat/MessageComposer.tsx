@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { channelRef, documentRef, memberRef, type Channel } from '@paradocs/shared';
 import { useAllDocuments, useMembers } from '../../api/hooks';
 import { cx } from '../../lib/util';
+import { DocumentIcon } from '../Icon';
 
 /**
  * The message box, with inline pickers for the two things you can reference.
@@ -96,7 +97,8 @@ export function MessageComposer({
       .slice(0, 6)
       .map((d) => ({
         id: d.id,
-        label: `${d.icon ?? (d.mode === 'canvas' ? '🎨' : '📄')} ${d.title || 'Untitled'}`,
+        icon: <DocumentIcon doc={d} />,
+        label: d.title || 'Untitled',
         hint: '',
         // What appears in the box: the title, not the id token.
         insert: `[[${d.title || 'Untitled'}]]`,
@@ -214,7 +216,10 @@ export function MessageComposer({
                 index === highlighted && 'bg-[var(--color-surface)]',
               )}
             >
-              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {'icon' in option && <>{option.icon} </>}
+                {option.label}
+              </span>
               {option.hint && <span className="truncate text-xs text-[var(--color-muted)]">{option.hint}</span>}
             </button>
           ))}

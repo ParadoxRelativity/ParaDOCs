@@ -60,7 +60,8 @@ li.connection {
   border-radius: 10px;
 }
 
-li.connection .glyph { font-size: 20px; line-height: 1; }
+li.connection .glyph { display: grid; color: var(--muted); }
+li.connection .glyph svg { width: 20px; height: 20px; }
 li.connection .text { flex: 1; min-width: 0; }
 li.connection .label { font-weight: 600; }
 li.connection .detail {

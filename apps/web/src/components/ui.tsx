@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
 import { cx } from '../lib/util';
+import Icon, { type IconName } from './Icon';
 
 /**
  * A styled tooltip for icon-only controls.
@@ -304,17 +305,19 @@ export function TagChip({
           aria-label={`Remove tag ${name}`}
           className="opacity-60 hover:opacity-100"
         >
-          ×
+          <Icon name="x-lg" />
         </button>
       )}
     </span>
   );
 }
 
-export function EmptyState({ icon, title, hint }: { icon: string; title: string; hint?: ReactNode }) {
+export function EmptyState({ icon, title, hint }: { icon: IconName; title: string; hint?: ReactNode }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <div className="text-3xl opacity-40">{icon}</div>
+      <div className="text-3xl opacity-40">
+        <Icon name={icon} />
+      </div>
       <p className="text-sm font-medium">{title}</p>
       {hint && <p className="max-w-xs text-xs text-[var(--color-muted)]">{hint}</p>}
     </div>

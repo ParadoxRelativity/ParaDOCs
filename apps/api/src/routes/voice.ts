@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import type { VoiceOccupant } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { badRequest, notFound } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
@@ -40,7 +41,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/voice/participants', async (req) => {
     await assertWorkspaceAccess(req, req.params.id);
-    const occupancy: Record<string, string[]> = {};
+    const occupancy: Record<string, VoiceOccupant[]> = {};
     if (!voiceEnabled()) return occupancy;
 
     const { rows } = await query<{ id: string }>(
@@ -65,10 +66,16 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
         .map(async (room) => {
           try {
             const participants = await service.listParticipants(room.name);
-            occupancy[room.name] = participants.map((p) => p.name || p.identity);
+            occupancy[room.name] = participants.map((p) => ({
+              name: p.name || p.identity,
+              avatarUrl: p.attributes?.avatarUrl || null,
+            }));
           } catch {
             // Fall back to the count if the room went away mid-request.
-            occupancy[room.name] = Array.from({ length: room.numParticipants }, () => 'Someone');
+            occupancy[room.name] = Array.from({ length: room.numParticipants }, () => ({
+              name: 'Someone',
+              avatarUrl: null,
+            }));
           }
         }),
     );
@@ -99,6 +106,8 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
       identity: req.user!.id,
       name: req.user!.name,
+      // Carried on the participant, so everyone in the call can draw the picture.
+      attributes: req.user!.avatarUrl ? { avatarUrl: req.user!.avatarUrl } : undefined,
       ttl: TOKEN_TTL,
     });
     token.addGrant({

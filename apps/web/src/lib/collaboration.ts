@@ -10,6 +10,7 @@ export interface Peer {
   clientId: number;
   name: string;
   color: string;
+  avatarUrl: string | null;
 }
 
 export interface CollabSession {
@@ -38,7 +39,10 @@ function toStatus(raw: unknown): CollabStatus {
  * tears down and remounts, and a memoized provider would be destroyed by the
  * first cleanup and then reused dead, so the socket never connected.
  */
-export function useCollaboration(documentId: string, self: { id: string; name: string }) {
+export function useCollaboration(
+  documentId: string,
+  self: { id: string; name: string; avatarUrl?: string | null },
+) {
   const [session, setSession] = useState<CollabSession | null>(null);
   const [status, setStatus] = useState<CollabStatus>('connecting');
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -72,8 +76,12 @@ export function useCollaboration(documentId: string, self: { id: string; name: s
       const others: Peer[] = [];
       awareness.getStates().forEach((state, clientId) => {
         if (clientId === awareness.clientID) return;
-        const user = (state as { user?: { name?: string; color?: string } }).user;
-        if (user?.name) others.push({ clientId, name: user.name, color: user.color ?? '#888' });
+        const user = (state as { user?: { name?: string; color?: string; avatarUrl?: unknown } }).user;
+        if (!user?.name) return;
+        // Another client wrote this, so only a path into our own uploads is drawn.
+        const avatarUrl =
+          typeof user.avatarUrl === 'string' && user.avatarUrl.startsWith('/uploads/') ? user.avatarUrl : null;
+        others.push({ clientId, name: user.name, color: user.color ?? '#888', avatarUrl });
       });
       setPeers(others);
     };
@@ -86,7 +94,10 @@ export function useCollaboration(documentId: string, self: { id: string; name: s
     };
   }, [session]);
 
-  const user = useMemo(() => ({ name: self.name, color: colorForUser(self.id) }), [self.id, self.name]);
+  const user = useMemo(
+    () => ({ name: self.name, color: colorForUser(self.id), avatarUrl: self.avatarUrl ?? null }),
+    [self.id, self.name, self.avatarUrl],
+  );
 
   return { session, user, status, peers };
 }

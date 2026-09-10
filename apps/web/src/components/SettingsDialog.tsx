@@ -3,19 +3,27 @@ import type { User } from '@paradocs/shared';
 import {
   useChangePassword,
   useDeleteWorkspace,
+  useSetAvatar,
+  useSetWorkspaceAvatar,
   useUpdateProfile,
   useUpdateWorkspace,
+  useVoiceConfig,
   type WorkspaceSummary,
 } from '../api/hooks';
+import { squareImage } from '../lib/images';
 import { cx } from '../lib/util';
+import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
+import { FIELD, PictureField, Section } from './SettingsParts';
 import { useToast } from './Toast';
 import { Button } from './ui';
+import Icon, { type IconName } from './Icon';
 import MembersPanel from './MembersPanel';
 import UploadsPanel from './UploadsPanel';
+import VoiceSettings from './VoiceSettings';
 import WorkspaceIcon from './WorkspaceIcon';
 
-export type SettingsSection = 'account' | 'appearance' | 'workspace' | 'members' | 'uploads';
+export type SettingsSection = 'account' | 'appearance' | 'voice' | 'workspace' | 'members' | 'uploads';
 export type Theme = 'light' | 'dark' | 'system';
 
 interface Props {
@@ -30,21 +38,20 @@ interface Props {
   onOpenDocument: (documentId: string) => void;
 }
 
-const FIELD =
-  'w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1.5 text-sm ' +
-  'outline-none focus:border-[var(--color-accent)] disabled:opacity-60';
-
 export default function SettingsDialog(props: Props) {
   const { section, onSectionChange, workspace } = props;
   const canManageWorkspace = workspace.role === 'owner' || workspace.role === 'admin';
+  // Device settings are only worth showing on a server that can hold a call.
+  const voiceEnabled = useVoiceConfig().data?.enabled ?? false;
 
-  const nav: { id: SettingsSection; label: string; icon: string }[] = [
-    { id: 'account', label: 'Account', icon: '👤' },
-    { id: 'appearance', label: 'Appearance', icon: '🎨' },
-    { id: 'workspace', label: 'Workspace', icon: '🗂' },
-    { id: 'members', label: 'Members', icon: '👥' },
+  const nav: { id: SettingsSection; label: string; icon: IconName }[] = [
+    { id: 'account', label: 'Account', icon: 'person' },
+    { id: 'appearance', label: 'Appearance', icon: 'palette' },
+    ...(voiceEnabled ? [{ id: 'voice' as const, label: 'Voice & video', icon: 'headset' as const }] : []),
+    { id: 'workspace', label: 'Workspace', icon: 'briefcase' },
+    { id: 'members', label: 'Members', icon: 'people' },
     // Storage housekeeping is an admin job, so the section is hidden otherwise.
-    ...(canManageWorkspace ? [{ id: 'uploads' as const, label: 'Uploads', icon: '📎' }] : []),
+    ...(canManageWorkspace ? [{ id: 'uploads' as const, label: 'Uploads', icon: 'paperclip' as const }] : []),
   ];
 
   return (
@@ -71,7 +78,7 @@ export default function SettingsDialog(props: Props) {
                   : 'hover:bg-[var(--color-surface)]',
               )}
             >
-              <span className="text-xs">{item.icon}</span>
+              <Icon name={item.icon} className="text-xs" />
               {item.label}
             </button>
           ))}
@@ -82,6 +89,7 @@ export default function SettingsDialog(props: Props) {
           {section === 'appearance' && (
             <AppearanceSection theme={props.theme} onThemeChange={props.onThemeChange} />
           )}
+          {section === 'voice' && <VoiceSettings />}
           {section === 'workspace' && (
             <WorkspaceSection
               workspace={workspace}
@@ -106,19 +114,10 @@ export default function SettingsDialog(props: Props) {
   );
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <section className="mb-5">
-      <h3 className="text-sm font-semibold">{title}</h3>
-      {hint && <p className="mb-2 mt-0.5 text-xs text-[var(--color-muted)]">{hint}</p>}
-      <div className={hint ? '' : 'mt-2'}>{children}</div>
-    </section>
-  );
-}
-
 function AccountSection({ user }: { user: User }) {
   const updateProfile = useUpdateProfile();
   const changePassword = useChangePassword();
+  const setAvatar = useSetAvatar();
   const toast = useToast();
 
   const [name, setName] = useState(user.name);
@@ -139,6 +138,16 @@ function AccountSection({ user }: { user: User }) {
     );
   }
 
+  async function savePicture(file: File | null) {
+    try {
+      // Cropped and scaled here, so a large photo uploads as a small square.
+      await setAvatar.mutateAsync(file ? await squareImage(file) : null);
+      toast(file ? 'Picture updated' : 'Picture removed');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update your picture', 'error');
+    }
+  }
+
   function savePassword(e: React.FormEvent) {
     e.preventDefault();
     changePassword.mutate(
@@ -157,6 +166,16 @@ function AccountSection({ user }: { user: User }) {
 
   return (
     <>
+      <Section title="Picture" hint="Shown beside your name in chat, comments, calls and the member list.">
+        <PictureField
+          preview={<Avatar name={user.name} url={user.avatarUrl} seed={user.id} size="xl" />}
+          hasPicture={Boolean(user.avatarUrl)}
+          pending={setAvatar.isPending}
+          onPick={(file) => void savePicture(file)}
+          onRemove={() => void savePicture(null)}
+        />
+      </Section>
+
       <Section title="Profile">
         <form onSubmit={saveProfile} className="space-y-2">
           <label className="block">
@@ -222,10 +241,10 @@ function AccountSection({ user }: { user: User }) {
   );
 }
 
-const THEMES: { id: Theme; label: string; hint: string; icon: string }[] = [
-  { id: 'light', label: 'Light', hint: 'Always light', icon: '☀️' },
-  { id: 'dark', label: 'Dark', hint: 'Always dark', icon: '🌙' },
-  { id: 'system', label: 'System', hint: 'Follow your OS setting', icon: '🖥️' },
+const THEMES: { id: Theme; label: string; hint: string; icon: IconName }[] = [
+  { id: 'light', label: 'Light', hint: 'Always light', icon: 'sun' },
+  { id: 'dark', label: 'Dark', hint: 'Always dark', icon: 'moon-stars' },
+  { id: 'system', label: 'System', hint: 'Follow your OS setting', icon: 'display' },
 ];
 
 function AppearanceSection({ theme, onThemeChange }: { theme: Theme; onThemeChange: (t: Theme) => void }) {
@@ -243,7 +262,9 @@ function AppearanceSection({ theme, onThemeChange }: { theme: Theme; onThemeChan
                 : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]',
             )}
           >
-            <div className="text-lg">{option.icon}</div>
+            <div className="text-lg">
+              <Icon name={option.icon} />
+            </div>
             <div className="mt-1 text-xs font-medium">{option.label}</div>
             <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
           </button>
@@ -264,6 +285,7 @@ function WorkspaceSection({
 }) {
   const updateWorkspace = useUpdateWorkspace(workspace.id);
   const deleteWorkspace = useDeleteWorkspace();
+  const setPicture = useSetWorkspaceAvatar(workspace.id);
   const toast = useToast();
 
   const [name, setName] = useState(workspace.name);
@@ -271,6 +293,15 @@ function WorkspaceSection({
   const [confirming, setConfirming] = useState(false);
 
   const dirty = name.trim() !== workspace.name || icon.trim() !== (workspace.icon ?? '');
+
+  async function savePicture(file: File | null) {
+    try {
+      await setPicture.mutateAsync(file ? await squareImage(file) : null);
+      toast(file ? 'Workspace picture updated' : 'Workspace picture removed');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update the workspace picture', 'error');
+    }
+  }
 
   function save(e: React.FormEvent) {
     e.preventDefault();
@@ -290,9 +321,22 @@ function WorkspaceSection({
         title="Workspace"
         hint={canManage ? undefined : 'Only an owner or admin can change these.'}
       >
-        <div className="mb-3 flex items-center gap-2">
-          <WorkspaceIcon name={name || workspace.name} icon={icon.trim() || null} size="lg" />
-          <span className="text-xs text-[var(--color-muted)]">Preview</span>
+        <div className="mb-3">
+          <PictureField
+            preview={
+              <WorkspaceIcon
+                name={name || workspace.name}
+                icon={icon.trim() || null}
+                avatarUrl={workspace.avatarUrl}
+                size="lg"
+              />
+            }
+            hasPicture={Boolean(workspace.avatarUrl)}
+            pending={setPicture.isPending}
+            disabled={!canManage}
+            onPick={(file) => void savePicture(file)}
+            onRemove={() => void savePicture(null)}
+          />
         </div>
         <form onSubmit={save} className="space-y-2">
           <div className="flex gap-2">
@@ -320,7 +364,7 @@ function WorkspaceSection({
             </label>
           </div>
           <p className="text-xs text-[var(--color-muted)]">
-            The icon is optional. Clear it to show a letter from the workspace name instead.
+            A picture takes the place of the icon. With neither, a letter from the workspace name is shown.
           </p>
           {canManage && (
             <div className="flex items-center gap-2">

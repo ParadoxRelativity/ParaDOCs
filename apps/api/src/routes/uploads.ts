@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
 import { blocksToMarkdown } from '../lib/blocksToMarkdown.js';
+import { removeStoredFile } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -28,15 +29,6 @@ function blockForFile(mimeType: string, url: string, filename: string) {
     return { type: 'audio', props: { url, caption: '', name: filename }, children: [] };
   }
   return { type: 'file', props: { url, name: filename, caption: '' }, children: [] };
-}
-
-/** Removes a stored file, tolerating one that is already gone. */
-async function removeStoredFile(storageKey: string) {
-  try {
-    await fs.unlink(path.join(config.uploadDir, storageKey));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
 }
 
 /** Attachments for images, audio, video and files used on canvases and pages. */

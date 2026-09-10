@@ -3,6 +3,7 @@ import type { Doc } from '@paradocs/shared';
 import type { DocumentPatch } from '../../api/hooks';
 import { api } from '../../api/client';
 import { Button } from '../ui';
+import Icon from '../Icon';
 import { ConfirmDialog } from '../Modal';
 import { useToast } from '../Toast';
 import { BuiltInProperties, FolderPicker, PropertyEditor, TagEditor } from '../DocumentMeta';
@@ -48,7 +49,7 @@ export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }:
                   : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]')
               }
             >
-              {mode === 'page' ? '📄 Page' : '🎨 Canvas'}
+              <Icon name={mode === 'page' ? 'file-earmark-text' : 'easel'} /> {mode === 'page' ? 'Page' : 'Canvas'}
             </button>
           ))}
         </div>

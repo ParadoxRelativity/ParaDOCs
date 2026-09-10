@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { createInviteSchema, updateMemberSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
+import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess, roleAtLeast, workspaceRole, type Role } from '../plugins/session.js';
 
 /** Owners must never be able to remove the last owner from a workspace. */
@@ -21,7 +22,7 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string } }>('/workspaces/:id/members', async (req) => {
     await assertWorkspaceAccess(req, req.params.id);
     const { rows } = await query(
-      `SELECT m.user_id AS "userId", u.name, u.email, m.role,
+      `SELECT m.user_id AS "userId", u.name, u.email, ${uploadUrlSql('u.avatar_key')} AS "avatarUrl", m.role,
               m.created_at AS "joinedAt", (m.user_id = $2) AS "isSelf"
          FROM workspace_members m
          JOIN users u ON u.id = m.user_id
@@ -158,13 +159,15 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     accepted_at: string | null;
     workspace_name: string;
     workspace_icon: string | null;
+    workspace_avatar_url: string | null;
     invited_by_name: string | null;
   }
 
   async function loadInvite(token: string): Promise<InviteRow> {
     const { rows } = await query<InviteRow>(
       `SELECT i.id, i.workspace_id, i.email, i.role, i.expires_at, i.accepted_at,
-              w.name AS workspace_name, w.icon AS workspace_icon, u.name AS invited_by_name
+              w.name AS workspace_name, w.icon AS workspace_icon,
+              ${uploadUrlSql('w.avatar_key')} AS workspace_avatar_url, u.name AS invited_by_name
          FROM workspace_invites i
          JOIN workspaces w ON w.id = i.workspace_id
          LEFT JOIN users u ON u.id = i.invited_by
@@ -187,6 +190,7 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     return {
       workspaceName: invite.workspace_name,
       workspaceIcon: invite.workspace_icon,
+      workspaceAvatarUrl: invite.workspace_avatar_url,
       role: invite.role,
       email: invite.email,
       invitedBy: invite.invited_by_name,

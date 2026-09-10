@@ -3,6 +3,7 @@ import fp from 'fastify-plugin';
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { forbidden, notFound, unauthorized } from '../lib/http.js';
+import { uploadUrlSql } from '../lib/storage.js';
 
 export const SESSION_COOKIE = 'paradocs_session';
 
@@ -10,6 +11,7 @@ export interface SessionUser {
   id: string;
   email: string;
   name: string;
+  avatarUrl: string | null;
 }
 
 /** Ordered least to most privileged, so comparisons are a simple index check. */
@@ -49,7 +51,7 @@ export const sessionPlugin = fp(plugin, { name: 'session' });
 /** Looks up the user behind a session token. Shared with the websocket handshake. */
 export async function resolveSession(token: string): Promise<SessionUser | null> {
   const { rows } = await query<SessionUser>(
-    `SELECT u.id, u.email, u.name
+    `SELECT u.id, u.email, u.name, ${uploadUrlSql('u.avatar_key')} AS "avatarUrl"
        FROM sessions s
        JOIN users u ON u.id = s.user_id
       WHERE s.token = $1 AND s.expires_at > now()`,

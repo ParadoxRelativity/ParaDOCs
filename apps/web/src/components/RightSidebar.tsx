@@ -2,6 +2,7 @@ import type { Doc } from '@paradocs/shared';
 import type { DocumentPatch } from '../api/hooks';
 import { cx } from '../lib/util';
 import { EmptyState } from './ui';
+import Icon, { type IconName } from './Icon';
 import TableOfContents from './panels/TableOfContents';
 import CalendarPanel from './panels/CalendarPanel';
 import PropertiesPanel from './panels/PropertiesPanel';
@@ -9,11 +10,11 @@ import CommentsPanel from './panels/CommentsPanel';
 
 export type RightTab = 'toc' | 'calendar' | 'properties' | 'comments';
 
-const TABS: { id: RightTab; label: string; icon: string }[] = [
-  { id: 'toc', label: 'Contents', icon: '🗂' },
-  { id: 'calendar', label: 'Calendar', icon: '📅' },
-  { id: 'properties', label: 'Properties', icon: '⚙️' },
-  { id: 'comments', label: 'Comments', icon: '💬' },
+const TABS: { id: RightTab; label: string; icon: IconName }[] = [
+  { id: 'toc', label: 'Contents', icon: 'list-nested' },
+  { id: 'calendar', label: 'Calendar', icon: 'calendar3' },
+  { id: 'properties', label: 'Properties', icon: 'sliders' },
+  { id: 'comments', label: 'Comments', icon: 'chat-left-text' },
 ];
 
 interface Props {
@@ -45,7 +46,7 @@ export default function RightSidebar(props: Props) {
                 : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]',
             )}
           >
-            <span className="block">{tab.icon}</span>
+            <Icon name={tab.icon} className="block" />
             <span className="mt-0.5 block text-[10px]">{tab.label}</span>
           </button>
         ))}
@@ -59,7 +60,7 @@ export default function RightSidebar(props: Props) {
             onOpenJournal={props.onOpenJournal}
           />
         ) : !props.doc ? (
-          <EmptyState icon="📄" title="No document open" hint="Open a document to see its details here." />
+          <EmptyState icon="file-earmark-text" title="No document open" hint="Open a document to see its details here." />
         ) : props.tab === 'toc' ? (
           <TableOfContents blocks={props.liveBlocks} />
         ) : props.tab === 'properties' ? (

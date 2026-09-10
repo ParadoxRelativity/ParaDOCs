@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CanvasElement, FrameElement } from '@paradocs/shared';
 import CanvasElementView from './CanvasElementView';
 import Connectors from './Connectors';
+import Icon from '../Icon';
 
 interface Props {
   frames: FrameElement[];
@@ -156,7 +157,7 @@ export default function PresentMode({ frames, elements, startIndex, dark, onExit
         <span className="truncate text-sm font-medium">{frame.name || `Frame ${index + 1}`}</span>
         <div className="flex shrink-0 items-center gap-2 text-xs">
           <button onClick={prev} disabled={index === 0} className="rounded bg-white/15 px-2 py-1 disabled:opacity-40">
-            ‹ Prev
+            <Icon name="chevron-left" /> Prev
           </button>
           <span className="tabular-nums">
             {index + 1} / {frames.length}
@@ -166,7 +167,7 @@ export default function PresentMode({ frames, elements, startIndex, dark, onExit
             disabled={index === frames.length - 1}
             className="rounded bg-white/15 px-2 py-1 disabled:opacity-40"
           >
-            Next ›
+            Next <Icon name="chevron-right" />
           </button>
           <button onClick={onExit} className="ml-2 rounded bg-white/15 px-2 py-1">
             Exit (esc)

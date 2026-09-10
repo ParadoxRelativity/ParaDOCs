@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { cx } from '../lib/util';
+import Icon from './Icon';
 
 export type ToastTone = 'success' | 'error';
 
@@ -48,14 +49,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 : 'border-[var(--color-line)] bg-[var(--color-raised)] text-[var(--color-ink)]',
             )}
           >
-            <span>{toast.tone === 'error' ? '⚠️' : '✓'}</span>
+            <Icon name={toast.tone === 'error' ? 'exclamation-triangle' : 'check-lg'} />
             <span>{toast.message}</span>
             <button
               onClick={() => setToasts((current) => current.filter((t) => t.id !== toast.id))}
               aria-label="Dismiss"
               className="ml-1 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             >
-              ×
+              <Icon name="x-lg" />
             </button>
           </div>
         ))}

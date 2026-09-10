@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { colorFromString, cx } from '../lib/util';
 
 const SIZES = {
@@ -7,19 +8,36 @@ const SIZES = {
 } as const;
 
 /**
- * A workspace icon is optional. Without one, a colored monogram from the name
- * stands in — deliberate-looking, and distinguishable between workspaces, which
- * a shared fallback emoji was not.
+ * A workspace's picture, else its icon, else a colored monogram from the name
+ * — deliberate-looking, and distinguishable between workspaces, which a shared
+ * fallback emoji was not.
  */
 export default function WorkspaceIcon({
   name,
   icon,
+  avatarUrl,
   size = 'md',
 }: {
   name: string;
   icon: string | null | undefined;
+  avatarUrl?: string | null;
   size?: keyof typeof SIZES;
 }) {
+  // A picture that will not load falls back to the icon or monogram.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+
+  if (avatarUrl && avatarUrl !== failedUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        draggable={false}
+        onError={() => setFailedUrl(avatarUrl)}
+        className={cx('shrink-0 object-cover', SIZES[size])}
+      />
+    );
+  }
+
   if (icon) {
     return (
       <span className={cx('grid shrink-0 place-items-center', SIZES[size])} aria-hidden>

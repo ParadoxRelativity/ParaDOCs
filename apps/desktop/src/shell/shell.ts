@@ -7,6 +7,10 @@
  * runtime shipped for what is a list and two forms.
  */
 
+// Inlined as markup: the shell's CSP allows no fonts, so the icon font is out.
+import globeIcon from 'bootstrap-icons/icons/globe2.svg';
+import laptopIcon from 'bootstrap-icons/icons/laptop.svg';
+
 interface Connection {
   id: string;
   label: string;
@@ -214,7 +218,11 @@ function renderRow(connection: Connection): HTMLLIElement {
   return el(
     'li',
     { class: 'connection' },
-    el('span', { class: 'glyph' }, connection.kind === 'local' ? '💻' : '🌐'),
+    el('span', {
+      class: 'glyph',
+      ariaHidden: 'true',
+      innerHTML: connection.kind === 'local' ? laptopIcon : globeIcon,
+    }),
     el(
       'div',
       { class: 'text' },

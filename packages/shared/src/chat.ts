@@ -23,6 +23,13 @@ export interface MessageAuthor {
   id: string;
   name: string;
   email: string;
+  avatarUrl: string | null;
+}
+
+/** Someone in a voice channel, as the channel list shows them. */
+export interface VoiceOccupant {
+  name: string;
+  avatarUrl: string | null;
 }
 
 export interface Message {

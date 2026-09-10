@@ -3,6 +3,7 @@ import type { Doc, FolderNode } from '@paradocs/shared';
 import { useCreateTag, useTags, useTree, type DocumentPatch } from '../api/hooks';
 import { countWords, cx, formatDateTime, formatRelative } from '../lib/util';
 import { TagChip } from './ui';
+import Icon from './Icon';
 
 const FIELD =
   'rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-sm ' +
@@ -207,7 +208,7 @@ export function PropertyEditor({ doc, onPatch, readOnly }: Omit<MetaProps, 'work
               onPatch({ properties: next });
             }}
           >
-            ×
+            <Icon name="x-lg" />
           </button>
         </div>
       ))}

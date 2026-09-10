@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearch, useTags } from '../api/hooks';
 import { cx, formatRelative, plainSnippet, useDebounced } from '../lib/util';
 import { TagChip } from './ui';
+import Icon, { DocumentIcon } from './Icon';
 
 interface Props {
   workspaceId: string;
@@ -61,7 +62,7 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, initialT
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-3">
-          <span className="text-sm text-[var(--color-muted)]">🔍</span>
+          <Icon name="search" className="text-sm text-[var(--color-muted)]" />
           <input
             autoFocus
             value={text}
@@ -144,7 +145,7 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, initialT
             >
               <div className="flex items-center gap-1.5">
                 <span className="text-xs">
-                  {hit.icon ?? (hit.isJournal ? '📔' : hit.mode === 'canvas' ? '🎨' : '📄')}
+                  <DocumentIcon doc={hit} />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{hit.title}</span>
                 {hit.tags.map((tag) => (

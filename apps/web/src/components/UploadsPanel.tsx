@@ -5,6 +5,7 @@ import { cx, formatRelative } from '../lib/util';
 import { ConfirmDialog, Modal } from './Modal';
 import { useToast } from './Toast';
 import { Button, Spinner } from './ui';
+import Icon, { type IconName } from './Icon';
 
 interface Props {
   workspaceId: string;
@@ -17,11 +18,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function iconFor(mimeType: string) {
-  if (mimeType.startsWith('image/')) return '🖼';
-  if (mimeType.startsWith('video/')) return '🎬';
-  if (mimeType.startsWith('audio/')) return '🎵';
-  return '📎';
+function iconFor(mimeType: string): IconName {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'film';
+  if (mimeType.startsWith('audio/')) return 'music-note-beamed';
+  return 'file-earmark';
 }
 
 /**
@@ -94,7 +95,7 @@ export default function UploadsPanel({ workspaceId, onOpenDocument }: Props) {
                 />
               ) : (
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded bg-[var(--color-surface)]">
-                  {iconFor(upload.mimeType)}
+                  <Icon name={iconFor(upload.mimeType)} />
                 </span>
               )}
 
@@ -123,7 +124,7 @@ export default function UploadsPanel({ workspaceId, onOpenDocument }: Props) {
                 title="Open the file"
                 className="shrink-0 px-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]"
               >
-                ⇱
+                <Icon name="box-arrow-up-right" />
               </a>
               {!upload.documentId && (
                 <Button variant="subtle" className="shrink-0 text-[11px]" onClick={() => setAttaching(upload)}>
@@ -135,7 +136,7 @@ export default function UploadsPanel({ workspaceId, onOpenDocument }: Props) {
                 aria-label={`Delete ${upload.filename}`}
                 className="shrink-0 px-1 text-xs text-[var(--color-muted)] hover:text-red-500"
               >
-                ×
+                <Icon name="trash3" />
               </button>
             </li>
           ))}

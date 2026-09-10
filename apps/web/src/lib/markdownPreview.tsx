@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import Icon from '../components/Icon';
 
 /**
  * A small read-only markdown renderer for document previews on the canvas.
@@ -67,7 +68,7 @@ export function renderMarkdownPreview(markdown: string): ReactNode {
     if (task) {
       list.push(
         <li key={index} className="list-none -ml-4">
-          <span className="mr-1">{task[1].trim() ? '☑' : '☐'}</span>
+          <Icon name={task[1].trim() ? 'check-square' : 'square'} className="mr-1" />
           {inline(task[2])}
         </li>,
       );

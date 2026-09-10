@@ -13,6 +13,7 @@ import {
   type ShapeKind,
 } from '@paradocs/shared';
 import { cx } from '../../lib/util';
+import Icon from '../Icon';
 import CanvasElementView from './CanvasElementView';
 import Connectors from './Connectors';
 
@@ -696,7 +697,7 @@ export default function CanvasSurface(props: Props) {
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 if (!editable) return;
-                // Document cards edit in place; the header's ⇱ opens full page.
+                // Document cards edit in place; the header's expand button opens full page.
                 if (
                   element.type === 'note' ||
                   element.type === 'text' ||
@@ -783,7 +784,7 @@ export default function CanvasSurface(props: Props) {
                     top: `calc(50% - ${11 / viewport.scale}px)`,
                   }}
                 >
-                  +
+                  <Icon name="plus-lg" />
                 </button>
               )}
 

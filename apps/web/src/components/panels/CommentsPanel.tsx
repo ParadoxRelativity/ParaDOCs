@@ -3,6 +3,8 @@ import type { Comment } from '@paradocs/shared';
 import { useComments, useCreateComment, useDeleteComment, useUpdateComment } from '../../api/hooks';
 import { cx, formatRelative } from '../../lib/util';
 import { Button, Spinner } from '../ui';
+import Avatar from '../Avatar';
+import Icon from '../Icon';
 
 export default function CommentsPanel({ documentId, currentUserId }: { documentId: string; currentUserId: string }) {
   const comments = useComments(documentId);
@@ -150,6 +152,13 @@ function CommentBody({
   return (
     <div className="group">
       <div className="flex items-baseline gap-1.5">
+        <Avatar
+          name={comment.author.name}
+          url={comment.author.avatarUrl}
+          seed={comment.author.id}
+          size="xs"
+          className="self-center"
+        />
         <span className="text-xs font-medium">{comment.author.name}</span>
         <span className="text-[10px] text-[var(--color-muted)]">{formatRelative(comment.createdAt)}</span>
         {comment.author.id === currentUserId && (
@@ -158,7 +167,7 @@ function CommentBody({
             aria-label="Delete comment"
             className="ml-auto hidden text-xs text-[var(--color-muted)] hover:text-red-500 group-hover:block"
           >
-            ×
+            <Icon name="trash3" />
           </button>
         )}
       </div>

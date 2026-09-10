@@ -5,7 +5,12 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
 import { slugify } from '../lib/auth.js';
 import { DOCUMENT_SUMMARY_COLUMNS } from '../lib/documentColumns.js';
+import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
+import { removeStoredFile, uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
+
+const WORKSPACE_COLUMNS = `id, name, slug, icon, ${uploadUrlSql('avatar_key')} AS "avatarUrl",
+  created_at AS "createdAt"`;
 
 interface FolderRow {
   id: string;
@@ -22,7 +27,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/workspaces', async (req) => {
     const { rows } = await query(
-      `SELECT w.id, w.name, w.slug, w.icon, w.created_at AS "createdAt", m.role,
+      `SELECT w.id, w.name, w.slug, w.icon, ${uploadUrlSql('w.avatar_key')} AS "avatarUrl",
+              w.created_at AS "createdAt", m.role,
               (SELECT count(*) FROM documents d
                 WHERE d.workspace_id = w.id AND d.archived_at IS NULL) AS "documentCount",
               (SELECT count(*) FROM workspace_members wm
@@ -52,7 +58,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       const { rows } = await client.query(
         `INSERT INTO workspaces (owner_id, name, slug, icon)
          VALUES ($1, $2, $3, $4)
-         RETURNING id, name, slug, icon, created_at AS "createdAt"`,
+         RETURNING ${WORKSPACE_COLUMNS}`,
         [req.user!.id, input.name, slug, input.icon ?? null],
       );
       await client.query(
@@ -80,10 +86,22 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           SET name = COALESCE($2, name),
               icon = CASE WHEN $3::boolean THEN $4 ELSE icon END
         WHERE id = $1
-        RETURNING id, name, slug, icon, created_at AS "createdAt"`,
+        RETURNING ${WORKSPACE_COLUMNS}`,
       [req.params.id, input.name ?? null, input.icon !== undefined, input.icon ?? null],
     );
     return rows[0];
+  });
+
+  /** Sets the workspace picture, which takes the place of its icon. */
+  app.put<{ Params: { id: string } }>('/workspaces/:id/avatar', async (req) => {
+    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    const key = await storeAvatar(req, 'workspaces');
+    return replaceAvatar('workspaces', req.params.id, key, WORKSPACE_COLUMNS);
+  });
+
+  app.delete<{ Params: { id: string } }>('/workspaces/:id/avatar', async (req) => {
+    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    return replaceAvatar('workspaces', req.params.id, null, WORKSPACE_COLUMNS);
   });
 
   app.delete<{ Params: { id: string } }>('/workspaces/:id', async (req, reply) => {
@@ -93,7 +111,11 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       [req.user!.id],
     );
     if (rows[0].count <= 1) throw badRequest('You cannot leave yourself without a workspace');
-    await query('DELETE FROM workspaces WHERE id = $1', [req.params.id]);
+    const { rows: deleted } = await query<{ avatar_key: string | null }>(
+      'DELETE FROM workspaces WHERE id = $1 RETURNING avatar_key',
+      [req.params.id],
+    );
+    if (deleted[0]?.avatar_key) await removeStoredFile(deleted[0].avatar_key);
     reply.status(204);
   });
 

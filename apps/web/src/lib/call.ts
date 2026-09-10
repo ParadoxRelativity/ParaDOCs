@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Room, RoomEvent, type Participant } from 'livekit-client';
+import {
+  LocalAudioTrack,
+  RemoteAudioTrack,
+  Room,
+  RoomEvent,
+  Track,
+  type Participant,
+  type RemoteTrack,
+  type RoomOptions,
+} from 'livekit-client';
 import { api } from '../api/client';
 import type { CallCredentials } from '../api/hooks';
 import { useToast } from '../components/Toast';
+import { InputGainProcessor } from './inputGain';
+import {
+  canChooseSpeaker,
+  connectedDeviceId,
+  getMediaPreferences,
+  subscribeMediaPreferences,
+} from './mediaPreferences';
 
 export type CallStatus = 'idle' | 'joining' | 'joined';
 
@@ -18,6 +34,54 @@ export interface Call {
   join: (channelId: string) => void;
   leave: () => void;
   toggle: (kind: 'mic' | 'camera' | 'screen') => void;
+}
+
+/**
+ * Plays a remote participant's audio. It belongs to the call rather than to
+ * the room view: that view unmounts when you go and read a document, and the
+ * people you are talking to must not go quiet when it does. The room applies
+ * the chosen speaker to each element as it is attached.
+ */
+function playRemoteAudio(track: RemoteTrack, elements: Set<HTMLMediaElement>) {
+  if (!(track instanceof RemoteAudioTrack)) return;
+  const element = track.attach();
+  document.body.appendChild(element);
+  elements.add(element);
+  track.setVolume(getMediaPreferences().outputVolume / 100);
+}
+
+function stopRemoteAudio(track: RemoteTrack, elements: Set<HTMLMediaElement>) {
+  if (!(track instanceof RemoteAudioTrack)) return;
+  for (const element of track.detach()) {
+    element.remove();
+    elements.delete(element);
+  }
+}
+
+function applyOutputVolume(room: Room) {
+  const volume = getMediaPreferences().outputVolume / 100;
+  for (const participant of room.remoteParticipants.values()) {
+    for (const publication of participant.audioTrackPublications.values()) {
+      if (publication.track instanceof RemoteAudioTrack) publication.track.setVolume(volume);
+    }
+  }
+}
+
+/** Room options from the saved device choices, skipping any no longer plugged in. */
+async function roomOptions(): Promise<RoomOptions> {
+  const preferences = getMediaPreferences();
+  const [microphone, camera, speaker] = await Promise.all([
+    connectedDeviceId('audioinput', preferences.microphoneId),
+    connectedDeviceId('videoinput', preferences.cameraId),
+    canChooseSpeaker ? connectedDeviceId('audiooutput', preferences.speakerId) : undefined,
+  ]);
+  return {
+    adaptiveStream: true,
+    dynacast: true,
+    ...(microphone ? { audioCaptureDefaults: { deviceId: microphone } } : {}),
+    ...(camera ? { videoCaptureDefaults: { deviceId: camera } } : {}),
+    ...(speaker ? { audioOutput: { deviceId: speaker } } : {}),
+  };
 }
 
 /**
@@ -41,6 +105,16 @@ export function useCall(): Call {
     void qc.invalidateQueries({ queryKey: ['voiceParticipants'] });
   }, [qc]);
   const roomRef = useRef<Room | null>(null);
+  /** Elements playing remote audio, removed from the page when the call ends. */
+  const audioElements = useRef(new Set<HTMLMediaElement>());
+  /** Runs the input volume's audio graph; closed when the call ends. */
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainRef = useRef<InputGainProcessor | null>(null);
+  /**
+   * Device changes run one at a time. Dragging a slider fires many, and two
+   * overlapping processor installs on one track would each keep their own.
+   */
+  const deviceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [channelId, setChannelId] = useState<string | null>(null);
   const [status, setStatus] = useState<CallStatus>('idle');
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -59,6 +133,11 @@ export function useCall(): Call {
 
   const reset = useCallback(() => {
     roomRef.current = null;
+    for (const element of audioElements.current) element.remove();
+    audioElements.current.clear();
+    void audioContextRef.current?.close().catch(() => {});
+    audioContextRef.current = null;
+    gainRef.current = null;
     setChannelId(null);
     setStatus('idle');
     setParticipants([]);
@@ -77,6 +156,70 @@ export function useCall(): Call {
   // Closing the tab, or leaving the workspace, must not leave a ghost in a room.
   useEffect(() => () => void roomRef.current?.disconnect().catch(() => {}), []);
 
+  const enqueue = useCallback(
+    (task: () => Promise<unknown>) => {
+      deviceQueue.current = deviceQueue.current.then(task).catch((err) => {
+        toast(err instanceof Error ? err.message : 'Could not apply your device settings', 'error');
+      });
+    },
+    [toast],
+  );
+
+  /**
+   * Puts the input volume on the microphone. At 100% there is nothing to
+   * scale, so no processor is installed and the track is sent untouched.
+   */
+  const applyInputGain = useCallback(async (room: Room) => {
+    const track = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    if (!(track instanceof LocalAudioTrack)) return;
+    const level = getMediaPreferences().inputVolume / 100;
+    const installed = gainRef.current && track.getProcessor() === gainRef.current ? gainRef.current : null;
+
+    if (level === 1) {
+      if (installed) await track.stopProcessor();
+      gainRef.current = null;
+      return;
+    }
+    if (installed) {
+      installed.setLevel(level);
+      return;
+    }
+    audioContextRef.current ??= new AudioContext();
+    track.setAudioContext(audioContextRef.current);
+    const processor = new InputGainProcessor(level);
+    await track.setProcessor(processor);
+    gainRef.current = processor;
+  }, []);
+
+  // Settings can change mid-call; each change is applied to the call in
+  // progress rather than waiting for the next one.
+  useEffect(() => {
+    let previous = getMediaPreferences();
+    return subscribeMediaPreferences(() => {
+      const next = getMediaPreferences();
+      const before = previous;
+      previous = next;
+      const room = roomRef.current;
+      if (!room) return;
+      enqueue(async () => {
+        // An empty choice is the system default, which Chromium calls
+        // "default". It is asked for loosely so a browser without one still
+        // picks a device rather than failing.
+        if (next.microphoneId !== before.microphoneId) {
+          await room.switchActiveDevice('audioinput', next.microphoneId || 'default', Boolean(next.microphoneId));
+        }
+        if (next.cameraId !== before.cameraId) {
+          await room.switchActiveDevice('videoinput', next.cameraId || 'default', Boolean(next.cameraId));
+        }
+        if (canChooseSpeaker && next.speakerId !== before.speakerId) {
+          await room.switchActiveDevice('audiooutput', next.speakerId || 'default');
+        }
+        if (next.inputVolume !== before.inputVolume) await applyInputGain(room);
+        if (next.outputVolume !== before.outputVolume) applyOutputVolume(room);
+      });
+    });
+  }, [applyInputGain, enqueue]);
+
   const join = useCallback(
     (nextChannelId: string) => {
       void (async () => {
@@ -91,7 +234,7 @@ export function useCall(): Call {
         setStatus('joining');
         try {
           const credentials = await api.post<CallCredentials>(`/channels/${nextChannelId}/call`);
-          const room = new Room({ adaptiveStream: true, dynacast: true });
+          const room = new Room(await roomOptions());
           roomRef.current = room;
 
           room
@@ -103,11 +246,20 @@ export function useCall(): Call {
               refresh();
               refreshOccupancy();
             })
-            .on(RoomEvent.TrackSubscribed, refresh)
-            .on(RoomEvent.TrackUnsubscribed, refresh)
+            .on(RoomEvent.TrackSubscribed, (track) => {
+              playRemoteAudio(track, audioElements.current);
+              refresh();
+            })
+            .on(RoomEvent.TrackUnsubscribed, (track) => {
+              stopRemoteAudio(track, audioElements.current);
+              refresh();
+            })
             .on(RoomEvent.TrackMuted, refresh)
             .on(RoomEvent.TrackUnmuted, refresh)
-            .on(RoomEvent.LocalTrackPublished, refresh)
+            .on(RoomEvent.LocalTrackPublished, (publication) => {
+              if (publication.source === Track.Source.Microphone) enqueue(() => applyInputGain(room));
+              refresh();
+            })
             .on(RoomEvent.LocalTrackUnpublished, refresh)
             .on(RoomEvent.ActiveSpeakersChanged, refresh)
             .on(RoomEvent.Disconnected, reset);
@@ -136,7 +288,7 @@ export function useCall(): Call {
         }
       })();
     },
-    [channelId, status, disconnect, refresh, refreshOccupancy, reset, toast],
+    [channelId, status, disconnect, refresh, refreshOccupancy, reset, toast, enqueue, applyInputGain],
   );
 
   const toggle = useCallback(
@@ -158,8 +310,16 @@ export function useCall(): Call {
           refresh();
         } catch (err) {
           // Denying the permission prompt lands here; the button must not lie
-          // about the state afterwards.
-          toast(err instanceof Error ? err.message : `Could not switch ${kind}`, 'error');
+          // about the state afterwards. Closing the screen picker without
+          // choosing arrives as the same refusal, but it is a choice, not a
+          // failure, so it goes unremarked. The operating system blocking
+          // capture still says so.
+          const pickerClosed =
+            kind === 'screen' &&
+            err instanceof Error &&
+            err.name === 'NotAllowedError' &&
+            !/system/i.test(err.message);
+          if (!pickerClosed) toast(err instanceof Error ? err.message : `Could not switch ${kind}`, 'error');
           refresh();
         }
       })();

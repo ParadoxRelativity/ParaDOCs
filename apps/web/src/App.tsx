@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import type { User } from '@paradocs/shared';
 import {
   useDeleteDocument,
   useDocument,
@@ -29,6 +30,7 @@ import { useChatEvents } from './lib/chatEvents';
 import { VoiceRoom } from './components/chat/VoiceRoom';
 import { useCall } from './lib/call';
 import { EmptyState, IconButton, Spinner } from './components/ui';
+import Icon from './components/Icon';
 
 export default function App() {
   const me = useMe();
@@ -60,7 +62,7 @@ function FirstWorkspaceRedirect() {
   if (workspaces.isLoading) return <Spinner />;
   const first = workspaces.data?.[0];
   if (!first) {
-    return <EmptyState icon="⚠️" title="No workspaces" hint="Your account has no workspace. Try signing out and back in." />;
+    return <EmptyState icon="exclamation-triangle" title="No workspaces" hint="Your account has no workspace. Try signing out and back in." />;
   }
   return <Navigate to={`/w/${first.id}`} replace />;
 }
@@ -70,7 +72,7 @@ function Workspace({
   allDocuments = false,
   chat = false,
 }: {
-  user: { id: string; email: string; name: string; createdAt: string };
+  user: User;
   allDocuments?: boolean;
   chat?: boolean;
 }) {
@@ -187,6 +189,7 @@ function Workspace({
       >
         <div className="h-full w-64">
           <LeftSidebar
+            user={user}
             workspaces={workspaces.data ?? []}
             workspaceId={workspaceId}
             onSelectWorkspace={(id) => navigate(`/w/${id}`)}
@@ -243,7 +246,7 @@ function Workspace({
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--color-line)] px-2">
           <IconButton label={leftOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={() => setLeftOpen(!leftOpen)}>
-            {leftOpen ? '⬅' : '➡'}
+            <Icon name={leftOpen ? 'layout-sidebar-inset' : 'layout-sidebar'} />
           </IconButton>
           <span className="min-w-0 flex-1 truncate px-2 text-sm text-[var(--color-muted)]">
             {chat
@@ -257,13 +260,13 @@ function Workspace({
           {!chat && (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
-                🔍
+                <Icon name="search" />
               </IconButton>
               <IconButton
                 label={rightOpen ? 'Hide details' : 'Show details'}
                 onClick={() => setRightOpen(!rightOpen)}
               >
-                {rightOpen ? '➡' : '⬅'}
+                <Icon name={rightOpen ? 'layout-sidebar-inset-reverse' : 'layout-sidebar-reverse'} />
               </IconButton>
             </>
           )}
@@ -298,7 +301,7 @@ function Workspace({
               />
             ) : (
               <EmptyState
-                icon="💬"
+                icon="chat-dots"
                 title="No channel open"
                 hint={
                   canManageChannels
@@ -314,14 +317,14 @@ function Workspace({
             />
           ) : !documentId ? (
             <EmptyState
-              icon="📄"
+              icon="file-earmark-text"
               title="Nothing open"
               hint="Pick a document from the sidebar, press ⌘K to search, or open today's journal."
             />
           ) : document.isLoading ? (
             <Spinner />
           ) : document.error ? (
-            <EmptyState icon="⚠️" title="Could not open that document" hint={(document.error as Error).message} />
+            <EmptyState icon="exclamation-triangle" title="Could not open that document" hint={(document.error as Error).message} />
           ) : document.data ? (
             <ErrorBoundary resetKey={document.data.id}>
               <DocumentEditor
@@ -329,7 +332,7 @@ function Workspace({
                 workspaceId={workspaceId}
                 dark={dark}
                 canEdit={canEdit}
-                self={{ id: user.id, name: user.name }}
+                self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
                 onPatch={patch}
                 onBlocksChange={setLiveBlocks}
                 onOpenDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}

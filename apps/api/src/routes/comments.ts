@@ -3,12 +3,14 @@ import type { Comment } from '@paradocs/shared';
 import { createCommentSchema, updateCommentSchema } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { badRequest, forbidden, notFound, parse } from '../lib/http.js';
+import { uploadUrlSql } from '../lib/storage.js';
 import { assertDocumentAccess } from '../plugins/session.js';
 
 const COMMENT_COLUMNS = `
   c.id, c.document_id AS "documentId", c.parent_id AS "parentId", c.block_id AS "blockId",
   c.body, c.resolved, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
-  json_build_object('id', u.id, 'name', u.name, 'email', u.email) AS author`;
+  json_build_object('id', u.id, 'name', u.name, 'email', u.email,
+                    'avatarUrl', ${uploadUrlSql('u.avatar_key')}) AS author`;
 
 export const commentRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);

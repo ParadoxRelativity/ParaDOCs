@@ -9,13 +9,14 @@ import { useCollaboration, type CollabSession, type Peer } from '../lib/collabor
 import DocumentMeta from './DocumentMeta';
 import CanvasEditor from './canvas/CanvasEditor';
 import { Spinner } from './ui';
+import Avatar from './Avatar';
 
 interface Props {
   doc: Doc;
   workspaceId: string;
   dark: boolean;
   canEdit: boolean;
-  self: { id: string; name: string };
+  self: { id: string; name: string; avatarUrl: string | null };
   onPatch: (patch: DocumentPatch) => void;
   onBlocksChange: (blocks: unknown[]) => void;
   onOpenDocument: (documentId: string) => void;
@@ -222,13 +223,13 @@ function Presence({ peers }: { peers: Peer[] }) {
   return (
     <div className="flex items-center -space-x-1.5" title={peers.map((p) => p.name).join(', ')}>
       {peers.slice(0, 5).map((peer) => (
-        <span
+        <Avatar
           key={peer.clientId}
-          className="grid h-6 w-6 place-items-center rounded-full border-2 border-[var(--color-canvas)] text-[10px] font-semibold text-white"
+          name={peer.name}
+          url={peer.avatarUrl}
+          className="border-2 border-[var(--color-canvas)]"
           style={{ background: peer.color }}
-        >
-          {peer.name.slice(0, 1).toUpperCase()}
-        </span>
+        />
       ))}
       {peers.length > 5 && (
         <span className="pl-2.5 text-[10px] text-[var(--color-muted)]">+{peers.length - 5}</span>

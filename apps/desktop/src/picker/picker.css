@@ -1,0 +1,158 @@
+/* The screen-share picker. System font, system accent and, on macOS, the sheet
+   material behind it, so it reads as part of the OS rather than a web page. */
+:root {
+  --accent: #0a84ff;
+  --bg: #f2f2f7;
+  --raised: #ffffff;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --control: rgba(0, 0, 0, 0.05);
+  --control-hover: rgba(0, 0, 0, 0.09);
+  --border: rgba(0, 0, 0, 0.1);
+  --thumb: rgba(0, 0, 0, 0.07);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e20;
+    --raised: rgba(255, 255, 255, 0.16);
+    --ink: #f5f5f7;
+    --muted: #98989d;
+    --control: rgba(255, 255, 255, 0.08);
+    --control-hover: rgba(255, 255, 255, 0.13);
+    --border: rgba(255, 255, 255, 0.12);
+    --thumb: rgba(0, 0, 0, 0.3);
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+/* On macOS the window's own material is the background. */
+html[data-platform='darwin'] body { background: transparent; }
+
+header { padding: 18px 20px 12px; }
+h1 { margin: 0; font-size: 15px; font-weight: 600; }
+header p { margin: 2px 0 12px; color: var(--muted); }
+
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--control);
+}
+.tabs button {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 14px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+.tabs button[aria-selected='true'] {
+  background: var(--raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.count { margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.count:empty { display: none; }
+
+#grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  align-content: start;
+  gap: 12px;
+  padding: 4px 20px 16px;
+}
+
+/* Widths are explicit: children of a button do not stretch or shrink the way
+   they do in a div, so a thumbnail with no picture collapsed to its caption and
+   a long window title pushed past its column. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+}
+.card:hover { background: var(--control); }
+.card:focus-visible { background: var(--control-hover); }
+
+.thumb {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--thumb);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.thumb img { width: 100%; height: 100%; object-fit: contain; }
+.thumb.empty::after { content: 'No preview'; color: var(--muted); font-size: 12px; }
+.card.selected .thumb { box-shadow: 0 0 0 3px var(--accent); }
+
+.label { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; padding: 0 2px; }
+.label img { flex: none; width: 16px; height: 16px; }
+.name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card.selected .name { font-weight: 600; }
+
+.notice {
+  grid-column: 1 / -1;
+  max-width: 400px;
+  margin: 56px auto;
+  color: var(--muted);
+  text-align: center;
+}
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.audio { display: flex; align-items: center; gap: 6px; }
+.audio input { margin: 0; accent-color: var(--accent); }
+.spacer { flex: 1; }
+
+footer button {
+  min-width: 76px;
+  padding: 5px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--control);
+  color: var(--ink);
+  font: inherit;
+}
+footer button:hover { background: var(--control-hover); }
+footer button.primary { background: var(--accent); color: #fff; }
+footer button.primary:hover { filter: brightness(1.08); }
+footer button:disabled { opacity: 0.45; filter: none; }
+footer button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

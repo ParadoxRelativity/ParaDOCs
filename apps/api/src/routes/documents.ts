@@ -239,8 +239,8 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         timeZone: 'UTC',
       });
       const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO documents (workspace_id, folder_id, title, icon, is_journal, journal_date, body, body_md, created_by)
-         VALUES ($1, $2, $3, '📔', true, $4::date, '[]'::jsonb, '', $5)
+        `INSERT INTO documents (workspace_id, folder_id, title, is_journal, journal_date, body, body_md, created_by)
+         VALUES ($1, $2, $3, true, $4::date, '[]'::jsonb, '', $5)
          ON CONFLICT (workspace_id, journal_date) WHERE is_journal DO UPDATE SET updated_at = documents.updated_at
          RETURNING id`,
         [req.params.id, folder[0]?.id ?? null, title, date, req.user!.id],

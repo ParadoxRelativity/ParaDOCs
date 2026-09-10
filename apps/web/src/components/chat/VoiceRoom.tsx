@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { LocalParticipant, RemoteParticipant, Track, type Participant, type TrackPublication } from 'livekit-client';
+import { LocalParticipant, Track, type Participant, type TrackPublication } from 'livekit-client';
 import type { Channel } from '@paradocs/shared';
 import type { VoiceConfig } from '../../api/hooks';
 import type { Call } from '../../lib/call';
 import { cx } from '../../lib/util';
 import { EmptyState } from '../ui';
+import Avatar from '../Avatar';
+import Icon from '../Icon';
 
 /**
  * The view of a voice channel.
@@ -31,7 +33,7 @@ export function VoiceRoom({
   if (config && !config.enabled) {
     return (
       <EmptyState
-        icon="🔇"
+        icon="volume-mute"
         title="Voice is not configured on this server"
         hint="Set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET, or run the livekit service from docker-compose."
       />
@@ -41,7 +43,9 @@ export function VoiceRoom({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-line)] px-4">
-        <span className="text-sm font-semibold">🔊 {channel.name}</span>
+        <span className="text-sm font-semibold">
+          <Icon name="volume-up" /> {channel.name}
+        </span>
         {channel.topic && (
           <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">{channel.topic}</span>
         )}
@@ -55,7 +59,9 @@ export function VoiceRoom({
       {!joined ? (
         <div className="grid min-h-0 flex-1 place-items-center">
           <div className="text-center">
-            <div className="mb-3 text-4xl">🔊</div>
+            <div className="mb-3 text-4xl">
+              <Icon name="volume-up" />
+            </div>
             <h2 className="mb-1 text-lg font-semibold">{channel.name}</h2>
             <p className="mb-5 text-sm text-[var(--color-muted)]">
               {here && call.status === 'joining'
@@ -84,21 +90,21 @@ export function VoiceRoom({
       {joined && (
         <div className="flex shrink-0 items-center justify-center gap-2 border-t border-[var(--color-line)] p-3">
           <Control active={call.mic} onClick={() => call.toggle('mic')} label={call.mic ? 'Mute' : 'Unmute'}>
-            {call.mic ? '🎙' : '🔇'}
+            <Icon name={call.mic ? 'mic' : 'mic-mute'} />
           </Control>
           <Control
             active={call.camera}
             onClick={() => call.toggle('camera')}
             label={call.camera ? 'Stop video' : 'Start video'}
           >
-            {call.camera ? '📹' : '📷'}
+            <Icon name={call.camera ? 'camera-video' : 'camera-video-off'} />
           </Control>
           <Control
             active={call.screen}
             onClick={() => call.toggle('screen')}
             label={call.screen ? 'Stop sharing' : 'Share screen'}
           >
-            🖥
+            <Icon name="display" />
           </Control>
           <button
             onClick={call.leave}
@@ -150,7 +156,6 @@ function videoPublication(participant: Participant): TrackPublication | undefine
 
 function Tile({ participant, selfName }: { participant: Participant; selfName: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
   const isLocal = participant instanceof LocalParticipant;
   const video = videoPublication(participant);
   const sharing = Boolean(participant.getTrackPublication(Track.Source.ScreenShare)?.track);
@@ -167,17 +172,8 @@ function Tile({ participant, selfName }: { participant: Participant; selfName: s
     };
   }, [video?.trackSid, video?.track]);
 
-  useEffect(() => {
-    // Your own microphone is never played back; that is an echo.
-    const element = audioRef.current;
-    if (!element || isLocal) return;
-    const track = (participant as RemoteParticipant).getTrackPublication(Track.Source.Microphone)?.track;
-    if (!track) return;
-    track.attach(element);
-    return () => {
-      track.detach(element);
-    };
-  }, [participant, micPublication?.trackSid, micPublication?.track, isLocal]);
+  // Audio is not played here. The call plays it, so it keeps going when this
+  // view is closed.
 
   const name = isLocal ? `${selfName} (you)` : (participant.name || participant.identity);
 
@@ -199,15 +195,25 @@ function Tile({ participant, selfName }: { participant: Participant; selfName: s
           className={cx('h-full w-full object-contain', isLocal && !sharing && 'scale-x-[-1]')}
         />
       ) : (
-        <div className="grid h-16 w-16 place-items-center rounded-full bg-[var(--color-accent)] text-xl font-semibold text-white">
-          {name.slice(0, 1).toUpperCase()}
-        </div>
+        <Avatar
+          name={name}
+          url={participant.attributes.avatarUrl || null}
+          seed={participant.identity}
+          size="xl"
+        />
       )}
-      {!isLocal && <audio ref={audioRef} autoPlay />}
 
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-xs text-white">
-        {muted && <span title="Muted">🔇</span>}
-        {sharing && <span title="Sharing screen">🖥</span>}
+        {muted && (
+          <span title="Muted">
+            <Icon name="mic-mute" />
+          </span>
+        )}
+        {sharing && (
+          <span title="Sharing screen">
+            <Icon name="display" />
+          </span>
+        )}
         <span className="max-w-[220px] truncate">{name}</span>
       </div>
     </div>

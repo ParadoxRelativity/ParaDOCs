@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Button } from './ui';
+import Icon from './Icon';
 
 interface Props {
   children: ReactNode;
@@ -36,7 +37,9 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (!this.state.error) return this.props.children;
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-        <div className="text-3xl opacity-40">⚠️</div>
+        <div className="text-3xl opacity-40">
+          <Icon name="exclamation-triangle" />
+        </div>
         <p className="text-sm font-medium">This document could not be rendered</p>
         <p className="max-w-md text-xs text-[var(--color-muted)]">{this.state.error.message}</p>
         <Button variant="subtle" className="text-xs" onClick={() => this.setState({ error: null })}>

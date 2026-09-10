@@ -62,11 +62,27 @@ const builds = [
   },
   {
     ...common,
+    entryPoints: [path.join(here, 'src/preload/picker.ts')],
+    outfile: path.join(dist, 'picker-preload.cjs'),
+    format: 'cjs',
+  },
+  {
+    ...common,
+    platform: 'browser',
+    entryPoints: [path.join(here, 'src/picker/picker.ts')],
+    outfile: path.join(dist, 'picker/picker.js'),
+    format: 'iife',
+    external: [],
+  },
+  {
+    ...common,
     platform: 'browser',
     entryPoints: [path.join(here, 'src/shell/shell.ts')],
     outfile: path.join(dist, 'shell/shell.js'),
     format: 'iife',
     external: [],
+    // Icons are imported as SVG markup and inlined.
+    loader: { '.svg': 'text' },
   },
 ];
 
@@ -77,9 +93,12 @@ function copyDir(from, to) {
 }
 
 function copyAssets() {
-  fs.mkdirSync(path.join(dist, 'shell'), { recursive: true });
-  for (const file of ['index.html', 'shell.css']) {
-    fs.copyFileSync(path.join(here, 'src/shell', file), path.join(dist, 'shell', file));
+  const pages = { shell: ['index.html', 'shell.css'], picker: ['index.html', 'picker.css'] };
+  for (const [page, files] of Object.entries(pages)) {
+    fs.mkdirSync(path.join(dist, page), { recursive: true });
+    for (const file of files) {
+      fs.copyFileSync(path.join(here, 'src', page, file), path.join(dist, page, file));
+    }
   }
   // The migrations run against the local PGlite database, and the built client
   // is what the proxy serves. Both travel with the bundle.

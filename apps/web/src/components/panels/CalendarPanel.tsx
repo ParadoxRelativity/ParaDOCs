@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useActivity, useCreateEvent, useDeleteEvent, useEvents } from '../../api/hooks';
 import { cx, toISODate, todayISO } from '../../lib/util';
 import { Button, IconButton } from '../ui';
+import Icon from '../Icon';
 
 interface Props {
   workspaceId: string;
@@ -74,7 +75,7 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
           label="Previous month"
           onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
         >
-          ‹
+          <Icon name="chevron-left" />
         </IconButton>
         <span className="text-sm font-medium">
           {cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
@@ -83,7 +84,7 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
           label="Next month"
           onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}
         >
-          ›
+          <Icon name="chevron-right" />
         </IconButton>
       </div>
 
@@ -141,7 +142,7 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
               Journal
             </Button>
             <IconButton label="Add event" onClick={() => setAdding((v) => !v)}>
-              +
+              <Icon name="plus-lg" />
             </IconButton>
           </div>
         </div>
@@ -173,7 +174,7 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
                 aria-label={`Delete event ${event.title}`}
                 className="hidden text-[var(--color-muted)] hover:text-red-500 group-hover:block"
               >
-                ×
+                <Icon name="trash3" />
               </button>
             </div>
           ))}

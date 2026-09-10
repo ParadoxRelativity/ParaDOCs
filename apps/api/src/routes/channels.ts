@@ -11,6 +11,7 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess, roleAtLeast, type Role } from '../plugins/session.js';
 import { resolveReferences } from '../lib/chatReferences.js';
+import { uploadUrlSql } from '../lib/storage.js';
 import { publishToChannel } from '../chat/hub.js';
 
 const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind,
@@ -19,7 +20,8 @@ const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic,
 const MESSAGE_COLUMNS = `m.id, m.channel_id AS "channelId", m.body,
   m.created_at AS "createdAt", m.edited_at AS "editedAt", m.deleted_at AS "deletedAt",
   CASE WHEN u.id IS NULL THEN NULL
-       ELSE json_build_object('id', u.id, 'name', u.name, 'email', u.email) END AS author`;
+       ELSE json_build_object('id', u.id, 'name', u.name, 'email', u.email,
+                              'avatarUrl', ${uploadUrlSql('u.avatar_key')}) END AS author`;
 
 /** Resolves a channel and checks the caller's role in its workspace. */
 async function channelAccess(

@@ -16,6 +16,7 @@ import type {
   SearchHit,
   Tag,
   User,
+  VoiceOccupant,
   Workspace,
   WorkspaceInvite,
   WorkspaceMember,
@@ -98,6 +99,21 @@ export function useUpdateProfile() {
   });
 }
 
+/** Sets the profile picture, or removes it when given null. */
+export function useSetAvatar() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (picture: Blob | null) =>
+      picture ? api.upload('PUT', '/auth/me/avatar', picture) : api.delete('/auth/me/avatar'),
+    onSuccess: () => {
+      // The picture is drawn beside your name in lists fetched on their own.
+      for (const queryKey of [keys.me, ['members'], ['comments'], ['messages']]) {
+        void qc.invalidateQueries({ queryKey });
+      }
+    },
+  });
+}
+
 export function useChangePassword() {
   return useMutation({
     mutationFn: (input: { currentPassword?: string; newPassword: string }) =>
@@ -133,6 +149,18 @@ export function useUpdateWorkspace(workspaceId: string) {
   return useMutation({
     mutationFn: (input: { name?: string; icon?: string | null }) =>
       api.patch<Workspace>(`/workspaces/${workspaceId}`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.workspaces }),
+  });
+}
+
+/** Sets the workspace picture, or removes it when given null. */
+export function useSetWorkspaceAvatar(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (picture: Blob | null) =>
+      picture
+        ? api.upload('PUT', `/workspaces/${workspaceId}/avatar`, picture)
+        : api.delete(`/workspaces/${workspaceId}/avatar`),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.workspaces }),
   });
 }
@@ -677,7 +705,7 @@ export function useVoiceConfig() {
 export function useVoiceParticipants(workspaceId: string | undefined, enabled: boolean) {
   return useQuery({
     queryKey: ['voiceParticipants', workspaceId],
-    queryFn: () => api.get<Record<string, string[]>>(`/workspaces/${workspaceId}/voice/participants`),
+    queryFn: () => api.get<Record<string, VoiceOccupant[]>>(`/workspaces/${workspaceId}/voice/participants`),
     enabled: Boolean(workspaceId) && enabled,
     // Rooms fill and empty without telling us, so this is polled while the
     // chat tab is open and not at all otherwise.

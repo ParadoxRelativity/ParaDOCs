@@ -10,6 +10,7 @@ import {
 import { cx, formatRelative } from '../lib/util';
 import { useFolderOptions } from './DocumentMeta';
 import { Button, Spinner, TagChip } from './ui';
+import { DocumentIcon } from './Icon';
 
 const PAGE = 100;
 
@@ -159,7 +160,7 @@ function DocumentRow({
       <td className="px-3 py-2">
         <button onClick={() => onOpen(doc.id)} className="flex w-full items-center gap-2 text-left">
           <span className="text-xs">
-            {doc.icon ?? (doc.isJournal ? '📔' : doc.mode === 'canvas' ? '🎨' : '📄')}
+            <DocumentIcon doc={doc} />
           </span>
           <span className="min-w-0 truncate font-medium hover:text-[var(--color-accent)]">{doc.title}</span>
           {doc.archivedAt && (

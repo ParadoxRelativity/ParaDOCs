@@ -6,6 +6,8 @@ import { keys, useMessages, useSendMessage, useDeleteMessage, useMarkChannelRead
 import { mergeReferences } from '../../lib/chatEvents';
 import { cx, formatRelative } from '../../lib/util';
 import { EmptyState, IconButton, Spinner } from '../ui';
+import Avatar from '../Avatar';
+import Icon from '../Icon';
 import { MessageBody } from './MessageBody';
 import { MessageComposer } from './MessageComposer';
 
@@ -112,7 +114,7 @@ export function ChatView({
               onClick={onEnableNotifications}
               className="rounded-md px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-line)]/50 hover:text-[var(--color-ink)]"
             >
-              🔔 Notify me when mentioned
+              <Icon name="bell" /> Notify me when mentioned
             </button>
           )}
         </span>
@@ -125,7 +127,7 @@ export function ChatView({
         {page.isLoading ? (
           <Spinner />
         ) : messages.length === 0 ? (
-          <EmptyState icon="💬" title={`#${channel.name} is quiet`} hint="Say something to start it off." />
+          <EmptyState icon="chat-dots" title={`#${channel.name} is quiet`} hint="Say something to start it off." />
         ) : (
           <>
             {page.data?.hasMore && (
@@ -204,36 +206,51 @@ function Row({
   return (
     <div
       className={cx(
-        'group relative rounded px-2 py-0.5 hover:bg-[var(--color-line)]/30',
+        'group relative flex gap-2 rounded px-2 py-0.5 hover:bg-[var(--color-line)]/30',
         grouped ? '' : 'mt-3',
         // A message that names you is worth finding at a glance when scrolling.
         mentionsMe && 'bg-amber-400/10 shadow-[inset_2px_0_0_0_var(--color-accent)]',
       )}
     >
-      {!grouped && (
-        <div className="flex items-baseline gap-2">
-          <span className="text-sm font-semibold">{message.author?.name ?? 'Unknown'}</span>
-          <span className="text-xs text-[var(--color-muted)]">{formatRelative(message.createdAt)}</span>
-        </div>
-      )}
-      <div className="flex items-start gap-2 text-sm">
-        <div className="min-w-0 flex-1">
-          <MessageBody
-            body={message.body}
-            references={references}
-            selfId={selfId}
-            onOpenDocument={onOpenDocument}
-            onOpenChannel={onOpenChannel}
+      {/* Only the first message of a run shows the picture; the rest keep its
+          column so their text lines up underneath. */}
+      <div className="w-8 shrink-0">
+        {!grouped && (
+          <Avatar
+            name={message.author?.name ?? '?'}
+            url={message.author?.avatarUrl}
+            seed={message.author?.id}
+            size="lg"
+            className="mt-0.5"
           />
-          {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}
-        </div>
-        {canDelete && (
-          <span className="opacity-0 transition-opacity group-hover:opacity-100">
-            <IconButton label="Delete message" onClick={onDelete}>
-              ×
-            </IconButton>
-          </span>
         )}
+      </div>
+      <div className="min-w-0 flex-1">
+        {!grouped && (
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold">{message.author?.name ?? 'Unknown'}</span>
+            <span className="text-xs text-[var(--color-muted)]">{formatRelative(message.createdAt)}</span>
+          </div>
+        )}
+        <div className="flex items-start gap-2 text-sm">
+          <div className="min-w-0 flex-1">
+            <MessageBody
+              body={message.body}
+              references={references}
+              selfId={selfId}
+              onOpenDocument={onOpenDocument}
+              onOpenChannel={onOpenChannel}
+            />
+            {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}
+          </div>
+          {canDelete && (
+            <span className="opacity-0 transition-opacity group-hover:opacity-100">
+              <IconButton label="Delete message" onClick={onDelete}>
+                <Icon name="trash3" />
+              </IconButton>
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

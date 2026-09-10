@@ -11,6 +11,8 @@ import { useRevokeInvite } from '../api/hooks';
 import { cx, formatRelative } from '../lib/util';
 import { useToast } from './Toast';
 import { Button, Spinner } from './ui';
+import Avatar from './Avatar';
+import Icon from './Icon';
 
 const ROLE_HELP: Record<Role, string> = {
   owner: 'Full control, including deleting the workspace',
@@ -91,6 +93,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
             <ul className="space-y-1">
               {(members.data ?? []).map((member) => (
                 <li key={member.userId} className="flex items-center gap-2">
+                  <Avatar name={member.name} url={member.avatarUrl} seed={member.userId} size="lg" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm">
                       {member.name}
@@ -132,7 +135,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
                       title={member.isSelf ? 'Leave workspace' : `Remove ${member.name}`}
                       className="px-1 text-xs text-[var(--color-muted)] hover:text-red-500"
                     >
-                      ×
+                      <Icon name="x-lg" />
                     </button>
                   )}
                 </li>
@@ -191,7 +194,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
                         className="shrink-0 text-[var(--color-muted)] hover:text-red-500"
                         aria-label="Revoke invite"
                       >
-                        ×
+                        <Icon name="x-lg" />
                       </button>
                     </li>
                   ))}

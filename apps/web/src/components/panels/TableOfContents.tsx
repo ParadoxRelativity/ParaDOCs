@@ -35,7 +35,7 @@ export default function TableOfContents({ blocks }: { blocks: unknown[] }) {
   const headings = useMemo(() => extractHeadings(blocks), [blocks]);
 
   if (headings.length === 0) {
-    return <EmptyState icon="🗂" title="No headings yet" hint="Headings you add appear here as an outline." />;
+    return <EmptyState icon="list-nested" title="No headings yet" hint="Headings you add appear here as an outline." />;
   }
 
   const minLevel = Math.min(...headings.map((h) => h.level));

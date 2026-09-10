@@ -1,4 +1,5 @@
-import { desktopCapturer, dialog, session as electronSession, type Session } from 'electron';
+import { BrowserWindow, session as electronSession, webContents } from 'electron';
+import { pickShareSource } from './screenPicker.js';
 
 /**
  * Screen sharing in Electron.
@@ -7,58 +8,29 @@ import { desktopCapturer, dialog, session as electronSession, type Session } fro
  * process answers the request, so without this a shared screen simply never
  * starts in the desktop app while working fine in a browser.
  *
- * macOS is handed to the system picker, which is the one people recognise and
- * which keeps the choice of what to reveal inside the OS. Everywhere else the
- * sources are listed and picked explicitly — never chosen automatically, since
- * the whole point of the prompt is that sharing a screen is deliberate.
+ * The answer comes from ParaDOCs' own picker on every platform, which shows
+ * each screen and window as it currently looks. Nothing is chosen
+ * automatically: sharing a screen is meant to be deliberate.
  */
 export function enableScreenSharing(partition: string): void {
-  const session: Session = electronSession.fromPartition(partition);
+  electronSession.fromPartition(partition).setDisplayMediaRequestHandler((request, callback) => {
+    const contents = request.frame ? webContents.fromFrame(request.frame) : undefined;
+    const parent = (contents && BrowserWindow.fromWebContents(contents)) ?? BrowserWindow.getFocusedWindow();
+    // Electron captures system audio only on Windows. Elsewhere the option is
+    // left out rather than offered and silently ignored.
+    const offerAudio = request.audioRequested && process.platform === 'win32';
 
-  session.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      void desktopCapturer
-        .getSources({ types: ['screen', 'window'], fetchWindowIcons: false })
-        .then(async (sources) => {
-          if (sources.length === 0) {
-            // An empty list on macOS almost always means the screen recording
-            // permission has never been granted.
-            callback({});
-            await dialog.showMessageBox({
-              type: 'info',
-              title: 'Screen sharing',
-              message: 'No screens or windows are available to share.',
-              detail:
-                'On macOS, allow ParaDOCs under System Settings → Privacy & Security → Screen Recording, then try again.',
-            });
-            return;
-          }
-
-          // showMessageBox is a poor list for dozens of windows, so the whole
-          // screens come first and the list is capped at something readable.
-          const choices = sources.slice(0, 8);
-          const { response } = await dialog.showMessageBox({
-            type: 'question',
-            title: 'Share your screen',
-            message: 'Choose what to share',
-            detail: 'Everyone in the call will see this until you stop sharing.',
-            buttons: [...choices.map((source) => source.name), 'Cancel'],
-            cancelId: choices.length,
-            defaultId: 0,
-          });
-
-          if (response >= choices.length) {
-            callback({});
-            return;
-          }
-          // 'loopback' shares system audio alongside the picture where the
-          // platform supports it, and is ignored where it does not.
-          callback({ video: choices[response], audio: 'loopback' });
-        })
-        .catch(() => callback({}));
-    },
-    // ScreenCaptureKit's own picker on macOS; ignored elsewhere, where the
-    // handler above runs instead.
-    { useSystemPicker: true },
-  );
+    void pickShareSource(parent, { offerAudio })
+      .then((picked) => {
+        if (!picked) {
+          callback({});
+          return;
+        }
+        callback({
+          video: { id: picked.id, name: picked.name },
+          ...(picked.audio ? { audio: 'loopback' as const } : {}),
+        });
+      })
+      .catch(() => callback({}));
+  });
 }
