@@ -655,6 +655,34 @@ application whose signature it cannot verify. The app reports this rather than
 failing silently. Windows updates itself unsigned, with a SmartScreen warning on
 first install.
 
+**The server image** is built by the same tag and pushed to the GitHub
+Container Registry for both `linux/amd64` and `linux/arm64`:
+
+```
+ghcr.io/paradoxrelativity/paradocs:0.1.1   # the exact release
+ghcr.io/paradoxrelativity/paradocs:0.1     # latest patch of a minor version
+ghcr.io/paradoxrelativity/paradocs:latest
+```
+
+To deploy from it rather than building on the server, point the `app` service
+in `docker-compose.yml` at the image instead of the `build:` section:
+
+```yaml
+  app:
+    image: ghcr.io/paradoxrelativity/paradocs:0.1.1
+```
+
+Running the workflow by hand from the Actions tab pushes only
+`sha-<commit>`, which is useful for trying a build on a test server without
+moving `latest`. Unlike the desktop installers, a pushed image is visible as
+soon as the job finishes — there is no draft step — so `latest` moves when the
+tag is pushed, not when the release is published.
+
+The first push creates the package as **private**, even for a public
+repository. To let a server pull it without logging in, open the package under
+your GitHub profile's *Packages*, then *Package settings* → *Change
+visibility* → *Public*. This only has to be done once.
+
 To cut a release without CI, build locally and attach the files from
 `apps/desktop/release/` — including `latest-mac.yml` and `latest.yml`, without
 which nothing can update:

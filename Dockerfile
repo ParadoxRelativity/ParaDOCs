@@ -2,7 +2,10 @@
 # collaboration websocket, so a deployment is this container plus Postgres.
 
 # --- install everything needed to build ------------------------------------
-FROM node:22-alpine AS deps
+# Runs on the build machine's own architecture even when the image targets
+# another. What this half produces is the web client — static files, identical
+# on every platform — so there is nothing gained by building it under emulation.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
@@ -15,11 +18,14 @@ COPY apps/desktop/package.json apps/desktop/
 RUN npm ci --workspace=@paradocs/api --workspace=@paradocs/web --include-workspace-root
 
 # --- build the web client --------------------------------------------------
-FROM node:22-alpine AS build
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
-COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
+# Built on top of the install rather than by copying node_modules directories
+# out of it. npm decides where packages land — hoisted to the root when versions
+# agree, nested under a workspace when they conflict — so naming directories to
+# copy breaks as soon as npm chooses differently. It did: with everything
+# hoisted, packages/shared/node_modules and apps/web/node_modules never existed
+# and those COPY lines failed. Source comes in over the top; .dockerignore keeps
+# any node_modules on the host out of it.
+FROM deps AS build
 COPY . .
 RUN npm run build --workspace=@paradocs/web
 
@@ -47,8 +53,10 @@ ENV NODE_ENV=production \
 # flushes pending collaborative document saves actually runs on `docker stop`.
 RUN apk add --no-cache tini
 
-COPY --from=prod-deps /app/node_modules ./node_modules
-COPY package.json ./package.json
+# The whole install, not only the root node_modules: a package npm nests under
+# a workspace has to come along too, or it goes missing at runtime instead of
+# failing the build where someone would see it.
+COPY --from=prod-deps /app ./
 COPY packages/shared ./packages/shared
 COPY apps/api ./apps/api
 COPY --from=build /app/apps/web/dist ./apps/web/dist
