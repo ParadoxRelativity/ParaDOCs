@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { mentions, messagePreview, type Channel, type ChatEvent, type MessageReferences } from '@paradocs/shared';
+import {
+  attachmentSummary,
+  mentions,
+  messagePreview,
+  type CallEvent,
+  type Channel,
+  type ChatEvent,
+  type ChatMessageEvent,
+  type MessageReferences,
+  type PresenceStatus,
+} from '@paradocs/shared';
 import { keys, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
+import { setTyping } from './typing';
 
 export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
 
@@ -28,25 +39,40 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
 
 /**
  * The session's chat plumbing: one socket for every channel, the message cache,
- * and notifications for mentions.
+ * presence, typing, ringing, and notifications for mentions and direct
+ * messages.
  *
  * This lives above the chat view rather than inside it, because the whole point
- * of a mention notification is that it reaches you when you are somewhere else
- * — reading a document, or in another channel.
+ * of a notification is that it reaches you when you are somewhere else —
+ * reading a document, or in another channel.
  */
 export function useChatEvents({
   workspaceId,
   channels,
   selfId,
   activeChannelId,
+  idle,
+  quiet,
   onNotifyClick,
+  onCallEvent,
 }: {
   workspaceId: string;
   channels: Channel[];
   selfId: string;
   activeChannelId: string | null;
-  onNotifyClick: (channelId: string) => void;
-}): { status: SocketStatus; permission: NotificationPermissionState; requestPermission: () => void } {
+  /** Whether this window has gone idle, so the server can show you as away. */
+  idle: boolean;
+  /** Busy: messages still arrive, but nothing pops up. */
+  quiet: boolean;
+  onNotifyClick: (workspaceId: string, channelId: string) => void;
+  onCallEvent: (event: CallEvent) => void;
+}): {
+  status: SocketStatus;
+  permission: NotificationPermissionState;
+  requestPermission: () => void;
+  /** Tells everyone else in a channel that you are typing there, or have stopped. */
+  sendTyping: (channelId: string, typing: boolean) => void;
+} {
   const qc = useQueryClient();
   const [permission, setPermission] = useState<NotificationPermissionState>(permissionState);
 
@@ -57,10 +83,15 @@ export function useChatEvents({
   names.current = new Map(channels.map((c) => [c.id, c.name]));
   const openChannel = useRef(onNotifyClick);
   openChannel.current = onNotifyClick;
+  const callHandler = useRef(onCallEvent);
+  callHandler.current = onCallEvent;
+  const muted = useRef(quiet);
+  muted.current = quiet;
 
-  const apply = useCallback(
-    (event: ChatEvent) => {
+  const applyMessage = useCallback(
+    (event: ChatMessageEvent) => {
       const channelId = event.message.channelId;
+      const direct = event.channelKind === 'direct';
 
       // Update the channel's page only if it has been loaded; a message for a
       // channel never opened simply has nothing to merge into.
@@ -78,31 +109,94 @@ export function useChatEvents({
       });
 
       if (event.type !== 'message.created') return;
-      const fromSomeoneElse = event.message.author?.id !== selfId;
+      const author = event.message.author;
+      // What they were typing has arrived.
+      if (author) setTyping(channelId, author, false);
+      const fromSomeoneElse = author?.id !== selfId;
+
+      // Direct conversations reorder with every message, your own included, and
+      // the first message may be in one this window has never listed.
+      if (direct) void qc.invalidateQueries({ queryKey: keys.directs(event.workspaceId) });
       // Unread and mention counts are computed server side, so the badges are
       // refreshed rather than guessed at here.
       if (fromSomeoneElse) {
-        qc.invalidateQueries({ queryKey: keys.channels(workspaceId) });
-        qc.invalidateQueries({ queryKey: keys.notifications });
+        if (!direct) void qc.invalidateQueries({ queryKey: keys.channels(event.workspaceId) });
+        void qc.invalidateQueries({ queryKey: keys.notifications });
       }
 
-      if (!fromSomeoneElse || !mentions(event.message.body, selfId)) return;
+      if (!fromSomeoneElse || muted.current) return;
+      // Everything in a direct conversation is said to you; in a channel, only
+      // a mention is.
+      if (!direct && !mentions(event.message.body, selfId)) return;
       // Already looking at it is not worth interrupting.
       const watching = active.current === channelId && document.visibilityState === 'visible';
       if (watching) return;
+
+      const authorName = author?.name ?? 'Someone';
       notify({
-        title: `${event.message.author?.name ?? 'Someone'} mentioned you in #${names.current.get(channelId) ?? 'chat'}`,
-        body: messagePreview(event.message.body, event.references),
-        onClick: () => openChannel.current(channelId),
+        title: direct ? authorName : `${authorName} mentioned you in #${names.current.get(channelId) ?? 'chat'}`,
+        body:
+          messagePreview(event.message.body, event.references) ||
+          attachmentSummary(event.message.attachments?.length ?? 0),
+        // One notification per conversation, replaced as messages arrive,
+        // rather than a stack of them.
+        tag: direct ? `paradocs-direct-${channelId}` : 'paradocs-mention',
+        onClick: () => openChannel.current(event.workspaceId, channelId),
       });
     },
-    [qc, selfId, workspaceId],
+    [qc, selfId],
   );
 
-  const status = useChatSocket(
-    channels.map((c) => c.id),
-    apply,
+  const apply = useCallback(
+    (event: ChatEvent) => {
+      switch (event.type) {
+        case 'typing':
+          // Your own typing comes back from your other windows; it is not news.
+          if (event.user.id !== selfId) setTyping(event.channelId, event.user, event.typing);
+          return;
+        case 'presence.changed':
+          qc.setQueryData<Record<string, PresenceStatus>>(keys.presence(event.workspaceId), (current) =>
+            current ? { ...current, [event.userId]: event.status } : current,
+          );
+          return;
+        case 'channels.changed':
+          void qc.invalidateQueries({ queryKey: keys.channels(event.workspaceId) });
+          return;
+        case 'members.changed':
+          void qc.invalidateQueries({ queryKey: ['members', event.workspaceId] });
+          void qc.invalidateQueries({ queryKey: keys.presence(event.workspaceId) });
+          void qc.invalidateQueries({ queryKey: keys.workspaces });
+          return;
+        case 'call.ringing':
+        case 'call.ended':
+          callHandler.current(event);
+          return;
+        default:
+          applyMessage(event);
+      }
+    },
+    [qc, selfId, applyMessage],
   );
+
+  const { status, send } = useChatSocket({
+    channelIds: channels.map((c) => c.id),
+    workspaceId,
+    idle,
+    onEvent: apply,
+  });
+
+  const sendTyping = useCallback(
+    (channelId: string, typing: boolean) => send({ type: 'typing', channelId, typing }),
+    [send],
+  );
+
+  // Whatever changed while the socket was down went unheard. Who is around and
+  // the direct conversation list are cheap to ask for again.
+  useEffect(() => {
+    if (status !== 'connected' || !workspaceId) return;
+    void qc.invalidateQueries({ queryKey: keys.presence(workspaceId) });
+    void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
+  }, [status, workspaceId, qc]);
 
   // Another tab may have been the one to ask.
   useEffect(() => {
@@ -118,13 +212,23 @@ export function useChatEvents({
     );
   }, []);
 
-  return { status, permission, requestPermission };
+  return { status, permission, requestPermission, sendTyping };
 }
 
-function notify({ title, body, onClick }: { title: string; body: string; onClick: () => void }): void {
+function notify({
+  title,
+  body,
+  tag,
+  onClick,
+}: {
+  title: string;
+  body: string;
+  tag: string;
+  onClick: () => void;
+}): void {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
-    const notification = new Notification(title, { body, tag: 'paradocs-mention' });
+    const notification = new Notification(title, { body, tag });
     notification.onclick = () => {
       window.focus();
       onClick();

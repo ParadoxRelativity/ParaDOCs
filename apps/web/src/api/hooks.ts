@@ -13,6 +13,8 @@ import type {
   Message,
   MessageReferences,
   Notifications,
+  PresenceSettings,
+  PresenceStatus,
   Role,
   SearchHit,
   Tag,
@@ -58,6 +60,9 @@ export const keys = {
   search: (ws: string, key: string) => ['search', ws, key] as const,
   channels: (ws: string) => ['channels', ws] as const,
   messages: (channelId: string) => ['messages', channelId] as const,
+  directs: (ws: string) => ['directs', ws] as const,
+  presence: (ws: string) => ['presence', ws] as const,
+  presenceSettings: ['presenceSettings'] as const,
   notifications: ['notifications'] as const,
   uploadConfig: ['uploadConfig'] as const,
 };
@@ -112,7 +117,7 @@ export function useSetAvatar() {
       picture ? api.upload('PUT', '/auth/me/avatar', picture) : api.delete('/auth/me/avatar'),
     onSuccess: () => {
       // The picture is drawn beside your name in lists fetched on their own.
-      for (const queryKey of [keys.me, ['members'], ['comments'], ['messages']]) {
+      for (const queryKey of [keys.me, ['members'], ['comments'], ['messages'], ['directs']]) {
         void qc.invalidateQueries({ queryKey });
       }
     },
@@ -721,8 +726,76 @@ export function useMarkChannelRead(workspaceId: string) {
     mutationFn: (channelId: string) => api.post(`/channels/${channelId}/read`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.channels(workspaceId) });
+      void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
       void qc.invalidateQueries({ queryKey: keys.notifications });
     },
+  });
+}
+
+// --- direct conversations --------------------------------------------------
+
+/** The signed-in person's direct conversations in a workspace, most recent first. */
+export function useDirectConversations(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.directs(workspaceId ?? ''),
+    queryFn: () => api.get<Channel[]>(`/workspaces/${workspaceId}/direct`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+/** Opens the conversation with another member, starting it if there is none. */
+export function useOpenDirect(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.post<Channel>(`/workspaces/${workspaceId}/direct`, { userId }),
+    onSuccess: (conversation) => {
+      // In the list straight away, so opening it does not wait on a refetch to find it.
+      qc.setQueryData<Channel[]>(keys.directs(workspaceId), (current) =>
+        current && !current.some((c) => c.id === conversation.id) ? [conversation, ...current] : current,
+      );
+      void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
+    },
+  });
+}
+
+// --- presence --------------------------------------------------------------
+
+/** Who in a workspace is around, keyed by user id. */
+export function usePresence(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.presence(workspaceId ?? ''),
+    queryFn: () => api.get<Record<string, PresenceStatus>>(`/workspaces/${workspaceId}/presence`),
+    enabled: Boolean(workspaceId),
+    // The chat socket keeps this current, and it is asked for again whenever
+    // the socket reconnects.
+    staleTime: Infinity,
+  });
+}
+
+/** The status you chose and how long you may be idle before showing as away. */
+export function usePresenceSettings() {
+  return useQuery({
+    queryKey: keys.presenceSettings,
+    queryFn: () => api.get<PresenceSettings>('/presence/me'),
+    staleTime: Infinity,
+  });
+}
+
+export function useUpdatePresenceSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: Partial<PresenceSettings>) => api.patch<PresenceSettings>('/presence/me', patch),
+    // Shown at once: a status menu that lags its own click reads as broken.
+    onMutate: async (patch) => {
+      await qc.cancelQueries({ queryKey: keys.presenceSettings });
+      const previous = qc.getQueryData<PresenceSettings>(keys.presenceSettings);
+      if (previous) qc.setQueryData<PresenceSettings>(keys.presenceSettings, { ...previous, ...patch });
+      return { previous };
+    },
+    onError: (_err, _patch, context) => {
+      if (context?.previous) qc.setQueryData(keys.presenceSettings, context.previous);
+    },
+    onSuccess: (settings) => qc.setQueryData(keys.presenceSettings, settings),
   });
 }
 
@@ -747,6 +820,7 @@ export function useMarkNotificationsRead() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.notifications });
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['directs'] });
     },
   });
 }

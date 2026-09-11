@@ -34,7 +34,8 @@ export async function resolveReferences(
       : Promise.resolve([]),
     channelIds.length
       ? query<ChannelReference>(
-          `SELECT id, name, kind FROM channels WHERE id = ANY($1::uuid[]) AND workspace_id = $2`,
+          // A direct conversation has no name, and its existence is its own business.
+          `SELECT id, name, kind FROM channels WHERE id = ANY($1::uuid[]) AND workspace_id = $2 AND kind <> 'direct'`,
           [channelIds, workspaceId],
         ).then((r) => r.rows)
       : Promise.resolve([]),

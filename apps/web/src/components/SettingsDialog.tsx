@@ -15,6 +15,7 @@ import { cx } from '../lib/util';
 import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
 import { FIELD, PictureField, Section } from './SettingsParts';
+import { AwayAfterSelect, StatusChoices, useStatusControls } from './Presence';
 import { useToast } from './Toast';
 import { Button } from './ui';
 import Icon, { type IconName } from './Icon';
@@ -207,6 +208,8 @@ function AccountSection({ user }: { user: User }) {
         />
       </Section>
 
+      <StatusSection />
+
       <Section title="Profile">
         <form onSubmit={saveProfile} className="space-y-2">
           <label className="block">
@@ -269,6 +272,32 @@ function AccountSection({ user }: { user: User }) {
         </form>
       </Section>
     </>
+  );
+}
+
+/** Your status, and how long you can be idle before you show as away. */
+function StatusSection() {
+  const { current, change } = useStatusControls();
+  return (
+    <Section
+      title="Status"
+      hint="How you show to everyone in your workspaces. Kept on your account, so it applies on every device."
+    >
+      <StatusChoices
+        value={current.status}
+        awayAfterMinutes={current.awayAfterMinutes}
+        onChange={(status) => change({ status })}
+      />
+      <label className="mt-3 flex items-center justify-between gap-3">
+        <span className="text-xs">
+          <span className="block">Show as away after</span>
+          <span className="block text-[var(--color-muted)]">
+            Without mouse or keyboard activity in ParaDOCs, while set to Online. Being in a call counts as activity.
+          </span>
+        </span>
+        <AwayAfterSelect value={current.awayAfterMinutes} onChange={(minutes) => change({ awayAfterMinutes: minutes })} />
+      </label>
+    </Section>
   );
 }
 

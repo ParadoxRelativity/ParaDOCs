@@ -251,6 +251,7 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
         return {
           channelId: text(message.channelId),
           channelName: text(message.channelName),
+          direct: message.direct === true,
           workspace: await workspace(message.workspace),
           unread: count(message.unread),
           mentions: count(message.mentions),

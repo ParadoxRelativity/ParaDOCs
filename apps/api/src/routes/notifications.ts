@@ -40,6 +40,7 @@ interface InviteRow extends WorkspaceColumns {
 interface ChannelRow extends WorkspaceColumns {
   channel_id: string;
   channel_name: string;
+  direct: boolean;
   unread: number;
   mentions: number;
   message_id: string;
@@ -53,6 +54,14 @@ interface ChannelRow extends WorkspaceColumns {
 
 const WORKSPACE_SELECT = `w.id AS workspace_id, w.name AS workspace_name, w.icon AS workspace_icon,
   ${uploadUrlSql('w.avatar_key')} AS workspace_avatar_url`;
+
+/**
+ * The channels a person can read messages in: every text channel of their
+ * workspaces, and the direct conversations they are part of. Expects the
+ * channel as `c` and the person's id as $1.
+ */
+const READABLE_CHANNEL = `(c.kind = 'text' OR (c.kind = 'direct' AND EXISTS (
+  SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = $1)))`;
 
 function workspaceOf(row: WorkspaceColumns): NotificationWorkspace {
   return {
@@ -69,7 +78,8 @@ function truncate(text: string): string {
 
 /**
  * What wants the signed-in person's attention on this server: invitations
- * addressed to their email, and channels with messages they have not read.
+ * addressed to their email, and channels and direct conversations with
+ * messages they have not read.
  *
  * Unread is measured exactly as the channel list's badges measure it — newer
  * than the person's last read of the channel, from someone else, not deleted —
@@ -98,14 +108,25 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         [user.email, user.id],
       ),
       query<ChannelRow>(
-        `SELECT c.id AS channel_id, c.name AS channel_name, ${WORKSPACE_SELECT},
+        `SELECT c.id AS channel_id,
+                -- A direct conversation is named for the other person in it.
+                CASE WHEN c.kind = 'direct' THEN COALESCE(peer.name, 'Deleted account') ELSE c.name END AS channel_name,
+                (c.kind = 'direct') AS direct,
+                ${WORKSPACE_SELECT},
                 stats.unread, stats.mentions,
                 latest.id AS message_id, latest.body, latest.attachment_count, latest.created_at,
                 author.id AS author_id, author.name AS author_name,
                 ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
            FROM workspace_members wm
            JOIN workspaces w ON w.id = wm.workspace_id
-           JOIN channels c ON c.workspace_id = w.id AND c.kind = 'text'
+           JOIN channels c ON c.workspace_id = w.id AND ${READABLE_CHANNEL}
+           LEFT JOIN LATERAL (
+             SELECT u.name
+               FROM channel_members other
+               JOIN users u ON u.id = other.user_id
+              WHERE other.channel_id = c.id AND other.user_id <> $1
+              LIMIT 1
+           ) peer ON c.kind = 'direct'
            LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $1
            CROSS JOIN LATERAL (
              SELECT count(*)::int AS unread,
@@ -145,6 +166,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         return {
           channelId: row.channel_id,
           channelName: row.channel_name,
+          direct: row.direct,
           workspace: workspaceOf(row),
           unread: row.unread,
           mentions: row.mentions,
@@ -175,7 +197,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  /** Marks channels read — the ones given, or every channel the person can see. */
+  /** Marks channels read — the ones given, or every channel the person can read. */
   app.post('/notifications/read', async (req, reply) => {
     const input = parse(markReadSchema, req.body ?? {});
     await query(
@@ -183,7 +205,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
        SELECT c.id, $1, now()
          FROM channels c
          JOIN workspace_members m ON m.workspace_id = c.workspace_id AND m.user_id = $1
-        WHERE c.kind = 'text' AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
+        WHERE ${READABLE_CHANNEL} AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
        ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`,
       [req.user!.id, input.channelIds ?? null],
     );

@@ -7,6 +7,7 @@ import {
   updateChannelSchema,
   updateMessageSchema,
   type Channel,
+  type ChannelKind,
   type Message,
   type MessageAttachment,
   type MessageReferences,
@@ -15,8 +16,9 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess, roleAtLeast, type Role } from '../plugins/session.js';
 import { resolveReferences } from '../lib/chatReferences.js';
+import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { removeStoredFile, removeStoredFiles, storeUpload, uploadLimits, uploadUrlSql } from '../lib/storage.js';
-import { publishToChannel } from '../chat/hub.js';
+import { publishToWorkspace } from '../chat/hub.js';
 
 const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind,
   c.position, c.created_at AS "createdAt"`;
@@ -61,19 +63,32 @@ async function selectMessage(db: Queryable, id: string): Promise<Message> {
   return rows[0];
 }
 
-/** Resolves a channel and checks the caller's role in its workspace. */
-async function channelAccess(
-  req: FastifyRequest,
-  channelId: string,
-  minimum: Role = 'viewer',
-): Promise<{ workspaceId: string; role: Role; kind: 'text' | 'voice' }> {
-  const { rows } = await query<{ workspace_id: string; kind: 'text' | 'voice' }>(
-    'SELECT workspace_id, kind FROM channels WHERE id = $1',
-    [channelId],
-  );
-  if (!rows[0]) throw notFound('Channel not found');
-  const role = await assertWorkspaceAccess(req, rows[0].workspace_id, minimum);
-  return { workspaceId: rows[0].workspace_id, role, kind: rows[0].kind };
+/**
+ * Resolves a channel and checks the caller's role in its workspace — and, for
+ * a direct conversation, that they are one of the people in it.
+ */
+async function channelAccess(req: FastifyRequest, channelId: string, minimum: Role = 'viewer'): Promise<ChannelAccess> {
+  const access = await channelAccessFor(req.user!.id, channelId);
+  if (!access) throw notFound('Channel not found');
+  if (!roleAtLeast(access.role, minimum)) {
+    throw forbidden(`This action requires the ${minimum} role or higher`);
+  }
+  return access;
+}
+
+/** Voice channels are places to meet; everything else is a conversation. */
+function carriesMessages(kind: ChannelKind): boolean {
+  return kind === 'text' || kind === 'direct';
+}
+
+/** A topic is optional, and a blank one is no topic. */
+function cleanTopic(topic: string | null | undefined): string | null {
+  return topic?.trim() || null;
+}
+
+/** Everyone with the workspace open refreshes its channel list. */
+function channelsChanged(workspaceId: string): void {
+  publishToWorkspace(workspaceId, { type: 'channels.changed', workspaceId });
 }
 
 export const channelRoutes: FastifyPluginAsync = async (app) => {
@@ -83,6 +98,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/channels', async (req) => {
     await assertWorkspaceAccess(req, req.params.id);
+    // Direct conversations are listed on their own, and only to the people in them.
     const { rows } = await query<Channel>(
       `SELECT ${CHANNEL_COLUMNS},
               (SELECT count(*)::int FROM messages m
@@ -100,7 +116,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
                   AND position('<@' || $2::text || '>' in lower(m.body)) > 0) AS mentions
          FROM channels c
          LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $2
-        WHERE c.workspace_id = $1
+        WHERE c.workspace_id = $1 AND c.kind <> 'direct'
         ORDER BY c.kind, c.position, lower(c.name)`,
       [req.params.id, req.user!.id],
     );
@@ -112,10 +128,10 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     await assertWorkspaceAccess(req, req.params.id, 'admin');
     const input = parse(createChannelSchema, req.body);
 
-    const { rows: clash } = await query('SELECT 1 FROM channels WHERE workspace_id = $1 AND lower(name) = $2', [
-      req.params.id,
-      input.name,
-    ]);
+    const { rows: clash } = await query(
+      `SELECT 1 FROM channels WHERE workspace_id = $1 AND lower(name) = $2 AND kind <> 'direct'`,
+      [req.params.id, input.name],
+    );
     if (clash.length) throw conflict(`There is already a #${input.name} channel`);
 
     const { rows } = await query<Channel>(
@@ -126,19 +142,21 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
          RETURNING *
        )
        SELECT ${CHANNEL_COLUMNS} FROM inserted c`,
-      [req.params.id, input.name, input.topic ?? null, input.kind, req.user!.id],
+      [req.params.id, input.name, cleanTopic(input.topic), input.kind, req.user!.id],
     );
+    channelsChanged(req.params.id);
     reply.status(201);
     return rows[0];
   });
 
   app.patch<{ Params: { id: string } }>('/channels/:id', async (req) => {
-    const { workspaceId } = await channelAccess(req, req.params.id, 'admin');
+    const { workspaceId, kind } = await channelAccess(req, req.params.id, 'admin');
+    if (kind === 'direct') throw badRequest('A direct conversation has no name or topic to change');
     const input = parse(updateChannelSchema, req.body);
 
     if (input.name) {
       const { rows: clash } = await query(
-        'SELECT 1 FROM channels WHERE workspace_id = $1 AND lower(name) = $2 AND id <> $3',
+        `SELECT 1 FROM channels WHERE workspace_id = $1 AND lower(name) = $2 AND id <> $3 AND kind <> 'direct'`,
         [workspaceId, input.name, req.params.id],
       );
       if (clash.length) throw conflict(`There is already a #${input.name} channel`);
@@ -157,18 +175,20 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
       [
         req.params.id,
         input.name ?? null,
-        input.topic ?? null,
+        cleanTopic(input.topic),
         Object.prototype.hasOwnProperty.call(input, 'topic'),
         input.position ?? null,
       ],
     );
+    channelsChanged(workspaceId);
     return rows[0];
   });
 
   app.delete<{ Params: { id: string } }>('/channels/:id', async (req, reply) => {
-    const { workspaceId } = await channelAccess(req, req.params.id, 'admin');
+    const { workspaceId, kind } = await channelAccess(req, req.params.id, 'admin');
+    if (kind === 'direct') throw badRequest('A direct conversation cannot be deleted');
     const { rows } = await query<{ count: number }>(
-      'SELECT count(*)::int AS count FROM channels WHERE workspace_id = $1',
+      `SELECT count(*)::int AS count FROM channels WHERE workspace_id = $1 AND kind <> 'direct'`,
       [workspaceId],
     );
     // A workspace with no channels has a chat tab that cannot do anything.
@@ -185,6 +205,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
       files.map((f) => f.storage_key),
       req.log,
     );
+    channelsChanged(workspaceId);
     reply.status(204);
   });
 
@@ -194,7 +215,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     '/channels/:id/messages',
     async (req) => {
       const { workspaceId, kind } = await channelAccess(req, req.params.id);
-      if (kind !== 'text') throw badRequest('That channel does not carry messages');
+      if (!carriesMessages(kind)) throw badRequest('That channel does not carry messages');
 
       const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
       // Paged newest-first from a cursor, then flipped, so the client can
@@ -221,8 +242,8 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
   app.post<{ Params: { id: string } }>('/channels/:id/messages', async (req, reply) => {
     // Viewers are read-only for documents but may comment; chat follows that.
-    const { workspaceId, kind } = await channelAccess(req, req.params.id);
-    if (kind !== 'text') throw badRequest('That channel does not carry messages');
+    const access = await channelAccess(req, req.params.id);
+    if (!carriesMessages(access.kind)) throw badRequest('That channel does not carry messages');
     const input = parse(createMessageSchema, req.body);
     const attachmentIds = input.attachmentIds ?? [];
 
@@ -254,12 +275,18 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
       return selectMessage(client, id);
     });
-    const references = await resolveReferences([message.body], workspaceId);
+    const references = await resolveReferences([message.body], access.workspaceId);
 
     // Posting is also reading: the author's own message must not come back as
     // unread the moment they send it.
     await markRead(req.params.id, req.user!.id);
-    publishToChannel(req.params.id, { type: 'message.created', message, references });
+    await publishChannelEvent(req.params.id, access.kind, {
+      type: 'message.created',
+      workspaceId: access.workspaceId,
+      channelKind: access.kind,
+      message,
+      references,
+    });
 
     reply.status(201);
     return { message, references };
@@ -267,7 +294,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/messages/:id', async (req) => {
     const found = await messageRow(req.params.id);
-    const { workspaceId } = await channelAccess(req, found.channel_id);
+    const access = await channelAccess(req, found.channel_id);
     if (found.author_id !== req.user!.id) throw forbidden('You can only edit your own messages');
     if (found.deleted_at) throw badRequest('That message was deleted');
 
@@ -282,16 +309,24 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
     await query('UPDATE messages SET body = $2, edited_at = now() WHERE id = $1', [req.params.id, input.body]);
     const message = await selectMessage({ query }, req.params.id);
-    const references = await resolveReferences([message.body], workspaceId);
-    publishToChannel(found.channel_id, { type: 'message.updated', message, references });
+    const references = await resolveReferences([message.body], access.workspaceId);
+    await publishChannelEvent(found.channel_id, access.kind, {
+      type: 'message.updated',
+      workspaceId: access.workspaceId,
+      channelKind: access.kind,
+      message,
+      references,
+    });
     return { message, references };
   });
 
   app.delete<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
     const found = await messageRow(req.params.id);
-    const { role } = await channelAccess(req, found.channel_id);
-    // Your own message, or anyone's if you moderate the workspace.
-    if (found.author_id !== req.user!.id && !roleAtLeast(role, 'admin')) {
+    const access = await channelAccess(req, found.channel_id);
+    // Your own message, or anyone's if you moderate the workspace — except in a
+    // direct conversation, which no one else can see to moderate.
+    const moderates = access.kind !== 'direct' && roleAtLeast(access.role, 'admin');
+    if (found.author_id !== req.user!.id && !moderates) {
       throw forbidden('You can only delete your own messages');
     }
 
@@ -309,8 +344,10 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     });
     await removeStoredFiles(files, req.log);
 
-    publishToChannel(found.channel_id, {
+    await publishChannelEvent(found.channel_id, access.kind, {
       type: 'message.deleted',
+      workspaceId: access.workspaceId,
+      channelKind: access.kind,
       message: await selectMessage({ query }, req.params.id),
       references: NO_REFERENCES,
     });
@@ -326,7 +363,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post<{ Params: { id: string } }>('/channels/:id/attachments', async (req, reply) => {
     const { kind } = await channelAccess(req, req.params.id);
-    if (kind !== 'text') throw badRequest('That channel does not carry messages');
+    if (!carriesMessages(kind)) throw badRequest('That channel does not carry messages');
 
     const file = await req.file(uploadLimits());
     if (!file) throw badRequest('No file was uploaded');
@@ -380,7 +417,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   app.put<{ Params: { id: string; emoji: string } }>('/messages/:id/reactions/:emoji', async (req) => {
     const { emoji } = parse(reactionSchema, { emoji: req.params.emoji });
     const found = await messageRow(req.params.id);
-    await channelAccess(req, found.channel_id);
+    const access = await channelAccess(req, found.channel_id);
     if (found.deleted_at) throw badRequest('That message was deleted');
 
     const { rows } = await query<{ kinds: number; present: boolean }>(
@@ -398,20 +435,20 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
        ON CONFLICT DO NOTHING`,
       [req.params.id, req.user!.id, emoji],
     );
-    return publishReactions(found.channel_id, req.params.id);
+    return publishReactions(found.channel_id, access, req.params.id);
   });
 
   app.delete<{ Params: { id: string; emoji: string } }>('/messages/:id/reactions/:emoji', async (req) => {
     const { emoji } = parse(reactionSchema, { emoji: req.params.emoji });
     const found = await messageRow(req.params.id);
-    await channelAccess(req, found.channel_id);
+    const access = await channelAccess(req, found.channel_id);
 
     await query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [
       req.params.id,
       req.user!.id,
       emoji,
     ]);
-    return publishReactions(found.channel_id, req.params.id);
+    return publishReactions(found.channel_id, access, req.params.id);
   });
 
   // --- read state ----------------------------------------------------------
@@ -428,9 +465,19 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
  * The text is unchanged, so every client showing the message already has its
  * references.
  */
-async function publishReactions(channelId: string, messageId: string): Promise<{ message: Message }> {
+async function publishReactions(
+  channelId: string,
+  access: ChannelAccess,
+  messageId: string,
+): Promise<{ message: Message }> {
   const message = await selectMessage({ query }, messageId);
-  publishToChannel(channelId, { type: 'message.updated', message, references: NO_REFERENCES });
+  await publishChannelEvent(channelId, access.kind, {
+    type: 'message.updated',
+    workspaceId: access.workspaceId,
+    channelKind: access.kind,
+    message,
+    references: NO_REFERENCES,
+  });
   return { message };
 }
 
@@ -463,7 +510,7 @@ function dimension(value: unknown): number | null {
 /** The name a file is shown and downloaded under. It is never used as a path. */
 function displayName(filename: string): string {
   // eslint-disable-next-line no-control-regex
-  const clean = filename.replace(/[\u0000-\u001f\u007f/\\]/g, '').trim();
+  const clean = filename.replace(/[ -/\\]/g, '').trim();
   return clean.slice(0, 200) || 'file';
 }
 

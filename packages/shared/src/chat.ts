@@ -1,11 +1,17 @@
 import { z } from 'zod';
 
-/** A voice channel is a place to meet; it carries no messages. */
-export type ChannelKind = 'text' | 'voice';
+import type { PresenceStatus } from './presence.js';
+
+/**
+ * A voice channel is a place to meet; it carries no messages. A direct
+ * conversation is between two people, carries messages and can hold a call.
+ */
+export type ChannelKind = 'text' | 'voice' | 'direct';
 
 export interface Channel {
   id: string;
   workspaceId: string;
+  /** Empty for a direct conversation, which is named for `peer`. */
   name: string;
   topic: string | null;
   kind: ChannelKind;
@@ -17,6 +23,10 @@ export interface Channel {
    *  because being addressed directly is worth interrupting someone for
    *  and ordinary chatter is not. */
   mentions?: number;
+  /** In a direct conversation, the other person. Null once their account is gone. */
+  peer?: MessageAuthor | null;
+  /** In a direct conversation, when the latest message was sent. */
+  lastMessageAt?: string | null;
 }
 
 export interface MessageAuthor {
@@ -216,10 +226,81 @@ export interface MessageReferences {
  * needs, so a client that receives a message for a document it has never seen
  * can still render the link without another request.
  */
-export type ChatEvent =
-  | { type: 'message.created'; message: Message; references: MessageReferences }
-  | { type: 'message.updated'; message: Message; references: MessageReferences }
-  | { type: 'message.deleted'; message: Message; references: MessageReferences };
+interface MessageEventFields {
+  workspaceId: string;
+  /** A direct conversation's messages reach its people wherever they are, not only where it is open. */
+  channelKind: ChannelKind;
+  message: Message;
+  references: MessageReferences;
+}
+
+export type ChatMessageEvent =
+  | ({ type: 'message.created' } & MessageEventFields)
+  | ({ type: 'message.updated' } & MessageEventFields)
+  | ({ type: 'message.deleted' } & MessageEventFields);
+
+export interface CallCaller {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+}
+
+/**
+ * Ringing for a call in a direct conversation. The call itself is an ordinary
+ * room; these only tell the other person someone is waiting in it, and tell
+ * everyone when that has been settled.
+ */
+export type CallEvent =
+  | { type: 'call.ringing'; workspaceId: string; channelId: string; caller: CallCaller; video: boolean }
+  | {
+      type: 'call.ended';
+      channelId: string;
+      reason: 'answered' | 'declined' | 'cancelled';
+      /** Who answered, declined or hung up. */
+      userId: string;
+    };
+
+/** What everyone with a workspace open hears about it. */
+export type WorkspaceEvent =
+  | { type: 'presence.changed'; workspaceId: string; userId: string; status: PresenceStatus }
+  | { type: 'channels.changed'; workspaceId: string }
+  | { type: 'members.changed'; workspaceId: string };
+
+/**
+ * Someone typing, or no longer typing, in a channel or direct conversation.
+ * Nothing about it is stored: it lasts only as long as it keeps being repeated.
+ */
+export interface TypingEvent {
+  type: 'typing';
+  workspaceId: string;
+  channelId: string;
+  user: { id: string; name: string };
+  typing: boolean;
+}
+
+export type ChatEvent = ChatMessageEvent | CallEvent | WorkspaceEvent | TypingEvent;
+
+/** How often a client repeats that someone is still typing. */
+export const TYPING_INTERVAL_MS = 3_000;
+
+/**
+ * How long a typing indicator lasts without being repeated: twice the interval,
+ * so one late update does not make it flicker, and short enough that someone
+ * who closes their laptop mid-sentence does not seem to type forever.
+ */
+export const TYPING_TIMEOUT_MS = 6_000;
+
+export const openDirectSchema = z.object({
+  userId: z.string().uuid(),
+});
+
+export const ringSchema = z.object({
+  action: z.enum(['start', 'cancel', 'answer', 'decline']),
+  video: z.boolean().default(false),
+});
+
+/** How long a call rings before it counts as unanswered. */
+export const RING_TIMEOUT_MS = 45_000;
 
 // --- references -------------------------------------------------------------
 

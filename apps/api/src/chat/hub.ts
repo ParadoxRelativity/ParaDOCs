@@ -15,39 +15,81 @@ import type { ChatEvent } from '@paradocs/shared';
 
 type Listener = (event: ChatEvent) => void;
 
-const listeners = new Map<string, Set<Listener>>();
+function audience() {
+  const listeners = new Map<string, Set<Listener>>();
 
-export function subscribeToChannel(channelId: string, listener: Listener): () => void {
-  let set = listeners.get(channelId);
-  if (!set) {
-    set = new Set();
-    listeners.set(channelId, set);
-  }
-  set.add(listener);
+  return {
+    subscribe(key: string, listener: Listener): () => void {
+      let set = listeners.get(key);
+      if (!set) {
+        set = new Set();
+        listeners.set(key, set);
+      }
+      set.add(listener);
 
-  return () => {
-    const current = listeners.get(channelId);
-    if (!current) return;
-    current.delete(listener);
-    // Drop the empty set so a workspace with thousands of dead channels does
-    // not keep an entry each.
-    if (current.size === 0) listeners.delete(channelId);
+      return () => {
+        const current = listeners.get(key);
+        if (!current) return;
+        current.delete(listener);
+        // Drop the empty set so a workspace with thousands of dead channels does
+        // not keep an entry each.
+        if (current.size === 0) listeners.delete(key);
+      };
+    },
+
+    publish(key: string, event: ChatEvent): void {
+      const set = listeners.get(key);
+      if (!set) return;
+      for (const listener of set) {
+        try {
+          listener(event);
+        } catch {
+          // One broken socket must not stop delivery to the others.
+        }
+      }
+    },
+
+    count(key: string): number {
+      return listeners.get(key)?.size ?? 0;
+    },
   };
 }
 
+/** Messages in a named channel, to everyone with it open. */
+const channels = audience();
+/** Who is around, and changes to a workspace's channels and members. */
+const workspaces = audience();
+/**
+ * What is addressed to one person — their direct messages and calls — to
+ * every window they have open, without their having to ask for it.
+ */
+const users = audience();
+
+export function subscribeToChannel(channelId: string, listener: Listener): () => void {
+  return channels.subscribe(channelId, listener);
+}
+
 export function publishToChannel(channelId: string, event: ChatEvent): void {
-  const set = listeners.get(channelId);
-  if (!set) return;
-  for (const listener of set) {
-    try {
-      listener(event);
-    } catch {
-      // One broken socket must not stop delivery to the others.
-    }
-  }
+  channels.publish(channelId, event);
+}
+
+export function subscribeToWorkspace(workspaceId: string, listener: Listener): () => void {
+  return workspaces.subscribe(workspaceId, listener);
+}
+
+export function publishToWorkspace(workspaceId: string, event: ChatEvent): void {
+  workspaces.publish(workspaceId, event);
+}
+
+export function subscribeToUser(userId: string, listener: Listener): () => void {
+  return users.subscribe(userId, listener);
+}
+
+export function publishToUser(userId: string, event: ChatEvent): void {
+  users.publish(userId, event);
 }
 
 /** Test/diagnostic helper: how many sockets are listening to a channel. */
 export function listenerCount(channelId: string): number {
-  return listeners.get(channelId)?.size ?? 0;
+  return channels.count(channelId);
 }

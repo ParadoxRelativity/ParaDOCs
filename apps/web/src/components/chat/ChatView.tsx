@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { mentions, type Channel, type Message, type MessageReferences } from '@paradocs/shared';
 import { api } from '../../api/client';
@@ -17,12 +17,14 @@ import { EmptyState, IconButton, Spinner } from '../ui';
 import { useToast } from '../Toast';
 import Avatar from '../Avatar';
 import Icon from '../Icon';
+import { ChannelSettingsDialog } from './ChannelSettingsDialog';
 import { EmojiPicker } from './EmojiPicker';
 import { MediaViewer, type ViewerItem } from './MediaViewer';
 import { MessageAttachments } from './MessageAttachments';
 import { MessageBody } from './MessageBody';
 import { MessageComposer, type ComposerHandle } from './MessageComposer';
 import { Reactions } from './Reactions';
+import { TypingIndicator } from './Typing';
 
 /** Consecutive messages from one person within this window share a header. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -31,6 +33,11 @@ function carriesFiles(e: DragEvent): boolean {
   return Array.from(e.dataTransfer.types).includes('Files');
 }
 
+/**
+ * A conversation: a text channel, or a direct conversation with one person.
+ * The two differ only at the top — a channel's name and topic, or the person
+ * and a way to call them — so the rest is shared.
+ */
 export function ChatView({
   workspaceId,
   channel,
@@ -38,11 +45,16 @@ export function ChatView({
   selfId,
   canPost,
   canModerate,
+  canEditChannel = false,
+  title,
+  actions,
+  stage,
   status,
   notifications,
   onEnableNotifications,
   onOpenDocument,
   onOpenChannel,
+  onTyping,
 }: {
   workspaceId: string;
   channel: Channel;
@@ -50,12 +62,22 @@ export function ChatView({
   selfId: string;
   canPost: boolean;
   canModerate: boolean;
+  /** Owners and admins change a channel's name and topic from its header. */
+  canEditChannel?: boolean;
+  /** Takes the place of the channel name and topic. */
+  title?: ReactNode;
+  /** Controls at the end of the header. */
+  actions?: ReactNode;
+  /** Between the header and the messages: a call in progress here. */
+  stage?: ReactNode;
   status: 'connecting' | 'connected' | 'disconnected';
   /** Whether the browser will show a mention notification. */
   notifications: 'unsupported' | 'default' | 'granted' | 'denied';
   onEnableNotifications: () => void;
   onOpenDocument: (id: string) => void;
   onOpenChannel: (id: string) => void;
+  /** Tells everyone else in a channel that you are typing there, or have stopped. */
+  onTyping?: (channelId: string, typing: boolean) => void;
 }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -70,8 +92,13 @@ export function ChatView({
   const [viewer, setViewer] = useState<{ items: ViewerItem[]; index: number } | null>(null);
   const [reacting, setReacting] = useState<{ messageId: string; anchor: HTMLElement } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [editing, setEditing] = useState(false);
   // dragenter and dragleave fire for every child crossed, so depth is counted.
   const dragDepth = useRef(0);
+
+  const direct = channel.kind === 'direct';
+  const personName = channel.peer?.name ?? 'Deleted account';
+  const target = direct ? personName : `#${channel.name}`;
 
   // Opening a channel clears its badge, and so does a message arriving while
   // you are looking at it.
@@ -161,9 +188,32 @@ export function ChatView({
       }}
     >
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-line)] px-4">
-        <span className="text-sm font-semibold">#{channel.name}</span>
-        {channel.topic && (
-          <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">{channel.topic}</span>
+        {title ?? (
+          <>
+            <span className="shrink-0 text-sm font-semibold">#{channel.name}</span>
+            {canEditChannel ? (
+              // The topic is edited where it is read, so the way to set one is
+              // right beside the name.
+              <button
+                onClick={() => setEditing(true)}
+                title="Edit the channel's name and topic"
+                className={cx(
+                  'min-w-0 truncate text-left text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]',
+                  channel.topic && 'flex-1',
+                )}
+              >
+                {channel.topic ?? (
+                  <>
+                    <Icon name="pencil" /> Add a topic
+                  </>
+                )}
+              </button>
+            ) : (
+              channel.topic && (
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">{channel.topic}</span>
+              )
+            )}
+          </>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {status !== 'connected' && (
@@ -176,11 +226,14 @@ export function ChatView({
               onClick={onEnableNotifications}
               className="rounded-md px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-line)]/50 hover:text-[var(--color-ink)]"
             >
-              <Icon name="bell" /> Notify me when mentioned
+              <Icon name="bell" /> {direct ? 'Notify me of new messages' : 'Notify me when mentioned'}
             </button>
           )}
+          {actions}
         </span>
       </header>
+
+      {stage}
 
       <div ref={scroller} onScroll={(e) => {
         const el = e.currentTarget;
@@ -189,7 +242,15 @@ export function ChatView({
         {page.isLoading ? (
           <Spinner />
         ) : messages.length === 0 ? (
-          <EmptyState icon="chat-dots" title={`#${channel.name} is quiet`} hint="Say something to start it off." />
+          direct ? (
+            <EmptyState
+              icon="chat-dots"
+              title={`This is the start of your conversation with ${personName}`}
+              hint="Only the two of you can see what is said here."
+            />
+          ) : (
+            <EmptyState icon="chat-dots" title={`#${channel.name} is quiet`} hint="Say something to start it off." />
+          )
         ) : (
           <>
             {page.data?.hasMore && (
@@ -225,6 +286,8 @@ export function ChatView({
         )}
       </div>
 
+      <TypingIndicator channelId={channel.id} />
+
       <MessageComposer
         // A draft, and the files uploaded for it, belong to one channel.
         key={channel.id}
@@ -232,8 +295,9 @@ export function ChatView({
         workspaceId={workspaceId}
         channelId={channel.id}
         channels={channels}
-        channelName={channel.name}
+        target={target}
         disabled={!canPost}
+        onTyping={onTyping ? (typing) => onTyping(channel.id, typing) : undefined}
         onSend={async (input) => {
           await send.mutateAsync(input);
         }}
@@ -243,7 +307,7 @@ export function ChatView({
         <div className="pointer-events-none absolute inset-2 z-30 grid place-items-center rounded-xl border-2 border-dashed border-[var(--color-accent)] bg-[var(--color-raised)]/85">
           <div className="text-center">
             <Icon name="cloud-arrow-up" className="text-3xl text-[var(--color-accent)]" />
-            <p className="mt-2 text-sm font-medium">Drop to share in #{channel.name}</p>
+            <p className="mt-2 text-sm font-medium">{direct ? `Drop to share with ${personName}` : `Drop to share in ${target}`}</p>
           </div>
         </div>
       )}
@@ -273,6 +337,10 @@ export function ChatView({
           }}
           onClose={() => setReacting(null)}
         />
+      )}
+
+      {editing && (
+        <ChannelSettingsDialog workspaceId={workspaceId} channel={channel} onClose={() => setEditing(false)} />
       )}
     </div>
   );

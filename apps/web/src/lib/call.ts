@@ -23,15 +23,22 @@ import {
 
 export type CallStatus = 'idle' | 'joining' | 'joined';
 
+export interface JoinOptions {
+  /** Turns the camera on once connected, for a video call. */
+  video?: boolean;
+  /** Runs once the room is joined, such as ringing the person being called. */
+  onJoined?: () => void;
+}
+
 export interface Call {
-  /** The voice channel currently connected to, or being connected to. */
+  /** The voice channel or direct conversation currently connected to, or being connected to. */
   channelId: string | null;
   status: CallStatus;
   participants: Participant[];
   mic: boolean;
   camera: boolean;
   screen: boolean;
-  join: (channelId: string) => void;
+  join: (channelId: string, options?: JoinOptions) => void;
   leave: () => void;
   toggle: (kind: 'mic' | 'camera' | 'screen') => void;
 }
@@ -221,7 +228,7 @@ export function useCall(): Call {
   }, [applyInputGain, enqueue]);
 
   const join = useCallback(
-    (nextChannelId: string) => {
+    (nextChannelId: string, options: JoinOptions = {}) => {
       void (async () => {
         // Clicking the channel you are already in is not a request to rejoin.
         if (roomRef.current && channelId === nextChannelId) return;
@@ -277,8 +284,20 @@ export function useCall(): Call {
             setMic(false);
             toast('Joined without a microphone. Check the permission to speak.', 'error');
           }
+          // The same goes for a camera on a video call: better to be heard
+          // without it than kept out.
+          if (options.video) {
+            try {
+              await room.localParticipant.setCameraEnabled(true);
+              setCamera(true);
+            } catch {
+              setCamera(false);
+              toast('Joined without your camera. Check the permission to use it.', 'error');
+            }
+          }
           refresh();
           refreshOccupancy();
+          options.onJoined?.();
         } catch (err) {
           // The room may already be connected when something later fails, so
           // it is torn down explicitly rather than left to be collected.

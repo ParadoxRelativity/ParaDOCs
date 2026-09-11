@@ -1,5 +1,8 @@
 import { useState } from 'react';
-import type { Channel, DocumentSummary, FolderNode, Tag, User, VoiceOccupant } from '@paradocs/shared';
+import type { Channel, DocumentSummary, FolderNode, PresenceStatus, Tag, User, VoiceOccupant } from '@paradocs/shared';
+import { AppLauncher, type AppEntry } from './AppLauncher';
+import { Popover } from './Popover';
+import { PresenceAvatar, STATUS_LABEL, StatusMenu } from './Presence';
 import {
   useCreateDocument,
   useCreateFolder,
@@ -50,6 +53,12 @@ interface Props {
   section: 'docs' | 'chat';
   onSelectSection: (section: 'docs' | 'chat') => void;
   channels: Channel[];
+  /** The signed-in person's direct conversations, most recent first. */
+  directs: Channel[];
+  /** Who is around, keyed by user id. */
+  presence: Record<string, PresenceStatus>;
+  /** Your own status, shown on your picture at the foot of the sidebar. */
+  selfStatus: PresenceStatus;
   activeChannelId: string | null;
   onSelectChannel: (id: string) => void;
   canManageChannels: boolean;
@@ -60,7 +69,9 @@ interface Props {
   connectedChannelId: string | null;
   /** The call in progress, shown as a bar above the footer. Null when idle. */
   callBar: {
+    /** The voice channel's name, or the person in a direct call. */
     channelName: string;
+    direct: boolean;
     connecting: boolean;
     mic: boolean;
     onToggleMic: () => void;
@@ -179,21 +190,24 @@ export default function LeftSidebar(props: Props) {
         )}
       </div>
 
-      {/* Knowledge base / chat */}
-      <div className="flex gap-1 border-b border-[var(--color-line)] p-2">
-        <SectionTab
-          active={props.section === 'docs'}
-          label="Docs"
-          icon="journals"
-          onClick={() => props.onSelectSection('docs')}
-        />
-        <SectionTab
-          active={props.section === 'chat'}
-          label="Chat"
-          icon="chat-dots"
-          badge={props.unreadTotal}
-          mentions={props.mentionTotal}
-          onClick={() => props.onSelectSection('chat')}
+      {/* Which app the sidebar is showing. Adding one to this list is all it
+          takes: the launcher lays out however many there are. */}
+      <div className="border-b border-[var(--color-line)] p-2">
+        <AppLauncher
+          apps={
+            [
+              { id: 'docs', label: 'Docs', icon: 'journals' },
+              {
+                id: 'chat',
+                label: 'Chat',
+                icon: 'chat-dots',
+                badge: props.unreadTotal,
+                mentions: props.mentionTotal,
+              },
+            ] satisfies AppEntry[]
+          }
+          currentId={props.section}
+          onSelect={(id) => props.onSelectSection(id as 'docs' | 'chat')}
         />
       </div>
 
@@ -201,6 +215,8 @@ export default function LeftSidebar(props: Props) {
         <ChannelList
           workspaceId={workspaceId}
           channels={props.channels}
+          directs={props.directs}
+          presence={props.presence}
           activeChannelId={props.activeChannelId}
           canManage={props.canManageChannels}
           voiceEnabled={props.voiceEnabled}
@@ -308,7 +324,10 @@ export default function LeftSidebar(props: Props) {
             title={`Open ${props.callBar.channelName}`}
           >
             <span className="font-medium">{props.callBar.connecting ? 'Connecting…' : 'In call'}</span>
-            <span className="text-[var(--color-muted)]"> · <Icon name="volume-up" /> {props.callBar.channelName}</span>
+            <span className="text-[var(--color-muted)]">
+              {' · '}
+              <Icon name={props.callBar.direct ? 'telephone' : 'volume-up'} /> {props.callBar.channelName}
+            </span>
           </button>
           <IconButton
             label={props.callBar.mic ? 'Mute' : 'Unmute'}
@@ -322,22 +341,12 @@ export default function LeftSidebar(props: Props) {
         </div>
       )}
 
-      {/* Footer */}
-      <div className="flex items-center gap-1 border-t border-[var(--color-line)] p-2">
-        <Button
-          variant="ghost"
-          className="min-w-0 flex-1 justify-start text-xs"
-          title="Settings"
-          onClick={() => props.onOpenSettings('account')}
-        >
-          <Avatar name={props.user.name} url={props.user.avatarUrl} seed={props.user.id} size="sm" />
-          <span className="min-w-0 flex-1 truncate text-left">{props.user.name}</span>
-          <Icon name="gear" className="text-[var(--color-muted)]" />
-        </Button>
-        <IconButton label="Sign out" onClick={props.onSignOut}>
-          <Icon name="box-arrow-right" />
-        </IconButton>
-      </div>
+      <AccountFooter
+        user={props.user}
+        status={props.selfStatus}
+        onOpenSettings={() => props.onOpenSettings('account')}
+        onSignOut={props.onSignOut}
+      />
 
       {workspaceDialogOpen && (
         <NewWorkspaceDialog
@@ -707,46 +716,50 @@ function OtherConnection({ connection, onChosen }: { connection: DesktopConnecti
   );
 }
 
-function SectionTab({
-  active,
-  label,
-  icon,
-  badge,
-  mentions = 0,
-  onClick,
+/**
+ * The signed-in account at the foot of the sidebar. The picture carries your
+ * status and opens the menu to change it; the name opens Settings.
+ */
+function AccountFooter({
+  user,
+  status,
+  onOpenSettings,
+  onSignOut,
 }: {
-  active: boolean;
-  label: string;
-  icon: IconName;
-  badge?: number;
-  mentions?: number;
-  onClick: () => void;
+  user: User;
+  status: PresenceStatus;
+  onOpenSettings: () => void;
+  onSignOut: () => void;
 }) {
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+
   return (
-    <button
-      onClick={onClick}
-      className={cx(
-        'flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
-        active ? 'bg-[var(--color-line)]/70 font-medium' : 'text-[var(--color-muted)] hover:bg-[var(--color-line)]/40',
-      )}
-    >
-      <Icon name={icon} />
-      <span>{label}</span>
-      {/* Unread only matters when you are not already looking at chat, and a
-          mention outranks it. */}
-      {!active && mentions > 0 ? (
-        <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
-          @{mentions > 99 ? '99+' : mentions}
+    <div className="flex items-center gap-1 border-t border-[var(--color-line)] p-2">
+      <button
+        onClick={(e) => setMenuAnchor(menuAnchor ? null : e.currentTarget)}
+        aria-expanded={menuAnchor !== null}
+        aria-label={`Status: ${STATUS_LABEL[status]}. Change your status`}
+        title="Set your status"
+        className="grid shrink-0 place-items-center rounded-full p-1 hover:bg-[var(--color-line)]/50"
+      >
+        <PresenceAvatar name={user.name} url={user.avatarUrl} seed={user.id} size="md" status={status} />
+      </button>
+      <Button variant="ghost" className="min-w-0 flex-1 justify-start text-xs" title="Settings" onClick={onOpenSettings}>
+        <span className="min-w-0 flex-1 text-left leading-tight">
+          <span className="block truncate">{user.name}</span>
+          <span className="block truncate text-[10px] text-[var(--color-muted)]">{STATUS_LABEL[status]}</span>
         </span>
-      ) : (
-        !active &&
-        badge !== undefined &&
-        badge > 0 && (
-          <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[11px] font-semibold text-white">
-            {badge > 99 ? '99+' : badge}
-          </span>
-        )
+        <Icon name="gear" className="text-[var(--color-muted)]" />
+      </Button>
+      <IconButton label="Sign out" onClick={onSignOut}>
+        <Icon name="box-arrow-right" />
+      </IconButton>
+
+      {menuAnchor && (
+        <Popover anchor={menuAnchor} placement="above" onClose={() => setMenuAnchor(null)} className="w-72 p-1.5">
+          <StatusMenu onChosen={() => setMenuAnchor(null)} />
+        </Popover>
       )}
-    </button>
+    </div>
   );
 }

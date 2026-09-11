@@ -5,6 +5,12 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess, roleAtLeast, workspaceRole, type Role } from '../plugins/session.js';
+import { publishToWorkspace } from '../chat/hub.js';
+
+/** Everyone with the workspace open refreshes who is in it. */
+function membersChanged(workspaceId: string): void {
+  publishToWorkspace(workspaceId, { type: 'members.changed', workspaceId });
+}
 
 /** Owners must never be able to remove the last owner from a workspace. */
 async function countOwners(workspaceId: string): Promise<number> {
@@ -58,6 +64,7 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
           RETURNING user_id AS "userId", role`,
         [req.params.id, req.params.userId, input.role],
       );
+      membersChanged(req.params.id);
       return rows[0];
     },
   );
@@ -82,6 +89,7 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
         req.params.id,
         req.params.userId,
       ]);
+      membersChanged(req.params.id);
       reply.status(204);
     },
   );
@@ -226,6 +234,7 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
+    membersChanged(invite.workspace_id);
     return { workspaceId: invite.workspace_id, role: invite.role, alreadyMember: false };
   });
 };

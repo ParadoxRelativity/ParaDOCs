@@ -183,7 +183,10 @@ export interface InviteNotification {
 /** A channel with messages you have not read, summarised by the newest one. */
 export interface MessageNotification {
   channelId: string;
+  /** For a direct conversation, the other person's name. */
   channelName: string;
+  /** A direct conversation: every message in it is addressed to you. */
+  direct: boolean;
   workspace: NotificationWorkspace;
   unread: number;
   /** How many of the unread messages name you. */

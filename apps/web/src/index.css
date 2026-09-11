@@ -74,6 +74,29 @@ body {
   }
 }
 
+/* The three dots beside "is typing". */
+@keyframes paradocs-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+.paradocs-typing-dot {
+  animation: paradocs-typing 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .paradocs-typing-dot {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* BlockNote inside a canvas card. Page-scale typography would make a card
    unreadable, so the whole embedded editor is stepped down a size. */
 .paradocs-embedded-doc .bn-editor {

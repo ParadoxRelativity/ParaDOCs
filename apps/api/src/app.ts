@@ -24,6 +24,8 @@ import { uploadRoutes } from './routes/uploads.js';
 import { inviteRoutes, memberRoutes } from './routes/members.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { oidcRoutes } from './routes/oidc.js';
+import { directRoutes } from './routes/direct.js';
+import { presenceRoutes } from './routes/presence.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -98,6 +100,8 @@ export async function buildApp() {
     tagRoutes,
     commentRoutes,
     channelRoutes,
+    directRoutes,
+    presenceRoutes,
     voiceRoutes,
     eventRoutes,
     uploadRoutes,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import type { User } from '@paradocs/shared';
+import type { Channel, PresenceStatus, User } from '@paradocs/shared';
 import {
   useDeleteDocument,
   useDocument,
@@ -11,6 +11,10 @@ import {
   useUpdateDocument,
   useWorkspaces,
   useChannels,
+  useDirectConversations,
+  useOpenDirect,
+  usePresence,
+  usePresenceSettings,
   useVoiceConfig,
   useVoiceParticipants,
   type DocumentPatch,
@@ -32,7 +36,14 @@ import SearchPalette from './components/SearchPalette';
 import { ChatView } from './components/chat/ChatView';
 import { useChatEvents } from './lib/chatEvents';
 import { VoiceRoom } from './components/chat/VoiceRoom';
+import { CallStage } from './components/chat/CallStage';
+import { MemberList } from './components/chat/MemberList';
+import { IncomingCallCard } from './components/chat/IncomingCall';
+import { DirectCallActions, DirectTitle } from './components/chat/DirectHeader';
 import { useCall } from './lib/call';
+import { useDirectCalls } from './lib/directCalls';
+import { effectiveStatus, useIdle } from './lib/idle';
+import { useToast } from './components/Toast';
 import { EmptyState, IconButton, Spinner } from './components/ui';
 import Icon from './components/Icon';
 
@@ -91,6 +102,11 @@ function FirstWorkspaceRedirect() {
   return <Navigate to={`/w/${first.id}`} replace />;
 }
 
+/** A channel's name, or for a direct conversation, the other person's. */
+function conversationName(channel: Channel): string {
+  return channel.kind === 'direct' ? (channel.peer?.name ?? 'Deleted account') : channel.name;
+}
+
 function Workspace({
   user,
   allDocuments = false,
@@ -104,6 +120,7 @@ function Workspace({
   const { workspaceId = '', documentId, channelId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const workspaces = useWorkspaces();
   const workspace = workspaces.data?.find((w) => w.id === workspaceId);
@@ -113,16 +130,43 @@ function Workspace({
   const canManageChannels = workspace ? workspace.role === 'owner' || workspace.role === 'admin' : false;
   const channels = useChannels(workspaceId);
   const channelList = channels.data ?? [];
-  const activeChannel = channelList.find((c) => c.id === channelId);
-  const unreadTotal = channelList.reduce((total, c) => total + (c.unread ?? 0), 0);
-  const mentionTotal = channelList.reduce((total, c) => total + (c.mentions ?? 0), 0);
+  // Direct conversations are channels too, listed apart and only to the people in them.
+  const directs = useDirectConversations(workspaceId);
+  const directList = directs.data ?? [];
+  const findConversation = (id: string | null | undefined) =>
+    id ? (channelList.find((c) => c.id === id) ?? directList.find((c) => c.id === id)) : undefined;
+  const activeChannel = findConversation(channelId);
+  const directUnread = directList.reduce((total, c) => total + (c.unread ?? 0), 0);
+  const unreadTotal = channelList.reduce((total, c) => total + (c.unread ?? 0), 0) + directUnread;
+  // Everything said in a direct conversation is said to you, so it counts the
+  // way a mention does.
+  const mentionTotal = channelList.reduce((total, c) => total + (c.mentions ?? 0), 0) + directUnread;
   const voice = useVoiceConfig();
+  const voiceEnabled = voice.data?.enabled ?? false;
   // The call belongs to the session, not to the view: clicking a voice channel
   // joins it, and it keeps running while you read a document or move around.
   const call = useCall();
-  const callChannel = channelList.find((c) => c.id === call.channelId);
+  const callChannel = findConversation(call.channelId);
   // Only polled while chat is open; a document reader has no use for it.
-  const voiceParticipants = useVoiceParticipants(workspaceId, chat && (voice.data?.enabled ?? false));
+  const voiceParticipants = useVoiceParticipants(workspaceId, chat && voiceEnabled);
+
+  const presence = usePresence(workspaceId);
+  const presenceMap = presence.data ?? {};
+  const presenceSettings = usePresenceSettings();
+  const chosenStatus = presenceSettings.data?.status ?? 'online';
+  const idle = useIdle(presenceSettings.data?.awayAfterMinutes ?? 10, call.status === 'joined');
+  const selfStatus = effectiveStatus(chosenStatus, idle);
+  const statusOf = (id: string | undefined): PresenceStatus =>
+    !id ? 'offline' : id === userId ? selfStatus : (presenceMap[id] ?? 'offline');
+  // Busy mutes what would otherwise interrupt: notifications and ringing.
+  const quiet = chosenStatus === 'busy';
+
+  const directCalls = useDirectCalls({
+    call,
+    muted: quiet,
+    onAccepted: (incoming) => navigate(`/w/${incoming.workspaceId}/c/${incoming.channelId}`),
+  });
+
   // Chat's socket lives here, not in the chat view: a mention has to reach you
   // while you are reading a document or sitting in another channel.
   const chatEvents = useChatEvents({
@@ -130,8 +174,17 @@ function Workspace({
     channels: channelList,
     selfId: userId,
     activeChannelId: chat ? (channelId ?? null) : null,
-    onNotifyClick: (id) => navigate(`/w/${workspaceId}/c/${id}`),
+    idle,
+    quiet,
+    onNotifyClick: (targetWorkspaceId, id) => navigate(`/w/${targetWorkspaceId}/c/${id}`),
+    onCallEvent: (event) => {
+      // A call can be the first anyone hears of a conversation.
+      if (event.type === 'call.ringing') void queryClient.invalidateQueries({ queryKey: ['directs'] });
+      directCalls.handleEvent(event);
+    },
   });
+
+  const openDirect = useOpenDirect(workspaceId);
 
   const document = useDocument(documentId);
   const updateDocument = useUpdateDocument(workspaceId, documentId ?? '');
@@ -140,6 +193,7 @@ function Workspace({
 
   const [leftOpen, setLeftOpen] = useLocalStorage('paradocs.leftOpen', true);
   const [rightOpen, setRightOpen] = useLocalStorage('paradocs.rightOpen', true);
+  const [membersOpen, setMembersOpen] = useLocalStorage('paradocs.membersOpen', true);
   const [rightTab, setRightTab] = useLocalStorage<RightTab>('paradocs.rightTab', 'toc');
   const [theme, setTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -209,6 +263,23 @@ function Workspace({
 
   const patch = useCallback((p: DocumentPatch) => updateDocument.mutate(p), [updateDocument]);
 
+  /** Opens the conversation with someone, starting it if need be. */
+  async function messageMember(memberId: string): Promise<Channel | null> {
+    try {
+      const conversation = await openDirect.mutateAsync(memberId);
+      navigate(`/w/${workspaceId}/c/${conversation.id}`);
+      return conversation;
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not open the conversation', 'error');
+      return null;
+    }
+  }
+
+  async function callMember(memberId: string, video: boolean) {
+    const conversation = await messageMember(memberId);
+    if (conversation) directCalls.start(conversation.id, video);
+  }
+
   // Where the chat tab lands when the URL names no channel.
   const firstChannelPath = channelList[0] ? `/w/${workspaceId}/c/${channelList[0].id}` : `/w/${workspaceId}`;
 
@@ -216,6 +287,10 @@ function Workspace({
   if (workspaces.data && !workspaces.data.some((w) => w.id === workspaceId)) {
     return <Navigate to="/" replace />;
   }
+
+  const direct = activeChannel?.kind === 'direct' ? activeChannel : null;
+  const inDirectCall = direct !== null && call.channelId === direct.id;
+  const peerName = direct?.peer?.name ?? 'them';
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -252,10 +327,13 @@ function Workspace({
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}
             channels={channelList}
+            directs={directList}
+            presence={presenceMap}
+            selfStatus={selfStatus}
             activeChannelId={channelId ?? null}
             onSelectChannel={(id) => {
               // Clicking a voice channel joins it, the way it works elsewhere;
-              // a text channel is only ever opened.
+              // a text channel or direct conversation is only ever opened.
               const target = channelList.find((c) => c.id === id);
               if (target?.kind === 'voice') call.join(id);
               navigate(`/w/${workspaceId}/c/${id}`);
@@ -263,13 +341,14 @@ function Workspace({
             canManageChannels={canManageChannels}
             unreadTotal={unreadTotal}
             mentionTotal={mentionTotal}
-            voiceEnabled={voice.data?.enabled ?? false}
+            voiceEnabled={voiceEnabled}
             voiceOccupancy={voiceParticipants.data ?? {}}
             connectedChannelId={call.channelId}
             callBar={
               call.channelId
                 ? {
-                    channelName: callChannel?.name ?? 'call',
+                    channelName: callChannel ? conversationName(callChannel) : 'call',
+                    direct: callChannel?.kind === 'direct',
                     connecting: call.status === 'joining',
                     mic: call.mic,
                     onToggleMic: () => call.toggle('mic'),
@@ -290,14 +369,25 @@ function Workspace({
           <span className="min-w-0 flex-1 truncate px-2 text-sm text-[var(--color-muted)]">
             {chat
               ? activeChannel
-                ? `#${activeChannel.name}`
+                ? activeChannel.kind === 'direct'
+                  ? conversationName(activeChannel)
+                  : `#${activeChannel.name}`
                 : 'Chat'
               : allDocuments
                 ? 'All documents'
                 : (document.data?.title ?? '')}
           </span>
           <NotificationsMenu />
-          {!chat && (
+          {chat ? (
+            <IconButton
+              label={membersOpen ? 'Hide members' : 'Show members'}
+              aria-pressed={membersOpen}
+              onClick={() => setMembersOpen(!membersOpen)}
+              className={cx(membersOpen && 'text-[var(--color-ink)]')}
+            >
+              <Icon name="people" />
+            </IconButton>
+          ) : (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
                 <Icon name="search" />
@@ -332,13 +422,41 @@ function Workspace({
                 channels={channelList}
                 selfId={userId}
                 canPost={Boolean(workspace)}
-                canModerate={canManageChannels}
+                // No one moderates a conversation they are not part of.
+                canModerate={canManageChannels && !direct}
+                canEditChannel={canManageChannels && activeChannel.kind === 'text'}
+                title={direct ? <DirectTitle channel={direct} status={statusOf(direct.peer?.id)} /> : undefined}
+                actions={
+                  direct?.peer && voiceEnabled && !inDirectCall ? (
+                    <DirectCallActions name={direct.peer.name} onCall={(video) => directCalls.start(direct.id, video)} />
+                  ) : undefined
+                }
+                stage={
+                  inDirectCall ? (
+                    <div className="h-[45%] min-h-60 shrink-0 border-b border-[var(--color-line)]">
+                      <CallStage
+                        call={call}
+                        selfName={user.name}
+                        notice={
+                          directCalls.ringingOut === direct.id
+                            ? `Calling ${peerName}…`
+                            : call.participants.length <= 1
+                              ? `${peerName} is not in the call`
+                              : null
+                        }
+                      />
+                    </div>
+                  ) : undefined
+                }
                 status={chatEvents.status}
                 notifications={chatEvents.permission}
                 onEnableNotifications={chatEvents.requestPermission}
+                onTyping={chatEvents.sendTyping}
                 onOpenDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
                 onOpenChannel={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
               />
+            ) : channelId && directs.isLoading ? (
+              <Spinner />
             ) : (
               <EmptyState
                 icon="chat-dots"
@@ -383,30 +501,51 @@ function Workspace({
         </div>
       </main>
 
-      <aside
-        className={cx(
-          'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
-          rightOpen && !chat ? 'w-72' : 'w-0',
-        )}
-      >
-        <div className="h-full w-72">
-          <RightSidebar
-            tab={rightTab}
-            onTabChange={setRightTab}
-            doc={document.data}
-            liveBlocks={liveBlocks}
-            workspaceId={workspaceId}
-            currentUserId={userId}
-            onPatch={patch}
-            onDelete={() => {
-              if (!documentId) return;
-              deleteDocument.mutate(documentId);
-              navigate(`/w/${workspaceId}`);
-            }}
-            onOpenJournal={(date) => setJournalDate(date)}
-          />
-        </div>
-      </aside>
+      {/* Chat has no document details to show; who is around takes that side instead. */}
+      {chat ? (
+        <aside
+          className={cx(
+            'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
+            membersOpen ? 'w-60' : 'w-0',
+          )}
+        >
+          <div className="h-full w-60">
+            <MemberList
+              workspaceId={workspaceId}
+              presence={presenceMap}
+              selfStatus={selfStatus}
+              voiceEnabled={voiceEnabled}
+              onMessage={(id) => void messageMember(id)}
+              onCall={(id, video) => void callMember(id, video)}
+            />
+          </div>
+        </aside>
+      ) : (
+        <aside
+          className={cx(
+            'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
+            rightOpen ? 'w-72' : 'w-0',
+          )}
+        >
+          <div className="h-full w-72">
+            <RightSidebar
+              tab={rightTab}
+              onTabChange={setRightTab}
+              doc={document.data}
+              liveBlocks={liveBlocks}
+              workspaceId={workspaceId}
+              currentUserId={userId}
+              onPatch={patch}
+              onDelete={() => {
+                if (!documentId) return;
+                deleteDocument.mutate(documentId);
+                navigate(`/w/${workspaceId}`);
+              }}
+              onOpenJournal={(date) => setJournalDate(date)}
+            />
+          </div>
+        </aside>
+      )}
 
       {settingsSection && workspace && (
         <SettingsDialog
@@ -439,6 +578,15 @@ function Workspace({
             setActiveTagIds([]);
           }}
           onSelect={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
+        />
+      )}
+
+      {directCalls.incoming && (
+        <IncomingCallCard
+          incoming={directCalls.incoming}
+          inCall={call.channelId !== null}
+          onAccept={directCalls.accept}
+          onDecline={directCalls.decline}
         />
       )}
     </div>

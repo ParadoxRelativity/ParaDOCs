@@ -148,9 +148,12 @@ export default function NotificationsMenu() {
   }
 
   const count = groups.reduce((total, group) => total + countOf(group.notifications), 0);
-  // Being named, or invited, is worth a louder badge than ordinary chatter.
+  // Being named, messaged directly, or invited is worth a louder badge than
+  // ordinary chatter.
   const urgent = groups.some(
-    (group) => group.notifications.invites.length > 0 || group.notifications.messages.some((m) => m.mentions > 0),
+    (group) =>
+      group.notifications.invites.length > 0 ||
+      group.notifications.messages.some((m) => m.mentions > 0 || m.direct),
   );
 
   return (
@@ -291,7 +294,9 @@ function MessageRow({ message, onOpen }: { message: MessageNotification; onOpen:
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
-          <span className="truncate font-medium text-[var(--color-ink)]">#{message.channelName}</span>
+          <span className="truncate font-medium text-[var(--color-ink)]">
+            {message.direct ? message.channelName : `#${message.channelName}`}
+          </span>
           <span className="truncate">{message.workspace.name}</span>
           <span className="ml-auto shrink-0">{formatRelative(latest.createdAt)}</span>
         </div>

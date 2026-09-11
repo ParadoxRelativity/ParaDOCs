@@ -1,9 +1,11 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
-import type { VoiceOccupant } from '@paradocs/shared';
+import { ringSchema, type VoiceOccupant } from '@paradocs/shared';
 import { query, type DbClient } from '../db/pool.js';
-import { badRequest, notFound } from '../lib/http.js';
+import { badRequest, notFound, parse } from '../lib/http.js';
+import { channelAccessFor, channelParticipants } from '../lib/channels.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
+import { publishToUser } from '../chat/hub.js';
 import { config } from '../config.js';
 
 /**
@@ -122,25 +124,21 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * Mints a LiveKit access token for one voice channel.
+   * Mints a LiveKit access token for a voice channel or a direct conversation.
    *
    * The room is the channel id, so a room can only be joined by someone the
-   * membership check below lets through — the token is the only way in, and it
-   * is scoped to exactly that room. Identity is the user id so LiveKit's own
+   * access check below lets through — the token is the only way in, and it is
+   * scoped to exactly that room. For a direct conversation that check admits
+   * only the two people in it. Identity is the user id so LiveKit's own
    * participant list lines up with ours, and a second tab replaces the first
    * rather than appearing twice.
    */
   app.post<{ Params: { id: string } }>('/channels/:id/call', async (req) => {
     if (!voiceEnabled()) throw badRequest('This server has no voice service configured');
 
-    const { rows } = await query<{ workspace_id: string; kind: string; name: string }>(
-      'SELECT workspace_id, kind, name FROM channels WHERE id = $1',
-      [req.params.id],
-    );
-    const channel = rows[0];
-    if (!channel) throw notFound('Channel not found');
-    if (channel.kind !== 'voice') throw badRequest('That channel is not a voice channel');
-    await assertWorkspaceAccess(req, channel.workspace_id);
+    const access = await channelAccessFor(req.user!.id, req.params.id);
+    if (!access) throw notFound('Channel not found');
+    if (access.kind !== 'voice' && access.kind !== 'direct') throw badRequest('That channel is not a voice channel');
 
     const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
       identity: req.user!.id,
@@ -163,7 +161,47 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
       url: signallingUrl(req),
       token: await token.toJwt(),
       room: req.params.id,
-      channelName: channel.name,
+      channelName: access.name,
     };
+  });
+
+  /**
+   * Rings the other person in a direct conversation, or settles a ring.
+   *
+   * The call itself is an ordinary room; ringing is only how the other person
+   * learns someone is waiting in it. It travels over each person's chat
+   * sockets, so every window they have open rings, and answering or declining
+   * in one quiets the rest.
+   */
+  app.post<{ Params: { id: string } }>('/channels/:id/ring', async (req, reply) => {
+    const input = parse(ringSchema, req.body);
+    const access = await channelAccessFor(req.user!.id, req.params.id);
+    if (!access) throw notFound('Channel not found');
+    if (access.kind !== 'direct') throw badRequest('Only a direct conversation can ring');
+
+    const self = req.user!;
+    const participants = await channelParticipants(req.params.id);
+
+    if (input.action === 'start') {
+      if (!voiceEnabled()) throw badRequest('This server has no voice service configured');
+      for (const userId of participants) {
+        if (userId === self.id) continue;
+        publishToUser(userId, {
+          type: 'call.ringing',
+          workspaceId: access.workspaceId,
+          channelId: req.params.id,
+          caller: { id: self.id, name: self.name, avatarUrl: self.avatarUrl },
+          video: input.video === true,
+        });
+      }
+    } else {
+      const reason = input.action === 'cancel' ? 'cancelled' : input.action === 'answer' ? 'answered' : 'declined';
+      // Everyone in the conversation hears this: the caller learns the answer,
+      // and the other windows of whoever was rung stop ringing.
+      for (const userId of participants) {
+        publishToUser(userId, { type: 'call.ended', channelId: req.params.id, reason, userId: self.id });
+      }
+    }
+    reply.status(204);
   });
 };

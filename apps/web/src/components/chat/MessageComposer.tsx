@@ -21,6 +21,7 @@ import {
 import { api } from '../../api/client';
 import { useAllDocuments, useMembers, useUploadConfig } from '../../api/hooks';
 import { uploadChatFile } from '../../lib/chatFiles';
+import { useTypingReporter } from '../../lib/typing';
 import { replaceShortcodes, searchEmoji, type EmojiOption } from '../../lib/emoji';
 import { cx, formatBytes } from '../../lib/util';
 import Icon, { DocumentIcon } from '../Icon';
@@ -101,11 +102,14 @@ export const MessageComposer = forwardRef<
     workspaceId: string;
     channelId: string;
     channels: Channel[];
-    channelName: string;
+    /** Where the message goes, as the placeholder says it: "#general", or a person's name. */
+    target: string;
     disabled?: boolean;
     onSend: (input: { body: string; attachmentIds: string[] }) => Promise<void>;
+    /** Tells the others here that you are typing, or have stopped. */
+    onTyping?: (typing: boolean) => void;
   }
->(function MessageComposer({ workspaceId, channelId, channels, channelName, disabled, onSend }, ref) {
+>(function MessageComposer({ workspaceId, channelId, channels, target, disabled, onSend, onTyping }, ref) {
   const [value, setValue] = useState('');
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [highlighted, setHighlighted] = useState(0);
@@ -219,8 +223,11 @@ export const MessageComposer = forwardRef<
 
   useImperativeHandle(ref, () => ({ addFiles }));
 
+  const typing = useTypingReporter(disabled ? undefined : onTyping);
+
   function sync(next: string, caret: number) {
     setValue(next);
+    typing.changed(next);
     const found = findTrigger(next, caret);
     setTrigger(found);
     setHighlighted(0);
@@ -369,6 +376,7 @@ export const MessageComposer = forwardRef<
     setPending([]);
     setTrigger(null);
     picked.current = [];
+    typing.sent();
     sending.current = true;
     try {
       await onSend({ body, attachmentIds: ready.map((p) => p.attachment!.id) });
@@ -489,7 +497,7 @@ export const MessageComposer = forwardRef<
             placeholder={
               disabled
                 ? 'You cannot post here'
-                : `Message #${channelName}   —   @ someone, # a channel, [[ a document, : an emoji`
+                : `Message ${target}   —   @ someone, # a channel, [[ a document, : an emoji`
             }
             onChange={(e) => sync(e.target.value, e.target.selectionStart)}
             onKeyDown={onKeyDown}

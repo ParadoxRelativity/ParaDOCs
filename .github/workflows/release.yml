@@ -34,7 +34,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+      # electron's postinstall downloads the Electron binary from GitHub, which
+      # typechecking never runs (the types ship in the npm package) and which
+      # fails the whole job whenever that download drops a connection.
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
 
       # A tag that disagrees with package.json is the quiet failure worth
@@ -76,7 +81,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      # electron-builder downloads its own Electron for each target architecture,
+      # so the binary electron's postinstall fetches would go unused.
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - name: Build web client
         run: npm run build --workspace=@paradocs/web
       - name: Bundle desktop main process
