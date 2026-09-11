@@ -4,6 +4,11 @@
 # installers, together with the latest*.yml manifests the auto-updater reads,
 # to a DRAFT GitHub Release. Publishing that draft is a deliberate second step,
 # because publishing is what makes every installed client start updating.
+#
+# The same tag also builds the server image and pushes it as X.Y.Z, X.Y and
+# latest to the GitHub Container Registry (ghcr.io/<owner>/<repo>) and, when
+# Docker Hub credentials are configured, to Docker Hub
+# (paradoxrelativity/paradocs).
 name: Release
 
 on:
@@ -122,3 +127,90 @@ jobs:
         run: npx electron-builder ${{ matrix.flag }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image:
+    name: Server image
+    needs: verify
+    runs-on: ubuntu-latest
+    # Replaces the workflow's permissions for this job only: pushing an image
+    # needs packages, and nothing here needs to write to the repository.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # The Docker Hub repository the image is pushed to, alongside ghcr.io.
+      DOCKERHUB_IMAGE: docker.io/paradoxrelativity/paradocs
+    steps:
+      - uses: actions/checkout@v4
+
+      # Registry paths must be lowercase, and this repository's name is not.
+      #
+      # Docker Hub is optional, the same way signing is: a fork, or this
+      # repository before its secrets are added, still publishes to ghcr.io
+      # rather than failing the release, and the run carries a warning saying
+      # Docker Hub was skipped.
+      - name: Image names
+        id: image
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          names="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            names="$names,$DOCKERHUB_IMAGE"
+            echo "dockerhub=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing to ghcr.io and Docker Hub."
+          else
+            echo "dockerhub=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set, so the image is published to ghcr.io only."
+          fi
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+
+      # arm64 alongside amd64, for Raspberry Pis, ARM VPSes and the NAS boxes
+      # people self-host on. The Dockerfile builds the web client natively and
+      # only installs runtime dependencies per architecture, so emulation is
+      # confined to the short part of the build.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No registry given means Docker Hub. The token needs Read & Write access.
+      - name: Log in to Docker Hub
+        if: steps.image.outputs.dockerhub == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # A tag produces 1.2.3, 1.2 and latest. A manual run produces only
+      # sha-<commit>, so a build can be tried on a test server without moving
+      # anything people deploy from. Every tag is applied in each registry, so
+      # one build is pushed to both.
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.names }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+          flavor: |
+            latest=auto
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

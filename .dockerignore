@@ -17,6 +17,10 @@ apps/web/dist
 apps/desktop
 !apps/desktop/package.json
 
+# A local code index. It changes constantly, so it would also invalidate the
+# build cache on every run, and it has no business in an image layer.
+.codegraph
+
 # Local runtime state: uploaded files live in a volume, not the image.
 data
 
