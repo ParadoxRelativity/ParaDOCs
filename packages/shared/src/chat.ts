@@ -185,6 +185,30 @@ export function collectReferences(bodies: string[]): {
   return { documentIds: [...documentIds], channelIds: [...channelIds], userIds: [...userIds] };
 }
 
+/**
+ * A message body as plain text, for places markup cannot go — a notification,
+ * a preview line. References read as the names they resolve to, not raw tokens.
+ */
+export function messagePreview(body: string, references: MessageReferences): string {
+  const documents = new Map(references.documents.map((d) => [d.id, d]));
+  const channels = new Map(references.channels.map((c) => [c.id, c]));
+  const members = new Map(references.members.map((m) => [m.id, m]));
+
+  return parseMessage(body)
+    .map((segment) => {
+      if (segment.type === 'text') return segment.value;
+      if (segment.type === 'document') return documents.get(segment.id)?.title ?? 'a document';
+      if (segment.type === 'channel') {
+        const channel = channels.get(segment.id);
+        return channel ? `#${channel.name}` : 'a channel';
+      }
+      const member = members.get(segment.id);
+      return member ? `@${member.name}` : '@someone';
+    })
+    .join('')
+    .trim();
+}
+
 /** True when the message mentions this person; used to highlight it for them. */
 export function mentions(body: string, userId: string): boolean {
   return parseMessage(body).some((segment) => segment.type === 'member' && segment.id === userId.toLowerCase());

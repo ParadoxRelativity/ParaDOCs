@@ -56,8 +56,8 @@ const builds = [
   },
   {
     ...common,
-    entryPoints: [path.join(here, 'src/preload/index.ts')],
-    outfile: path.join(dist, 'preload.cjs'),
+    entryPoints: [path.join(here, 'src/preload/client.ts')],
+    outfile: path.join(dist, 'client-preload.cjs'),
     format: 'cjs',
   },
   {
@@ -74,16 +74,6 @@ const builds = [
     format: 'iife',
     external: [],
   },
-  {
-    ...common,
-    platform: 'browser',
-    entryPoints: [path.join(here, 'src/shell/shell.ts')],
-    outfile: path.join(dist, 'shell/shell.js'),
-    format: 'iife',
-    external: [],
-    // Icons are imported as SVG markup and inlined.
-    loader: { '.svg': 'text' },
-  },
 ];
 
 function copyDir(from, to) {
@@ -93,7 +83,7 @@ function copyDir(from, to) {
 }
 
 function copyAssets() {
-  const pages = { shell: ['index.html', 'shell.css'], picker: ['index.html', 'picker.css'] };
+  const pages = { picker: ['index.html', 'picker.css'] };
   for (const [page, files] of Object.entries(pages)) {
     fs.mkdirSync(path.join(dist, page), { recursive: true });
     for (const file of files) {

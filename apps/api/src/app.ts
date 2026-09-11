@@ -20,6 +20,7 @@ import { voiceRoutes } from './routes/voice.js';
 import { eventRoutes } from './routes/events.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { inviteRoutes, memberRoutes } from './routes/members.js';
+import { notificationRoutes } from './routes/notifications.js';
 import { oidcRoutes } from './routes/oidc.js';
 
 export async function buildApp() {
@@ -86,6 +87,7 @@ export async function buildApp() {
     uploadRoutes,
     memberRoutes,
     inviteRoutes,
+    notificationRoutes,
     oidcRoutes,
   ]) {
     await app.register(routes, { prefix: '/api' });

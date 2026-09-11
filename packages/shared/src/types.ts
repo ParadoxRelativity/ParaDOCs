@@ -160,3 +160,45 @@ export interface ActivityDay {
   updated: number;
   hasJournal: boolean;
 }
+
+/** A workspace as a notification names it. */
+export interface NotificationWorkspace {
+  id: string;
+  name: string;
+  icon: string | null;
+  avatarUrl: string | null;
+}
+
+/** An invitation addressed to your email that you have not answered yet. */
+export interface InviteNotification {
+  id: string;
+  token: string;
+  role: Role;
+  invitedBy: string | null;
+  createdAt: string;
+  expiresAt: string;
+  workspace: NotificationWorkspace;
+}
+
+/** A channel with messages you have not read, summarised by the newest one. */
+export interface MessageNotification {
+  channelId: string;
+  channelName: string;
+  workspace: NotificationWorkspace;
+  unread: number;
+  /** How many of the unread messages name you. */
+  mentions: number;
+  latest: {
+    id: string;
+    /** Plain text, with references resolved to names. */
+    preview: string;
+    createdAt: string;
+    author: { id: string; name: string; avatarUrl: string | null } | null;
+  };
+}
+
+/** Everything on a server that wants the signed-in person's attention. */
+export interface Notifications {
+  invites: InviteNotification[];
+  messages: MessageNotification[];
+}

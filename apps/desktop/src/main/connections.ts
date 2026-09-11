@@ -10,6 +10,12 @@ export interface Connection {
   kind: ConnectionKind;
   /** Origin of the ParaDOCs server. Remote connections only. */
   url?: string;
+  /**
+   * The loopback port its page was served from last time. A page's storage is
+   * kept per address, port included, so reusing it is what keeps the page's
+   * saved state from one launch to the next.
+   */
+  port?: number;
 }
 
 interface ConnectionsFile {
@@ -59,7 +65,7 @@ export function addConnection(input: { label: string; kind: ConnectionKind; url?
   const file = load();
   const connection: Connection = {
     id: randomUUID(),
-    label: input.label.trim() || (input.kind === 'local' ? 'Local workspace' : 'ParaDOCs'),
+    label: input.label.trim() || (input.kind === 'local' ? 'This computer' : 'ParaDOCs'),
     kind: input.kind,
     ...(input.kind === 'remote' ? { url: normalizeServerUrl(input.url ?? '') } : {}),
   };
@@ -90,6 +96,14 @@ export function removeConnection(id: string): void {
 export function rememberLastOpened(id: string): void {
   const file = load();
   file.lastOpenedId = id;
+  save(file);
+}
+
+export function rememberPort(id: string, port: number): void {
+  const file = load();
+  const connection = file.connections.find((c) => c.id === id);
+  if (!connection) return;
+  connection.port = port;
   save(file);
 }
 

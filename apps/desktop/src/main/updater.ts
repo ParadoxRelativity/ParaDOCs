@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, BaseWindow, dialog } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import electronUpdater, { type UpdateInfo } from 'electron-updater';
@@ -31,10 +31,14 @@ export interface UpdateStatus {
   phase: UpdatePhase;
   currentVersion: string;
   newVersion?: string;
+  /** When the new version was published, as the release channel states it. */
+  releaseDate?: string;
   percent?: number;
   message?: string;
   /** Why updates are off, when they are. */
   reason?: string;
+  /** When a check last got an answer, whether or not it found anything. */
+  checkedAt?: string;
   autoDownload: boolean;
   checkOnLaunch: boolean;
 }
@@ -63,6 +67,8 @@ function setStatus(patch: Partial<UpdateStatus>): void {
 export function updateStatus(): UpdateStatus {
   return status;
 }
+
+const now = () => new Date().toISOString();
 
 /**
  * A packaged build carries app-update.yml only when it was built with a publish
@@ -117,11 +123,16 @@ export function initUpdates(): void {
   autoUpdater.on('checking-for-update', () => setStatus({ phase: 'checking', message: undefined }));
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
-    setStatus({ phase: autoUpdater.autoDownload ? 'downloading' : 'available', newVersion: info.version });
+    setStatus({
+      phase: autoUpdater.autoDownload ? 'downloading' : 'available',
+      newVersion: info.version,
+      releaseDate: info.releaseDate,
+      checkedAt: now(),
+    });
   });
 
   autoUpdater.on('update-not-available', () => {
-    setStatus({ phase: 'idle', newVersion: undefined, message: undefined });
+    setStatus({ phase: 'idle', newVersion: undefined, releaseDate: undefined, message: undefined, checkedAt: now() });
   });
 
   autoUpdater.on('download-progress', ({ percent }) => {
@@ -135,17 +146,20 @@ export function initUpdates(): void {
 
   autoUpdater.on('error', (err: Error) => {
     if (isEmptyChannel(err)) {
-      setStatus({ phase: 'idle', newVersion: undefined, message: undefined });
+      setStatus({ phase: 'idle', newVersion: undefined, message: undefined, checkedAt: now() });
       return;
     }
     setStatus({ phase: 'error', message: friendlyError(err) });
   });
 
-  if (settings.checkForUpdatesOnLaunch) {
-    // Late enough that it never competes with opening a workspace.
-    setTimeout(() => void check({ explicit: false }), 10_000).unref();
-    setInterval(() => void check({ explicit: false }), SIX_HOURS).unref();
-  }
+  // Scheduled either way and skipped when turned off at the time, so changing
+  // the setting takes effect without a restart. Late enough that the first
+  // check never competes with opening a workspace.
+  const scheduled = () => {
+    if (status.checkOnLaunch) void check({ explicit: false });
+  };
+  setTimeout(scheduled, 10_000).unref();
+  setInterval(scheduled, SIX_HOURS).unref();
 }
 
 /**
@@ -175,9 +189,14 @@ function friendlyError(err: Error): string {
   return text;
 }
 
-export async function check({ explicit }: { explicit: boolean }): Promise<UpdateStatus> {
+/**
+ * Checks the release channel. `explicit` is a person asking; `dialogs` decides
+ * whether the answer comes as dialogs, which Settings does not want because it
+ * shows the result itself.
+ */
+export async function check({ explicit, dialogs = explicit }: { explicit: boolean; dialogs?: boolean }): Promise<UpdateStatus> {
   if (!configured) {
-    if (explicit) {
+    if (explicit && dialogs) {
       await dialog.showMessageBox({
         type: 'info',
         title: 'Updates',
@@ -187,26 +206,28 @@ export async function check({ explicit }: { explicit: boolean }): Promise<Update
     }
     return status;
   }
+  // Checking again mid-download would only restart it.
+  if (status.phase === 'downloading' || status.phase === 'downloaded') return status;
 
   try {
     const result = await autoUpdater.checkForUpdates();
     const version = result?.updateInfo?.version;
 
-    if (explicit && version && version === app.getVersion()) {
+    if (explicit && dialogs && version && version === app.getVersion()) {
       await dialog.showMessageBox({
         type: 'info',
         title: 'Updates',
         message: 'ParaDOCs is up to date.',
         detail: `Version ${app.getVersion()}.`,
       });
-    } else if (explicit && version && !autoUpdater.autoDownload) {
+    } else if (explicit && dialogs && version && !autoUpdater.autoDownload) {
       await promptDownload(version);
     }
   } catch (err) {
     const empty = isEmptyChannel(err as Error);
     const message = friendlyError(err as Error);
-    setStatus(empty ? { phase: 'idle', message: undefined } : { phase: 'error', message });
-    if (explicit) {
+    setStatus(empty ? { phase: 'idle', message: undefined, checkedAt: now() } : { phase: 'error', message });
+    if (explicit && dialogs) {
       await dialog.showMessageBox({
         type: empty ? 'info' : 'warning',
         title: empty ? 'Updates' : 'Could not check for updates',
@@ -214,6 +235,18 @@ export async function check({ explicit }: { explicit: boolean }): Promise<Update
         detail: empty ? `You are running ${app.getVersion()}.` : message,
       });
     }
+  }
+  return status;
+}
+
+/** Fetches an update that was found but, by preference, not downloaded automatically. */
+export async function download(): Promise<UpdateStatus> {
+  if (!configured || status.phase !== 'available') return status;
+  try {
+    setStatus({ phase: 'downloading', percent: 0 });
+    await autoUpdater.downloadUpdate();
+  } catch (err) {
+    setStatus({ phase: 'error', message: friendlyError(err as Error) });
   }
   return status;
 }
@@ -228,11 +261,11 @@ async function promptDownload(version: string): Promise<void> {
     message: `ParaDOCs ${version} is available.`,
     detail: `You are running ${app.getVersion()}.`,
   });
-  if (response === 0) await autoUpdater.downloadUpdate();
+  if (response === 0) await download();
 }
 
 async function offerRestart(version: string): Promise<void> {
-  const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const target = BaseWindow.getFocusedWindow() ?? BaseWindow.getAllWindows()[0];
   const options = {
     type: 'info' as const,
     buttons: ['Restart now', 'Later'],

@@ -12,6 +12,7 @@ import type {
   InvitePreview,
   Message,
   MessageReferences,
+  Notifications,
   Role,
   SearchHit,
   Tag,
@@ -55,6 +56,7 @@ export const keys = {
   search: (ws: string, key: string) => ['search', ws, key] as const,
   channels: (ws: string) => ['channels', ws] as const,
   messages: (channelId: string) => ['messages', channelId] as const,
+  notifications: ['notifications'] as const,
 };
 
 // --- session ---------------------------------------------------------------
@@ -673,7 +675,43 @@ export function useMarkChannelRead(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (channelId: string) => api.post(`/channels/${channelId}/read`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.channels(workspaceId) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.channels(workspaceId) });
+      void qc.invalidateQueries({ queryKey: keys.notifications });
+    },
+  });
+}
+
+// --- notifications ---------------------------------------------------------
+
+export function useNotifications() {
+  return useQuery({
+    queryKey: keys.notifications,
+    queryFn: () => api.get<Notifications>('/notifications'),
+    // Messages in workspaces other than the one open arrive on no socket here,
+    // and invitations never do, so this is polled.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/** Marks the given channels read, or every channel when given none. */
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (channelIds?: string[]) => api.post('/notifications/read', channelIds ? { channelIds } : {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.notifications });
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+  });
+}
+
+export function useDeclineInvite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (inviteId: string) => api.post(`/notifications/invites/${inviteId}/decline`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
   });
 }
 

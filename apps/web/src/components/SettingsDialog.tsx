@@ -21,10 +21,27 @@ import Icon, { type IconName } from './Icon';
 import MembersPanel from './MembersPanel';
 import UploadsPanel from './UploadsPanel';
 import VoiceSettings from './VoiceSettings';
+import { desktop } from '../lib/desktop';
+import type { Theme } from '../lib/theme';
+import { ServersSection, UpdatesSection } from './DesktopSettings';
 import WorkspaceIcon from './WorkspaceIcon';
 
-export type SettingsSection = 'account' | 'appearance' | 'voice' | 'workspace' | 'members' | 'uploads';
-export type Theme = 'light' | 'dark' | 'system';
+export const SETTINGS_SECTIONS = [
+  'account',
+  'appearance',
+  'voice',
+  'workspace',
+  'members',
+  'uploads',
+  'servers',
+  'updates',
+] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+export function isSettingsSection(value: string): value is SettingsSection {
+  return (SETTINGS_SECTIONS as readonly string[]).includes(value);
+}
+export type { Theme } from '../lib/theme';
 
 interface Props {
   section: SettingsSection;
@@ -52,6 +69,13 @@ export default function SettingsDialog(props: Props) {
     { id: 'members', label: 'Members', icon: 'people' },
     // Storage housekeeping is an admin job, so the section is hidden otherwise.
     ...(canManageWorkspace ? [{ id: 'uploads' as const, label: 'Uploads', icon: 'paperclip' as const }] : []),
+    // The desktop app's own settings, which mean nothing in a browser.
+    ...(desktop
+      ? [
+          { id: 'servers' as const, label: 'Servers', icon: 'hdd-network' as const },
+          { id: 'updates' as const, label: 'Updates', icon: 'arrow-repeat' as const },
+        ]
+      : []),
   ];
 
   return (
@@ -108,6 +132,8 @@ export default function SettingsDialog(props: Props) {
                 Only an owner or admin can manage uploads.
               </p>
             ))}
+          {desktop && section === 'servers' && <ServersSection />}
+          {desktop && section === 'updates' && <UpdatesSection />}
         </div>
       </div>
     </Modal>

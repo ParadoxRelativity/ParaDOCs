@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { desktop } from './desktop';
 
 /**
  * Which devices a call uses, and how loud. Kept in this browser rather than on
@@ -42,6 +43,10 @@ function sanitize(raw: unknown): MediaPreferences {
 }
 
 function load(): MediaPreferences {
+  // The desktop app keeps its own copy, shared by every connection: this page's
+  // storage is one of several, and device choices belong to the machine.
+  const saved = desktop?.preferences.initial.media;
+  if (saved) return sanitize(saved);
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     return stored ? sanitize(JSON.parse(stored)) : DEFAULTS;
@@ -72,6 +77,7 @@ export function setMediaPreferences(patch: Partial<MediaPreferences>) {
   } catch {
     // Storage can be full or blocked; the choice holds for this session only.
   }
+  void desktop?.preferences.set('media', current).catch(() => {});
   emit();
 }
 
@@ -82,8 +88,21 @@ export function subscribeMediaPreferences(listener: () => void): () => void {
 
 // Another tab on this origin changed them.
 window.addEventListener('storage', (event) => {
-  if (event.key !== STORAGE_KEY) return;
-  current = load();
+  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  try {
+    current = sanitize(JSON.parse(event.newValue));
+    emit();
+  } catch {
+    // Not something this page wrote; ignore it.
+  }
+});
+
+// Another connection's page in the desktop app changed them.
+desktop?.preferences.onChanged((key, value) => {
+  if (key !== 'media') return;
+  const next = sanitize(value);
+  if (JSON.stringify(next) === JSON.stringify(current)) return;
+  current = next;
   emit();
 });
 

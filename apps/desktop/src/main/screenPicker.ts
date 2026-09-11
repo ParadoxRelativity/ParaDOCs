@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   desktopCapturer,
   systemPreferences,
+  type BaseWindow,
   type BrowserWindowConstructorOptions,
   type DesktopCapturerSource,
 } from 'electron';
@@ -63,7 +64,7 @@ function accentColor(): string {
  * and the open one brought forward.
  */
 export function pickShareSource(
-  parent: BrowserWindow | null,
+  parent: BaseWindow | null,
   { offerAudio }: { offerAudio: boolean },
 ): Promise<PickedSource | null> {
   if (openPicker && !openPicker.isDestroyed()) {

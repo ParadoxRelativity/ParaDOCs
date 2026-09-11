@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useLogin, useRegister } from '../api/hooks';
 import { ApiError } from '../api/client';
+import { desktop, requireDesktop, useDesktopConnections } from '../lib/desktop';
+import ConnectServerDialog from './ConnectServerDialog';
+import Icon from './Icon';
+import { ConfirmDialog } from './Modal';
+import { useToast } from './Toast';
 import { Button } from './ui';
 
 interface Props {
@@ -113,7 +118,71 @@ export default function AuthScreen({ allowRegistration, oidc }: Props) {
             {mode === 'login' ? 'Need an account? Register' : 'Already have an account? Sign in'}
           </button>
         )}
+
+        {desktop && <DesktopPlaces />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * In the desktop app a sign-in page belongs to one server among several, and
+ * the workspace menu that switches between them only appears once signed in.
+ * This keeps the other places, and adding one, within reach from here.
+ */
+function DesktopPlaces() {
+  const connections = useDesktopConnections();
+  const toast = useToast();
+  const [connecting, setConnecting] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const here = connections.find((c) => c.active);
+  const others = connections.filter((c) => !c.active);
+
+  async function open(id: string) {
+    const result = await requireDesktop().connections.open(id);
+    if (!result.ok) toast(result.error, 'error');
+  }
+
+  async function removeHere() {
+    setRemoving(false);
+    if (!here) return;
+    const result = await requireDesktop().connections.remove(here.id);
+    if (!result.ok) toast(result.error, 'error');
+  }
+
+  return (
+    <div className="mt-4 border-t border-[var(--color-line)] pt-4 text-xs text-[var(--color-muted)]">
+      {here?.kind === 'remote' && (
+        <p className="mb-2 truncate">
+          Signing in to <span className="text-[var(--color-ink)]">{here.url}</span>
+        </p>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {others.map((connection) => (
+          <Button key={connection.id} variant="subtle" className="text-xs" onClick={() => void open(connection.id)}>
+            <Icon name={connection.kind === 'local' ? 'laptop' : 'globe2'} /> {connection.label}
+          </Button>
+        ))}
+        <Button variant="subtle" className="text-xs" onClick={() => setConnecting(true)}>
+          <Icon name="hdd-network" /> Connect to a server
+        </Button>
+      </div>
+      {here?.kind === 'remote' && others.length > 0 && (
+        <button type="button" className="mt-3 hover:text-red-500" onClick={() => setRemoving(true)}>
+          Remove this server
+        </button>
+      )}
+
+      {connecting && <ConnectServerDialog onClose={() => setConnecting(false)} />}
+      {removing && here && (
+        <ConfirmDialog
+          title={`Remove ${here.label}?`}
+          description="It is taken off the app's list. Nothing on the server is deleted."
+          confirmLabel="Remove"
+          onConfirm={() => void removeHere()}
+          onCancel={() => setRemoving(false)}
+        />
+      )}
     </div>
   );
 }

@@ -11,6 +11,13 @@ import {
   type WorkspaceSummary,
 } from '../api/hooks';
 import { cx, useLocalStorage } from '../lib/util';
+import {
+  desktop,
+  requireDesktop,
+  useDesktopConnections,
+  useDesktopWorkspaces,
+  type DesktopConnection,
+} from '../lib/desktop';
 import { Button, IconButton, InlineIconNameForm, InlineInput, TagChip } from './ui';
 import Icon, { DocumentIcon, type IconName } from './Icon';
 import Avatar from './Avatar';
@@ -37,6 +44,8 @@ interface Props {
   onToggleTag: (id: string) => void;
   onSignOut: () => void;
   onOpenSettings: (section: SettingsSection) => void;
+  /** Desktop app only: opens the dialog for adding a server. */
+  onConnectServer?: () => void;
   /** Which half of the workspace is showing: the knowledge base, or chat. */
   section: 'docs' | 'chat';
   onSelectSection: (section: 'docs' | 'chat') => void;
@@ -77,6 +86,10 @@ export default function LeftSidebar(props: Props) {
   const toast = useToast();
 
   const current = workspaces.find((w) => w.id === workspaceId);
+  // In the desktop app the workspace menu spans every connection, not just this server.
+  const connections = useDesktopConnections();
+  const here = connections.find((c) => c.active);
+  const elsewhere = connections.filter((c) => !c.active);
 
   async function addWorkspace(name: string, icon: string | null) {
     try {
@@ -114,7 +127,8 @@ export default function LeftSidebar(props: Props) {
         </button>
 
         {switcherOpen && (
-          <div className="absolute left-2 right-2 top-full z-20 mt-1 overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] shadow-lg">
+          <div className="scroll-thin absolute left-2 right-2 top-full z-20 mt-1 max-h-[70vh] overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] shadow-lg">
+            {here && <ConnectionLabel connection={here} />}
             {workspaces.map((w) => (
               <button
                 key={w.id}
@@ -141,6 +155,26 @@ export default function LeftSidebar(props: Props) {
             >
               <Icon name="plus-lg" /> New workspace
             </button>
+            {desktop && (
+              <>
+                {elsewhere.map((connection) => (
+                  <OtherConnection
+                    key={connection.id}
+                    connection={connection}
+                    onChosen={() => setSwitcherOpen(false)}
+                  />
+                ))}
+                <button
+                  onClick={() => {
+                    setSwitcherOpen(false);
+                    props.onConnectServer?.();
+                  }}
+                  className="w-full border-t border-[var(--color-line)] px-3 py-2 text-left text-sm text-[var(--color-accent)] hover:bg-[var(--color-surface)]"
+                >
+                  <Icon name="hdd-network" /> Connect to a server…
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -617,6 +651,61 @@ function DocumentRow({
   );
 }
 
+
+function ConnectionLabel({ connection }: { connection: DesktopConnection }) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+      <Icon name={connection.kind === 'local' ? 'laptop' : 'globe2'} />
+      <span className="truncate">{connection.label}</span>
+    </div>
+  );
+}
+
+/**
+ * Another connection's workspaces, in the workspace menu. Picking one switches
+ * the window to that connection and lands on the workspace.
+ */
+function OtherConnection({ connection, onChosen }: { connection: DesktopConnection; onChosen: () => void }) {
+  const listing = useDesktopWorkspaces(connection.id, true);
+  const toast = useToast();
+
+  async function open(workspaceId?: string) {
+    onChosen();
+    const result = await requireDesktop().connections.open(
+      connection.id,
+      workspaceId ? `/w/${workspaceId}` : undefined,
+    );
+    if (!result.ok) toast(result.error, 'error');
+  }
+
+  const data = listing.data;
+  const workspaces = data && data.status !== 'signed-out' ? data.workspaces : [];
+  const row = 'flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface)]';
+
+  return (
+    <div className="border-t border-[var(--color-line)]">
+      <ConnectionLabel connection={connection} />
+      {listing.isLoading && <p className="px-3 py-2 text-xs text-[var(--color-muted)]">Loading…</p>}
+      {workspaces.map((w) => (
+        <button key={w.id} onClick={() => void open(w.id)} className={row}>
+          <WorkspaceIcon name={w.name} icon={w.icon} avatarUrl={w.picture} size="sm" />
+          <span className="min-w-0 flex-1 truncate">{w.name}</span>
+        </button>
+      ))}
+      {data?.status === 'signed-out' && (
+        <button onClick={() => void open()} className={cx(row, 'text-[var(--color-muted)]')}>
+          <Icon name="box-arrow-in-right" /> Sign in
+        </button>
+      )}
+      {/* Nothing known about it yet — a server that could not be reached, say. */}
+      {data?.status === 'unavailable' && workspaces.length === 0 && (
+        <button onClick={() => void open()} className={cx(row, 'text-[var(--color-muted)]')}>
+          <Icon name="box-arrow-in-right" /> Open {connection.label}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function SectionTab({
   active,

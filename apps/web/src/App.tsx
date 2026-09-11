@@ -23,7 +23,11 @@ import DocumentEditor from './components/DocumentEditor';
 import ErrorBoundary from './components/ErrorBoundary';
 import AllDocuments from './components/AllDocuments';
 import AcceptInvite from './components/AcceptInvite';
-import SettingsDialog, { type SettingsSection, type Theme } from './components/SettingsDialog';
+import SettingsDialog, { isSettingsSection, type SettingsSection, type Theme } from './components/SettingsDialog';
+import ConnectServerDialog from './components/ConnectServerDialog';
+import { desktop } from './lib/desktop';
+import { useTheme } from './lib/theme';
+import NotificationsMenu from './components/NotificationsMenu';
 import SearchPalette from './components/SearchPalette';
 import { ChatView } from './components/chat/ChatView';
 import { useChatEvents } from './lib/chatEvents';
@@ -46,15 +50,35 @@ export default function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/invite/:token" element={<AcceptInvite />} />
-      <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
-      <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
-      <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
-      <Route path="/w/:workspaceId" element={<Workspace user={me.data.user} />} />
-      <Route path="*" element={<FirstWorkspaceRedirect />} />
-    </Routes>
+    <>
+      {desktop && <DesktopNavigation />}
+      <Routes>
+        <Route path="/invite/:token" element={<AcceptInvite />} />
+        <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
+        <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
+        <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
+        <Route path="/w/:workspaceId" element={<Workspace user={me.data.user} />} />
+        <Route path="*" element={<FirstWorkspaceRedirect />} />
+      </Routes>
+    </>
   );
+}
+
+/**
+ * Lands where the desktop app was asked to take this page: a workspace chosen
+ * from another connection's menu, or a channel or invitation from the
+ * notifications panel. Only the app's own routes are followed.
+ */
+function DesktopNavigation() {
+  const navigate = useNavigate();
+  useEffect(
+    () =>
+      desktop?.onCommand((command) => {
+        if (command.type === 'navigate' && /^\/(w|invite)\//.test(command.path)) navigate(command.path);
+      }),
+    [navigate],
+  );
+  return null;
 }
 
 function FirstWorkspaceRedirect() {
@@ -117,12 +141,13 @@ function Workspace({
   const [leftOpen, setLeftOpen] = useLocalStorage('paradocs.leftOpen', true);
   const [rightOpen, setRightOpen] = useLocalStorage('paradocs.rightOpen', true);
   const [rightTab, setRightTab] = useLocalStorage<RightTab>('paradocs.rightTab', 'toc');
-  const [theme, setTheme] = useLocalStorage<Theme>('paradocs.theme', 'system');
+  const [theme, setTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [activeTagIds, setActiveTagIds] = useState<string[]>([]);
   const [liveBlocks, setLiveBlocks] = useState<unknown[]>([]);
   const [journalDate, setJournalDate] = useState<string | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
 
   const journal = useJournal(workspaceId, journalDate ?? todayISO(), journalDate !== null);
 
@@ -169,6 +194,19 @@ function Workspace({
     return () => window.removeEventListener('keydown', onKey);
   }, [setLeftOpen, setRightOpen]);
 
+  // The desktop menu reaches into the page to open Settings or add a server.
+  useEffect(
+    () =>
+      desktop?.onCommand((command) => {
+        if (command.type === 'open-settings' && isSettingsSection(command.section)) {
+          setSettingsSection(command.section);
+        } else if (command.type === 'connect-server') {
+          setConnectOpen(true);
+        }
+      }),
+    [],
+  );
+
   const patch = useCallback((p: DocumentPatch) => updateDocument.mutate(p), [updateDocument]);
 
   // Where the chat tab lands when the URL names no channel.
@@ -207,6 +245,7 @@ function Workspace({
             }}
             onSignOut={() => logout.mutate()}
             onOpenSettings={setSettingsSection}
+            onConnectServer={desktop ? () => setConnectOpen(true) : undefined}
             section={chat ? 'chat' : 'docs'}
             onSelectSection={(next) => {
               if (next === 'docs') navigate(`/w/${workspaceId}`);
@@ -257,6 +296,7 @@ function Workspace({
                 ? 'All documents'
                 : (document.data?.title ?? '')}
           </span>
+          <NotificationsMenu />
           {!chat && (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
@@ -387,6 +427,8 @@ function Workspace({
           }}
         />
       )}
+
+      {connectOpen && <ConnectServerDialog onClose={() => setConnectOpen(false)} />}
 
       {searchOpen && (
         <SearchPalette

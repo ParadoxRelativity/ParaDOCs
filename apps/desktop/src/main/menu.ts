@@ -1,28 +1,60 @@
-import { app, BrowserWindow, Menu, dialog, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, Menu, dialog, shell, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import { listConnections } from './connections.js';
-import { openConnection, openShell } from './windows.js';
 import { check } from './updater.js';
+import { activeConnectionId, activeWebContents, getAppWindow, openConnection, sendCommand } from './windows.js';
 
 const isMac = process.platform === 'darwin';
 
 /**
- * Rebuilt whenever the connection list changes so the Servers submenu always
- * reflects what is configured. Menu accelerators are the native half of the
- * app: the web client keeps its own in-page shortcuts.
+ * Runs against the page on screen. The window's pages are views inside it
+ * rather than its own, so reloading, zooming and developer tools are wired to
+ * the active view explicitly instead of through the built-in roles.
+ */
+function onPage(action: (contents: WebContents) => void): () => void {
+  return () => {
+    const contents = activeWebContents();
+    if (contents) action(contents);
+  };
+}
+
+/**
+ * Opens Settings at Updates and checks there. With no page loaded to show the
+ * result in, the check answers in dialogs instead.
+ */
+function checkForUpdates(): void {
+  const shown = sendCommand({ type: 'open-settings', section: 'updates' });
+  void check({ explicit: true, dialogs: !shown });
+}
+
+/**
+ * Rebuilt whenever the connections or the one on screen change, so the File
+ * menu always lists them with the current one marked. Menu accelerators are
+ * the native half of the app: the web client keeps its own in-page shortcuts.
  */
 export function buildMenu(): void {
-  const connections = listConnections();
+  const activeId = activeConnectionId();
 
-  const serverItems: MenuItemConstructorOptions[] = connections.length
-    ? connections.map((connection, index) => ({
-        label: connection.label,
-        // ⌘1..⌘9 jump straight to a server, like tabs in a browser.
-        accelerator: index < 9 ? `CmdOrCtrl+${index + 1}` : undefined,
-        click: () => {
-          void openConnection(connection).catch((err: Error) => reportOpenFailure(connection.label, err));
-        },
-      }))
-    : [{ label: 'No servers yet', enabled: false }];
+  const connectionItems: MenuItemConstructorOptions[] = listConnections().map((connection, index) => ({
+    label: connection.label,
+    type: 'radio',
+    checked: connection.id === activeId,
+    // ⌘1..⌘9 switch straight to a connection, like tabs in a browser.
+    accelerator: index < 9 ? `CmdOrCtrl+${index + 1}` : undefined,
+    click: () => {
+      void openConnection(connection).catch((err: Error) => {
+        // The radio moved on click; put it back where the window actually is.
+        buildMenu();
+        reportOpenFailure(connection.label, err);
+      });
+    },
+  }));
+
+  const settingsItem: MenuItemConstructorOptions = {
+    label: isMac ? 'Settings…' : 'Settings',
+    accelerator: 'CmdOrCtrl+,',
+    click: () => void sendCommand({ type: 'open-settings', section: 'account' }),
+  };
+  const zoomIn = onPage((contents) => contents.setZoomLevel(contents.getZoomLevel() + 0.5));
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -31,7 +63,9 @@ export function buildMenu(): void {
             label: app.name,
             submenu: [
               { role: 'about' },
-              { label: 'Check for Updates…', click: () => void check({ explicit: true }) },
+              { label: 'Check for Updates…', click: checkForUpdates },
+              { type: 'separator' },
+              settingsItem,
               { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },
@@ -48,14 +82,20 @@ export function buildMenu(): void {
       label: 'File',
       submenu: [
         {
-          label: 'Servers and Workspaces…',
+          label: 'Connect to a Server…',
           accelerator: 'CmdOrCtrl+Shift+O',
-          click: () => openShell(),
+          click: () => void sendCommand({ type: 'connect-server' }),
         },
         { type: 'separator' },
-        ...serverItems,
+        ...connectionItems,
         { type: 'separator' },
-        isMac ? { role: 'close' } : { role: 'quit' },
+        ...(isMac ? [] : ([settingsItem, { type: 'separator' }] as MenuItemConstructorOptions[])),
+        {
+          label: isMac ? 'Close Window' : 'Close',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => getAppWindow()?.close(),
+        },
+        ...(isMac ? [] : ([{ role: 'quit' }] as MenuItemConstructorOptions[])),
       ],
     },
     {
@@ -77,28 +117,52 @@ export function buildMenu(): void {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: onPage((contents) => contents.reload()) },
+        {
+          label: 'Force Reload',
+          accelerator: 'Shift+CmdOrCtrl+R',
+          click: onPage((contents) => contents.reloadIgnoringCache()),
+        },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        // The single accelerator Chromium registers for zoom in does not fire
-        // on the unshifted "=" key, which is what people actually press.
-        { role: 'zoomIn', accelerator: 'CmdOrCtrl+=', visible: false },
-        { role: 'zoomOut' },
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: onPage((contents) => contents.setZoomLevel(0)) },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', click: zoomIn },
+        // "Plus" is the shifted key; this catches the unshifted "=" people actually press.
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', visible: false, click: zoomIn },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CmdOrCtrl+-',
+          click: onPage((contents) => contents.setZoomLevel(contents.getZoomLevel() - 0.5)),
+        },
         { type: 'separator' },
-        { role: 'togglefullscreen' },
-        { role: 'toggleDevTools' },
+        {
+          label: 'Toggle Full Screen',
+          accelerator: isMac ? 'Ctrl+Cmd+F' : 'F11',
+          click: () => {
+            const window = getAppWindow();
+            window?.setFullScreen(!window.isFullScreen());
+          },
+        },
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
+          click: onPage((contents) => contents.toggleDevTools()),
+        },
       ],
     },
     {
       label: 'Window',
       submenu: [
-        { role: 'minimize' },
-        { role: 'zoom' },
-        ...(isMac
-          ? ([{ type: 'separator' }, { role: 'front' }, { type: 'separator' }, { role: 'window' }] as MenuItemConstructorOptions[])
-          : ([{ role: 'close' }] as MenuItemConstructorOptions[])),
+        { label: 'Minimize', accelerator: 'CmdOrCtrl+M', click: () => getAppWindow()?.minimize() },
+        {
+          label: 'Zoom',
+          click: () => {
+            const window = getAppWindow();
+            if (!window) return;
+            if (window.isMaximized()) window.unmaximize();
+            else window.maximize();
+          },
+        },
+        ...(isMac ? ([{ type: 'separator' }, { role: 'front' }] as MenuItemConstructorOptions[]) : []),
       ],
     },
     {
@@ -107,7 +171,7 @@ export function buildMenu(): void {
         ...(isMac
           ? []
           : ([
-              { label: 'Check for Updates…', click: () => void check({ explicit: true }) },
+              { label: 'Check for Updates…', click: checkForUpdates },
               { type: 'separator' },
             ] as MenuItemConstructorOptions[])),
         {
@@ -123,13 +187,13 @@ export function buildMenu(): void {
 }
 
 function reportOpenFailure(label: string, err: Error): void {
-  const target = BrowserWindow.getFocusedWindow() ?? undefined;
+  const window = getAppWindow();
   const options = {
     type: 'error' as const,
     title: 'Could not open',
     message: `Could not open “${label}”.`,
     detail: err.message,
   };
-  if (target) void dialog.showMessageBox(target, options);
+  if (window) void dialog.showMessageBox(window, options);
   else void dialog.showMessageBox(options);
 }

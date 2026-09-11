@@ -1,4 +1,4 @@
-import { BrowserWindow, session as electronSession, webContents } from 'electron';
+import { session as electronSession, type BaseWindow } from 'electron';
 import { pickShareSource } from './screenPicker.js';
 
 /**
@@ -12,15 +12,13 @@ import { pickShareSource } from './screenPicker.js';
  * each screen and window as it currently looks. Nothing is chosen
  * automatically: sharing a screen is meant to be deliberate.
  */
-export function enableScreenSharing(partition: string): void {
+export function enableScreenSharing(partition: string, parentWindow: () => BaseWindow | null): void {
   electronSession.fromPartition(partition).setDisplayMediaRequestHandler((request, callback) => {
-    const contents = request.frame ? webContents.fromFrame(request.frame) : undefined;
-    const parent = (contents && BrowserWindow.fromWebContents(contents)) ?? BrowserWindow.getFocusedWindow();
     // Electron captures system audio only on Windows. Elsewhere the option is
     // left out rather than offered and silently ignored.
     const offerAudio = request.audioRequested && process.platform === 'win32';
 
-    void pickShareSource(parent, { offerAudio })
+    void pickShareSource(parentWindow(), { offerAudio })
       .then((picked) => {
         if (!picked) {
           callback({});

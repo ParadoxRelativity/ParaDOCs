@@ -14,6 +14,8 @@ export const paths = {
   userData,
   connectionsFile: path.join(userData, 'connections.json'),
   windowStateFile: path.join(userData, 'window-state.json'),
+  /** The workspaces each connection listed last, for when it cannot be asked. */
+  workspaceCacheFile: path.join(userData, 'workspace-cache.json'),
   secretFile: path.join(userData, 'session-secret'),
   /** One self-contained directory per local workspace: database + uploads. */
   localRoot: path.join(userData, 'local'),

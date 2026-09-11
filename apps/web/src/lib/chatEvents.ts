@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { mentions, parseMessage, type Channel, type ChatEvent, type MessageReferences } from '@paradocs/shared';
+import { mentions, messagePreview, type Channel, type ChatEvent, type MessageReferences } from '@paradocs/shared';
 import { keys, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
 
@@ -24,30 +24,6 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
     channels: [...channels.values()],
     members: [...members.values()],
   };
-}
-
-/**
- * Renders a message body as plain text for a notification, where markup cannot
- * be shown: references become the names they resolve to rather than raw tokens.
- */
-function preview(body: string, references: MessageReferences): string {
-  const documents = new Map(references.documents.map((d) => [d.id, d]));
-  const channels = new Map(references.channels.map((c) => [c.id, c]));
-  const members = new Map(references.members.map((m) => [m.id, m]));
-
-  return parseMessage(body)
-    .map((segment) => {
-      if (segment.type === 'text') return segment.value;
-      if (segment.type === 'document') return documents.get(segment.id)?.title ?? 'a document';
-      if (segment.type === 'channel') {
-        const channel = channels.get(segment.id);
-        return channel ? `#${channel.name}` : 'a channel';
-      }
-      const member = members.get(segment.id);
-      return member ? `@${member.name}` : '@someone';
-    })
-    .join('')
-    .trim();
 }
 
 /**
@@ -105,7 +81,10 @@ export function useChatEvents({
       const fromSomeoneElse = event.message.author?.id !== selfId;
       // Unread and mention counts are computed server side, so the badges are
       // refreshed rather than guessed at here.
-      if (fromSomeoneElse) qc.invalidateQueries({ queryKey: keys.channels(workspaceId) });
+      if (fromSomeoneElse) {
+        qc.invalidateQueries({ queryKey: keys.channels(workspaceId) });
+        qc.invalidateQueries({ queryKey: keys.notifications });
+      }
 
       if (!fromSomeoneElse || !mentions(event.message.body, selfId)) return;
       // Already looking at it is not worth interrupting.
@@ -113,7 +92,7 @@ export function useChatEvents({
       if (watching) return;
       notify({
         title: `${event.message.author?.name ?? 'Someone'} mentioned you in #${names.current.get(channelId) ?? 'chat'}`,
-        body: preview(event.message.body, event.references),
+        body: messagePreview(event.message.body, event.references),
         onClick: () => openChannel.current(channelId),
       });
     },

@@ -127,9 +127,11 @@ export interface ProxyOptions {
   target: string;
   /** Directory holding the built web client. */
   webDist: string;
+  /** The port to use if it is free; any free port otherwise. */
+  port?: number;
 }
 
-export async function startProxy({ target, webDist }: ProxyOptions): Promise<ProxyHandle> {
+export async function startProxy({ target, webDist, port: preferredPort }: ProxyOptions): Promise<ProxyHandle> {
   const targetUrl = new URL(target);
   const csp = contentSecurityPolicy(inlineScriptHashes(webDist));
   const agent = targetUrl.protocol === 'https:' ? https : http;
@@ -230,15 +232,24 @@ export async function startProxy({ target, webDist }: ProxyOptions): Promise<Pro
     upstream.end();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    // Port 0 picks a free port, and loopback-only means nothing off this
-    // machine can reach it.
-    server.listen(0, '127.0.0.1', () => {
-      server.removeListener('error', reject);
-      resolve();
+  // Loopback only, so nothing off this machine can reach it.
+  const listen = (candidate: number) =>
+    new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(candidate, '127.0.0.1', () => {
+        server.removeListener('error', reject);
+        resolve();
+      });
     });
-  });
+
+  try {
+    await listen(preferredPort ?? 0);
+  } catch (err) {
+    // Something else holds the port this connection used last time. Any free
+    // one works; the page just starts this launch without its saved state.
+    if (!preferredPort || (err as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw err;
+    await listen(0);
+  }
 
   const port = (server.address() as { port: number }).port;
   return {
