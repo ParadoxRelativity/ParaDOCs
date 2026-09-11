@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAttachUpload, useDeleteUpload, useUploads, type WorkspaceUpload } from '../api/hooks';
 import { useFolderOptions } from './DocumentMeta';
-import { cx, formatRelative } from '../lib/util';
+import { cx, formatBytes, formatRelative } from '../lib/util';
 import { ConfirmDialog, Modal } from './Modal';
 import { useToast } from './Toast';
 import { Button, Spinner } from './ui';
@@ -10,12 +10,6 @@ import Icon, { type IconName } from './Icon';
 interface Props {
   workspaceId: string;
   onOpenDocument: (documentId: string) => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function iconFor(mimeType: string): IconName {

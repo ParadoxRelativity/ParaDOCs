@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
+  attachmentSummary,
   messagePreview,
   type MessageNotification,
   type NotificationWorkspace,
@@ -43,6 +44,7 @@ interface ChannelRow extends WorkspaceColumns {
   mentions: number;
   message_id: string;
   body: string;
+  attachment_count: number;
   created_at: string;
   author_id: string | null;
   author_name: string | null;
@@ -98,7 +100,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       query<ChannelRow>(
         `SELECT c.id AS channel_id, c.name AS channel_name, ${WORKSPACE_SELECT},
                 stats.unread, stats.mentions,
-                latest.id AS message_id, latest.body, latest.created_at,
+                latest.id AS message_id, latest.body, latest.attachment_count, latest.created_at,
                 author.id AS author_id, author.name AS author_name,
                 ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
            FROM workspace_members wm
@@ -117,7 +119,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
                 AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
            ) stats
            CROSS JOIN LATERAL (
-             SELECT m.id, m.body, m.created_at, m.author_id
+             SELECT m.id, m.body, m.created_at, m.author_id,
+                    (SELECT count(*)::int FROM message_attachments a WHERE a.message_id = m.id) AS attachment_count
                FROM messages m
               WHERE m.channel_id = c.id
                 AND m.deleted_at IS NULL
@@ -147,7 +150,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           mentions: row.mentions,
           latest: {
             id: row.message_id,
-            preview: truncate(messagePreview(row.body, references)),
+            // A message that is only files has no text to preview.
+            preview: truncate(messagePreview(row.body, references) || attachmentSummary(row.attachment_count)),
             createdAt: row.created_at,
             author: row.author_id
               ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }

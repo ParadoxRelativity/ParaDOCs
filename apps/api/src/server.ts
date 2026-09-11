@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { closeDb, query } from './db/pool.js';
 import { createCollabServer } from './collab/server.js';
 import { createChatServer } from './chat/server.js';
+import { attachVoiceProxy } from './lib/voiceProxy.js';
 
 const app = await buildApp();
 
@@ -13,6 +14,9 @@ collab.attach(app.server);
 // Chat rides the same HTTP server on its own path, so self-hosting stays one port.
 const chat = createChatServer(app.log);
 chat.attach(app.server);
+
+// Voice signalling too, relayed to LiveKit, so voice needs no port of its own.
+attachVoiceProxy(app.server, app.log);
 
 // Expired sessions are dead weight; sweep them hourly.
 const sweep = setInterval(() => {

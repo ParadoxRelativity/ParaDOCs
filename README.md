@@ -230,6 +230,28 @@ title, or find out who somebody is, from a workspace the reader cannot see. A
 reference to something since deleted renders as muted text rather than a broken
 link.
 
+**Files.** Drop files onto a channel, paste them, or use the **+** button in the
+message box; up to ten go out with one message. Each uploads as soon as it is
+added, with its progress shown, so sending is instant, and a message sent while
+files are still uploading goes out once they finish. Pictures and videos appear
+in the conversation and open full-window, where the arrow keys move between the
+ones in that message. Audio gets a player, and anything else is a card to
+download. Deleting a message deletes its files.
+
+Like document attachments, files are served from `/uploads/` at long,
+unguessable addresses without a login check. Pictures, audio, video and PDFs
+display in place; anything else is sent as a download inside a sandbox, so an
+uploaded HTML or SVG file cannot run script as whoever opens it. Files added to
+a message that is never sent are removed after a day. The size limit is the
+server's `MAX_UPLOAD_MB` (see [Configuration](#configuration)).
+
+**Emoji.** The smiley button opens a picker, and typing `:` with a couple of
+letters offers matching emoji — `:tada` finds 🎉. A shortcode typed out in full
+is converted when the message is sent, and a message of only a few emoji is
+shown large. Hovering a message offers a reaction. Reactions show who added
+them, clicking one joins it or takes yours back, and they update live for
+everyone in the channel.
+
 ## Voice and video
 
 A workspace can also have voice channels, which sit in their own group in the
@@ -251,43 +273,41 @@ sending to everyone. That is what makes a call with a dozen people work.
 Screen sharing is an ordinary track alongside camera and microphone, and a
 shared screen takes over the tile it is shared from.
 
-**It is optional.** With `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
-`LIVEKIT_API_SECRET` unset, the voice section disappears and everything else is
-unaffected — a deployment that only wants documents and chat runs exactly as
-before. The bundled server sits behind a compose profile so it is not started
-unless asked for:
+**It is on by default** in the Docker deployment, with nothing to configure.
+The `livekit` container starts alongside the app, the app generates the API key
+pair it shares with LiveKit on first start, and new workspaces come with a
+**lounge** voice channel beside `#general`. Set `VOICE_ENABLED=false` to turn
+it off; voice channels then disappear and everything else is unaffected.
 
-```bash
-# in .env
-LIVEKIT_URL=ws://192.168.1.10:7880      # what browsers dial, not a service name
-LIVEKIT_API_KEY=paradocs
-LIVEKIT_API_SECRET=$(openssl rand -hex 32)
-LIVEKIT_NODE_IP=192.168.1.10            # the address this host answers on
+Browsers reach LiveKit through the app. Its connection setup, the `/rtc`
+websocket, is relayed on the app's own address, so it follows the app onto
+HTTPS behind Caddy with no second hostname, certificate or published port. Each
+browser is handed the address it used to reach the app, so the same server
+works by IP address, by domain name, and from the desktop app.
 
-docker compose --profile voice up -d
-```
+What cannot be relayed is the media. WebRTC audio and video travel directly
+between browsers and the LiveKit container, so its media ports are published
+and have to be open in the firewall: a single UDP port, **7882**, however many
+people are in calls — LiveKit tells callers apart by their address rather than
+giving each a port of its own — and TCP **7881** as the fallback for networks
+that block UDP. Browsers are told these exact numbers, so if you change one,
+change both LiveKit's config and its published ports, which sit together in
+`docker-compose.yml`. On a very busy server, raise the kernel's UDP receive
+buffer (`net.core.rmem_max`) so that one socket is not the place packets get
+dropped.
 
-`LIVEKIT_URL` is dialled by *browsers*, so it has to be an address they can
-reach — the compose service name will not do.
+LiveKit also has to tell browsers where to send that media. It finds this
+host's public address by asking a STUN server as it starts. Set
+`LIVEKIT_NODE_IP` for a server where that answer is wrong or unavailable, such
+as one used only on a private network.
 
-**With TLS**, a page served over https may only open `wss://`, so voice goes
-through Caddy alongside everything else:
+Outside Docker, point the API at a LiveKit server browsers can reach with
+`LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.tls.yml \
-  --profile voice up -d --build
-```
-
-The Caddyfile proxies LiveKit's `/rtc` (the signalling websocket) and `/twirp`
-(its management API) to the voice container, which means `LIVEKIT_URL` is just
-`wss://your-domain` — no second hostname and no second certificate. Set
-`LIVEKIT_BIND=127.0.0.1` so the signalling port is reachable only by Caddy.
-
-What cannot go through Caddy is the media. WebRTC audio and video travel over
-UDP directly between browsers and the LiveKit container, so its published UDP
-range stays open whatever else you lock down, and `LIVEKIT_NODE_IP` has to be
-the address browsers actually reach this host on — a reverse proxy has no part
-in it.
+Networks that allow nothing but web traffic, such as some corporate and guest
+networks, block both media ports. Reaching people on them needs TURN over TLS
+on port 443, which this setup does not include yet;
+[docs/voice-turn.md](docs/voice-turn.md) is the plan for adding it.
 
 Joining is authorised the same way everything else is: the server mints a
 LiveKit token scoped to one room, named for the channel id, only after checking
@@ -335,6 +355,9 @@ For each unattached file there are two ways out:
   already gone missing.
 
 Editors can upload but cannot see or manage this list.
+
+Files shared in chat are not listed here. They belong to their message, and are
+removed with it, or with their channel or workspace.
 
 One limitation worth knowing: a file is judged unattached purely by whether a
 document owns it. Removing the *element* that used a file, without deleting its
@@ -494,36 +517,47 @@ need Python.
 
 ### Docker (recommended for self-hosting)
 
+For a step-by-step walkthrough, including HTTPS, voice, backups, upgrades and
+troubleshooting, see [docs/deploying-with-docker.md](docs/deploying-with-docker.md).
+The short version:
+
 ```bash
-cp .env.example .env
+mkdir paradocs && cd paradocs
+curl -fsSLO https://raw.githubusercontent.com/ParadoxRelativity/ParaDOCs/main/docker-compose.yml
 
 # Both secrets are required; compose refuses to start without them.
-node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(32).toString('hex'))" >> .env
-node -e "console.log('POSTGRES_PASSWORD=' + require('crypto').randomBytes(18).toString('base64url'))" >> .env
+cat > .env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+SESSION_SECRET=$(openssl rand -hex 32)
+EOF
 
-docker compose up -d --build
+docker compose up -d
 ```
 
-Open <http://localhost:4000> and register. That is the whole deployment: one app
-container plus Postgres. The image builds the SPA and runs the API, which serves
-the client and the collaboration websocket, so there is no second service and no
-reverse proxy to configure for the basic case.
+Open <http://localhost:4000> and register. That is the whole deployment:
+`docker-compose.yml` and `.env` are the only files on the server, and there is
+no need to clone the repository. The compose file runs the prebuilt
+[`paradoxrelativity/paradocs`](https://hub.docker.com/r/paradoxrelativity/paradocs)
+image from Docker Hub alongside Postgres, and LiveKit for voice and video. The
+image serves the web client, the API and the collaboration websocket, so there
+is no reverse proxy to configure for the basic case. For calls, open UDP 7882
+and TCP 7881 as well (see [Voice and video](#voice-and-video)).
 
-**Serving it on a domain with HTTPS.** The TLS overlay adds Caddy, which obtains
-and renews certificates automatically:
+**Serving it on a domain with HTTPS.** The `https` profile adds Caddy, which
+obtains and renews certificates automatically:
 
 ```bash
 # in .env
+COMPOSE_PROFILES=https
 DOMAIN=docs.example.com
 BIND_ADDR=127.0.0.1     # keep the app off the public interface
-
-docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+SECURE_COOKIES=true     # required once traffic is HTTPS
 ```
 
-Point the domain at the host first, or the certificate order fails. The overlay
-also sets `SECURE_COOKIES=true`, which is required once traffic is HTTPS.
+Then run `docker compose up -d`. Point the domain at the host first, or the
+certificate order fails.
 
-**Upgrading** is `docker compose pull` (or `--build`) then `up -d`. Migrations
+**Upgrading** is `docker compose pull` then `docker compose up -d`. Migrations
 are idempotent and run on boot, so there is no separate step. If you ever run
 more than one app replica, run migrations once out of band instead, so two
 containers do not apply them at the same time.
@@ -534,6 +568,11 @@ API runs from TypeScript source through `tsx`, which is therefore a runtime
 dependency rather than a dev tool. The server-side Yjs to markdown conversion
 pulls BlockNote and ProseMirror in, so the runtime dependency tree is around
 250 MB — most of the image.
+
+To run a change before it is released, build the image under the same name from
+a checkout with `docker build -t paradoxrelativity/paradocs:latest .`, then run
+`docker compose up -d`. The next `docker compose pull` puts the published
+release back.
 
 The container runs as the unprivileged `node` user, under `tini` so `docker
 stop` reaches the server and its graceful shutdown flushes any pending
@@ -570,6 +609,7 @@ All settings come from `.env` at the repo root, read by both the API and Vite.
 | `SECURE_COOKIES`     | `false`                 | Set `true` when serving over HTTPS                           |
 | `UPLOAD_DIR`         | `./data/uploads`        | Where attachments are written                                |
 | `ALLOW_REGISTRATION` | `true`                  | Set `false` to close signups; the first account is always allowed |
+| `MAX_UPLOAD_MB`      | `25`                    | Largest file, in megabytes, for chat, documents and canvases; not adjustable per workspace |
 
 ## Backing it up
 
@@ -655,22 +695,33 @@ application whose signature it cannot verify. The app reports this rather than
 failing silently. Windows updates itself unsigned, with a SmartScreen warning on
 first install.
 
-**The server image** is built by the same tag and pushed to the GitHub
-Container Registry for both `linux/amd64` and `linux/arm64`:
+**The server image** is built by the same tag for both `linux/amd64` and
+`linux/arm64`, and pushed with the same tags to Docker Hub and the GitHub
+Container Registry:
 
 ```
-ghcr.io/paradoxrelativity/paradocs:0.1.1   # the exact release
-ghcr.io/paradoxrelativity/paradocs:0.1     # latest patch of a minor version
-ghcr.io/paradoxrelativity/paradocs:latest
+paradoxrelativity/paradocs:0.1.1           # Docker Hub: the exact release
+paradoxrelativity/paradocs:0.1             # latest patch of a minor version
+paradoxrelativity/paradocs:latest
+ghcr.io/paradoxrelativity/paradocs:0.1.1   # GitHub Container Registry: the same tags
 ```
 
-To deploy from it rather than building on the server, point the `app` service
-in `docker-compose.yml` at the image instead of the `build:` section:
+`docker-compose.yml` runs `paradoxrelativity/paradocs:latest`, so servers pick
+up a release with `docker compose pull` and `docker compose up -d`.
 
-```yaml
-  app:
-    image: ghcr.io/paradoxrelativity/paradocs:0.1.1
-```
+Pushing to Docker Hub needs two repository secrets, under *Settings → Secrets
+and variables → Actions*:
+
+- `DOCKERHUB_USERNAME`: the Docker Hub account that pushes.
+- `DOCKERHUB_TOKEN`: a personal access token for that account with *Read &
+  Write* access, created on Docker Hub under *Account settings → Personal access
+  tokens*. Use a token, not the account password.
+
+Without them the job still pushes to ghcr.io, and the run shows a warning that
+Docker Hub was skipped. Create the `paradoxrelativity/paradocs` repository on
+Docker Hub before the first release and make it **public**: the compose file
+pulls it without logging in. If `paradoxrelativity` is an
+organisation, the account behind the token needs write access to the repository.
 
 Running the workflow by hand from the Actions tab pushes only
 `sha-<commit>`, which is useful for trying a build on a test server without
@@ -678,8 +729,8 @@ moving `latest`. Unlike the desktop installers, a pushed image is visible as
 soon as the job finishes — there is no draft step — so `latest` moves when the
 tag is pushed, not when the release is published.
 
-The first push creates the package as **private**, even for a public
-repository. To let a server pull it without logging in, open the package under
+On ghcr.io, the first push creates the package as **private**, even for a
+public repository. To let a server pull it without logging in, open the package under
 your GitHub profile's *Packages*, then *Package settings* → *Change
 visibility* → *Public*. This only has to be done once.
 

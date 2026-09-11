@@ -23,13 +23,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   const text = await res.text();
   const payload = text ? safeJson(text) : null;
-  if (!res.ok) {
-    const detail =
-      payload && typeof payload === 'object' && 'error' in payload
-        ? String((payload as { error: unknown }).error)
-        : '';
-    throw new ApiError(res.status, detail || `Request failed (${res.status})`);
-  }
+  if (!res.ok) throw new ApiError(res.status, errorDetail(payload) || `Request failed (${res.status})`);
   return payload as T;
 }
 
@@ -41,11 +35,49 @@ function safeJson(text: string): unknown {
   }
 }
 
+function errorDetail(payload: unknown): string {
+  return payload && typeof payload === 'object' && 'error' in payload
+    ? String((payload as { error: unknown }).error)
+    : '';
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
+  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body ?? {}),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
-  delete: (path: string) => request<void>('DELETE', path),
+  delete: <T = void>(path: string) => request<T>('DELETE', path),
+  /**
+   * Posts multipart form data, reporting progress as it goes. Built on
+   * XMLHttpRequest because fetch cannot report upload progress.
+   */
+  uploadWithProgress: <T>(
+    path: string,
+    form: FormData,
+    onProgress: (fraction: number) => void,
+    signal?: AbortSignal,
+  ) =>
+    new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api${path}`);
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        const payload = xhr.responseText ? safeJson(xhr.responseText) : null;
+        if (xhr.status >= 200 && xhr.status < 300) resolve(payload as T);
+        else reject(new ApiError(xhr.status, errorDetail(payload) || `Upload failed (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new ApiError(0, 'The upload did not finish. Check the connection and try again.'));
+      xhr.onabort = () => reject(new DOMException('The upload was cancelled', 'AbortError'));
+      if (signal?.aborted) {
+        reject(new DOMException('The upload was cancelled', 'AbortError'));
+        return;
+      }
+      signal?.addEventListener('abort', () => xhr.abort(), { once: true });
+      xhr.send(form);
+    }),
   /** Sends one file as multipart form data. */
   upload: <T>(method: 'POST' | 'PUT', path: string, file: Blob) => {
     const form = new FormData();

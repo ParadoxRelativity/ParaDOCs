@@ -1,16 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { z } from 'zod';
+import type { UploadConfig } from '@paradocs/shared';
 import { config } from '../config.js';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
 import { blocksToMarkdown } from '../lib/blocksToMarkdown.js';
-import { removeStoredFile } from '../lib/storage.js';
+import { removeStoredFile, storeUpload, uploadLimits } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
-
-const MAX_BYTES = 25 * 1024 * 1024;
 
 const attachSchema = z.object({
   title: z.string().max(300).optional(),
@@ -35,13 +31,13 @@ function blockForFile(mimeType: string, url: string, filename: string) {
 export const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
+  /** The server-wide upload limit, so clients can refuse a file before sending it. */
+  app.get('/uploads/config', async (): Promise<UploadConfig> => ({ maxBytes: config.maxUploadBytes }));
+
   app.post<{ Params: { id: string } }>('/workspaces/:id/uploads', async (req, reply) => {
     await assertWorkspaceAccess(req, req.params.id, 'editor');
-    const file = await req.file({ limits: { fileSize: MAX_BYTES } });
+    const file = await req.file(uploadLimits());
     if (!file) throw badRequest('No file was uploaded');
-
-    const buffer = await file.toBuffer();
-    if (buffer.byteLength > MAX_BYTES) throw badRequest('File exceeds the 25 MB limit');
 
     // Recording the owning document is what keeps the unattached list honest.
     const fields = file.fields as Record<string, { value?: unknown } | undefined>;
@@ -51,18 +47,13 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
         ? rawDocumentId
         : null;
 
-    // Store under a generated name so a malicious filename cannot escape the directory.
-    const ext = path.extname(file.filename).slice(0, 12).replace(/[^.\w]/g, '');
-    const storageKey = `${req.params.id}/${randomUUID()}${ext}`;
-    const target = path.join(config.uploadDir, storageKey);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, buffer);
+    const { storageKey, byteSize } = await storeUpload(file, req.params.id);
 
     const { rows } = await query(
       `INSERT INTO attachments (workspace_id, document_id, filename, mime_type, byte_size, storage_key)
        VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, filename, mime_type AS "mimeType", byte_size AS "byteSize"`,
-      [req.params.id, documentId, file.filename, file.mimetype, buffer.byteLength, storageKey],
+       RETURNING id, filename, mime_type AS "mimeType", byte_size::float8 AS "byteSize"`,
+      [req.params.id, documentId, file.filename, file.mimetype, byteSize, storageKey],
     );
 
     reply.status(201);

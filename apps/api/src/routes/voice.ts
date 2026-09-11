@@ -1,34 +1,73 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import type { VoiceOccupant } from '@paradocs/shared';
-import { query } from '../db/pool.js';
+import { query, type DbClient } from '../db/pool.js';
 import { badRequest, notFound } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 import { config } from '../config.js';
 
-/** A call needs all three settings; one on its own is a misconfiguration. */
+/**
+ * A call needs keys and somewhere to reach LiveKit. In the Docker deployment
+ * all of that is provided, so voice is on unless VOICE_ENABLED=false.
+ */
 export function voiceEnabled(): boolean {
-  return Boolean(config.livekit.url && config.livekit.apiKey && config.livekit.apiSecret);
+  const { enabled, url, internalUrl, apiKey, apiSecret } = config.livekit;
+  return Boolean(enabled && apiKey && apiSecret && (url || internalUrl));
+}
+
+/**
+ * Somewhere to meet in a new workspace, the way #general is somewhere to talk.
+ * Only on a server with voice: elsewhere it would be a door that never opens.
+ */
+export async function addDefaultVoiceChannel(
+  client: Pick<DbClient, 'query'>,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  if (!voiceEnabled()) return;
+  await client.query(
+    `INSERT INTO channels (workspace_id, name, topic, kind, created_by) VALUES ($1, 'lounge', $2, 'voice', $3)`,
+    [workspaceId, 'Drop in to talk', userId],
+  );
 }
 
 /** Tokens outlive a join but not a session, so a tab left open all day reconnects. */
 const TOKEN_TTL = '6h';
 
 /**
- * The management API is HTTP even though clients dial over websockets, so the
- * ws:// URL the browser uses is rewritten for our own server-to-server calls.
+ * LiveKit's management API, for this server's own calls. The internal address
+ * when there is one; otherwise the address browsers dial, rewritten from ws to
+ * http, since the management API is plain HTTP.
  */
 function roomService(): RoomServiceClient {
-  const httpUrl = config.livekit.url.replace(/^ws/, 'http');
+  const httpUrl = config.livekit.internalUrl || config.livekit.url.replace(/^ws/, 'http');
   return new RoomServiceClient(httpUrl, config.livekit.apiKey, config.livekit.apiSecret);
+}
+
+/**
+ * The address a browser dials to join a call. LIVEKIT_URL when it is set;
+ * otherwise this server's own address, as the browser reached it, since this
+ * server relays signalling under /rtc.
+ */
+function signallingUrl(req: FastifyRequest): string {
+  if (config.livekit.url) return config.livekit.url;
+  // Behind Caddy the request arrives here over plain HTTP, but the browser used
+  // HTTPS and may only open wss://. The header can be forged, but only by the
+  // person asking, about the answer they get.
+  const forwarded = String(req.headers['x-forwarded-proto'] ?? '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  const secure = (forwarded || req.protocol) === 'https';
+  return `${secure ? 'wss' : 'ws'}://${req.headers.host ?? req.hostname}`;
 }
 
 export const voiceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
-  app.get('/voice/config', async () => ({
+  app.get('/voice/config', async (req) => ({
     enabled: voiceEnabled(),
-    url: config.livekit.url || null,
+    url: voiceEnabled() ? signallingUrl(req) : null,
   }));
 
   /**
@@ -121,7 +160,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return {
-      url: config.livekit.url,
+      url: signallingUrl(req),
       token: await token.toJwt(),
       room: req.params.id,
       channelName: channel.name,

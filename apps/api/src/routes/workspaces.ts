@@ -6,8 +6,9 @@ import { badRequest, notFound, parse } from '../lib/http.js';
 import { slugify } from '../lib/auth.js';
 import { DOCUMENT_SUMMARY_COLUMNS } from '../lib/documentColumns.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
-import { removeStoredFile, uploadUrlSql } from '../lib/storage.js';
+import { removeStoredFile, removeStoredFiles, uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
+import { addDefaultVoiceChannel } from './voice.js';
 
 const WORKSPACE_COLUMNS = `id, name, slug, icon, ${uploadUrlSql('avatar_key')} AS "avatarUrl",
   created_at AS "createdAt"`;
@@ -70,6 +71,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         `INSERT INTO channels (workspace_id, name, topic, created_by) VALUES ($1, 'general', $2, $3)`,
         [rows[0].id, 'Everything else', req.user!.id],
       );
+      await addDefaultVoiceChannel(client, rows[0].id as string, req.user!.id);
       return rows[0];
     });
     reply.status(201);
@@ -111,11 +113,25 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       [req.user!.id],
     );
     if (rows[0].count <= 1) throw badRequest('You cannot leave yourself without a workspace');
+    // The rows for the workspace's files cascade away with it, so the files
+    // themselves are collected first and removed once it is gone.
+    const { rows: files } = await query<{ storage_key: string }>(
+      `SELECT storage_key FROM attachments WHERE workspace_id = $1
+       UNION ALL
+       SELECT a.storage_key FROM message_attachments a
+         JOIN channels c ON c.id = a.channel_id
+        WHERE c.workspace_id = $1`,
+      [req.params.id],
+    );
     const { rows: deleted } = await query<{ avatar_key: string | null }>(
       'DELETE FROM workspaces WHERE id = $1 RETURNING avatar_key',
       [req.params.id],
     );
     if (deleted[0]?.avatar_key) await removeStoredFile(deleted[0].avatar_key);
+    await removeStoredFiles(
+      files.map((f) => f.storage_key),
+      req.log,
+    );
     reply.status(204);
   });
 

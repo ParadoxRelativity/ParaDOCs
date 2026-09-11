@@ -23,6 +23,14 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
+/** A file size for people to read: "820 B", "4.2 KB", "25 MB". */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Number((bytes / 1024).toFixed(1))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(1))} MB`;
+  return `${Number((bytes / (1024 * 1024 * 1024)).toFixed(1))} GB`;
+}
+
 /** State mirrored into localStorage, used for sidebar and theme preferences. */
 export function useLocalStorage<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {

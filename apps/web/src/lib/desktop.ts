@@ -66,6 +66,8 @@ export type DesktopCommand =
   | { type: 'open-settings'; section: string }
   | { type: 'connect-server' };
 
+export type DesktopPreferenceKey = 'theme' | 'media' | 'callLayout';
+
 export interface DesktopBridge {
   connections: {
     list(): Promise<DesktopConnection[]>;
@@ -87,8 +89,8 @@ export interface DesktopBridge {
   /** App-wide preferences, shared by every connection's page. */
   preferences: {
     /** As they were when this page started, read before its first script ran. */
-    initial: { theme?: unknown; media?: unknown };
-    set(key: 'theme' | 'media', value: unknown): Promise<boolean>;
+    initial: Partial<Record<DesktopPreferenceKey, unknown>>;
+    set(key: DesktopPreferenceKey, value: unknown): Promise<boolean>;
     onChanged(handler: (key: string, value: unknown) => void): () => void;
   };
   updates: {

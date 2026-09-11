@@ -63,9 +63,10 @@ COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Uploads live on a volume. Creating the directory here with the right owner
-# means a freshly created named volume inherits that ownership.
-RUN mkdir -p /data/uploads && chown -R node:node /data /app
+# Uploads, and the key file shared with LiveKit, live on volumes. Creating the
+# directories here with the right owner means a freshly created named volume
+# inherits that ownership.
+RUN mkdir -p /data/uploads /data/voice && chown -R node:node /data /app
 USER node
 
 EXPOSE 4000

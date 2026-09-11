@@ -1,12 +1,34 @@
-import { useEffect, useRef } from 'react';
-import { LocalParticipant, Track, type Participant, type TrackPublication } from 'livekit-client';
+import { useEffect, useRef, useState } from 'react';
+import { LocalParticipant, Track, type Participant } from 'livekit-client';
 import type { Channel } from '@paradocs/shared';
 import type { VoiceConfig } from '../../api/hooks';
 import type { Call } from '../../lib/call';
+import { useCallLayout } from '../../lib/callLayout';
 import { cx } from '../../lib/util';
 import { EmptyState } from '../ui';
 import Avatar from '../Avatar';
 import Icon from '../Icon';
+
+/**
+ * One video in a call: a person's camera — their picture while it is off — or
+ * a screen they are sharing. A share is a feed of its own rather than taking
+ * over the person's tile, so their camera and their screen can both be watched.
+ */
+interface Feed {
+  key: string;
+  participant: Participant;
+  source: 'camera' | 'screen';
+}
+
+function feedsOf(participants: Participant[]): Feed[] {
+  return participants.flatMap((participant) => {
+    const feeds: Feed[] = [{ key: `${participant.identity}:camera`, participant, source: 'camera' }];
+    if (participant.getTrackPublication(Track.Source.ScreenShare)?.track) {
+      feeds.push({ key: `${participant.identity}:screen`, participant, source: 'screen' });
+    }
+    return feeds;
+  });
+}
 
 /**
  * The view of a voice channel.
@@ -29,16 +51,35 @@ export function VoiceRoom({
 }) {
   const here = call.channelId === channel.id;
   const joined = here && call.status === 'joined';
+  const [layout] = useCallLayout();
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+
+  const feeds = feedsOf(call.participants);
+  // A focused feed that ends — a share stopped, someone left — gives the
+  // stage back to everyone.
+  const focused = feeds.find((feed) => feed.key === focusedKey) ?? null;
+  const toggleFocus = (key: string) => setFocusedKey((current) => (current === key ? null : key));
+
+  useEffect(() => {
+    if (!focused) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFocusedKey(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [focused]);
 
   if (config && !config.enabled) {
     return (
       <EmptyState
         icon="volume-mute"
-        title="Voice is not configured on this server"
-        hint="Set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET, or run the livekit service from docker-compose."
+        title="Voice is off on this server"
+        hint="The Docker deployment runs voice unless VOICE_ENABLED is false. Elsewhere, set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET."
       />
     );
   }
+
+  const side = layout === 'side';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -50,8 +91,15 @@ export function VoiceRoom({
           <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">{channel.topic}</span>
         )}
         {joined && (
-          <span className="ml-auto text-xs text-[var(--color-muted)]">
-            {call.participants.length} {call.participants.length === 1 ? 'person' : 'people'}
+          <span className="ml-auto flex items-center gap-3 text-xs text-[var(--color-muted)]">
+            {focused && (
+              <button onClick={() => setFocusedKey(null)} className="hover:text-[var(--color-ink)]">
+                <Icon name="grid" /> Show everyone
+              </button>
+            )}
+            <span>
+              {call.participants.length} {call.participants.length === 1 ? 'person' : 'people'}
+            </span>
           </span>
         )}
       </header>
@@ -79,10 +127,41 @@ export function VoiceRoom({
             </button>
           </div>
         </div>
+      ) : focused ? (
+        // One feed large; the rest in a strip beside or below it, as chosen in
+        // Settings → Appearance.
+        <div className={cx('flex min-h-0 flex-1 gap-2 p-3', side ? 'flex-row' : 'flex-col')}>
+          <div className="min-h-0 min-w-0 flex-1">
+            <FeedTile feed={focused} selfName={selfName} focused onToggleFocus={() => setFocusedKey(null)} />
+          </div>
+          {feeds.length > 1 && (
+            <div
+              className={cx(
+                // The padding keeps a speaker's highlight ring from being clipped
+                // by the scrolling strip.
+                'scroll-thin flex shrink-0 gap-2 p-0.5',
+                side ? 'w-56 flex-col overflow-y-auto' : 'h-32 flex-row overflow-x-auto',
+              )}
+            >
+              {feeds
+                .filter((feed) => feed.key !== focused.key)
+                .map((feed) => (
+                  <div key={feed.key} className={cx('aspect-video shrink-0', side ? 'w-full' : 'h-full')}>
+                    <FeedTile
+                      feed={feed}
+                      selfName={selfName}
+                      compact
+                      onToggleFocus={() => toggleFocus(feed.key)}
+                    />
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
       ) : (
         <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2 overflow-y-auto p-3">
-          {call.participants.map((participant) => (
-            <Tile key={participant.sid} participant={participant} selfName={selfName} />
+          {feeds.map((feed) => (
+            <FeedTile key={feed.key} feed={feed} selfName={selfName} onToggleFocus={() => toggleFocus(feed.key)} />
           ))}
         </div>
       )}
@@ -146,19 +225,29 @@ function Control({
   );
 }
 
-/** Prefers a screen share over the camera: it is the thing people are looking at. */
-function videoPublication(participant: Participant): TrackPublication | undefined {
-  const screen = participant.getTrackPublication(Track.Source.ScreenShare);
-  if (screen?.track) return screen;
-  const camera = participant.getTrackPublication(Track.Source.Camera);
-  return camera?.track && !camera.isMuted ? camera : undefined;
-}
-
-function Tile({ participant, selfName }: { participant: Participant; selfName: string }) {
+function FeedTile({
+  feed,
+  selfName,
+  focused = false,
+  compact = false,
+  onToggleFocus,
+}: {
+  feed: Feed;
+  selfName: string;
+  /** Shown as the large view. */
+  focused?: boolean;
+  /** Shown in the strip beside or below the large view. */
+  compact?: boolean;
+  onToggleFocus: () => void;
+}) {
+  const { participant, source } = feed;
   const videoRef = useRef<HTMLVideoElement>(null);
   const isLocal = participant instanceof LocalParticipant;
-  const video = videoPublication(participant);
-  const sharing = Boolean(participant.getTrackPublication(Track.Source.ScreenShare)?.track);
+  const publication = participant.getTrackPublication(
+    source === 'screen' ? Track.Source.ScreenShare : Track.Source.Camera,
+  );
+  // A camera that is turned off keeps its publication but shows nothing.
+  const video = publication?.track && !(source === 'camera' && publication.isMuted) ? publication : undefined;
   const micPublication = participant.getTrackPublication(Track.Source.Microphone);
   const muted = !micPublication || micPublication.isMuted;
 
@@ -175,13 +264,24 @@ function Tile({ participant, selfName }: { participant: Participant; selfName: s
   // Audio is not played here. The call plays it, so it keeps going when this
   // view is closed.
 
-  const name = isLocal ? `${selfName} (you)` : (participant.name || participant.identity);
+  const person = isLocal ? `${selfName} (you)` : participant.name || participant.identity;
+  const label =
+    source === 'screen' ? (isLocal ? 'Your screen' : `${participant.name || participant.identity}’s screen`) : person;
+  const action = focused ? `Stop focusing on ${label}` : `Focus on ${label}`;
 
   return (
-    <div
+    <button
+      type="button"
+      onClick={onToggleFocus}
+      title={action}
+      aria-label={action}
+      aria-pressed={focused}
       className={cx(
-        'relative flex min-h-[150px] items-center justify-center overflow-hidden rounded-xl bg-[var(--color-surface)]',
-        participant.isSpeaking && 'ring-2 ring-[var(--color-accent)]',
+        'group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl outline-none',
+        'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]',
+        source === 'screen' ? 'bg-black' : 'bg-[var(--color-surface)]',
+        !compact && !focused && 'min-h-[150px]',
+        source === 'camera' && participant.isSpeaking && 'ring-2 ring-[var(--color-accent)]',
       )}
     >
       {video ? (
@@ -189,33 +289,44 @@ function Tile({ participant, selfName }: { participant: Participant; selfName: s
           ref={videoRef}
           autoPlay
           playsInline
-          // Local camera is mirrored, as people expect of their own image; a
-          // shared screen is not, because text would read backwards.
-          muted={isLocal}
-          className={cx('h-full w-full object-contain', isLocal && !sharing && 'scale-x-[-1]')}
+          muted
+          // Your own camera is mirrored, as people expect of their own image;
+          // a shared screen is not, because its text would read backwards.
+          className={cx('h-full w-full object-contain', isLocal && source === 'camera' && 'scale-x-[-1]')}
         />
       ) : (
         <Avatar
-          name={name}
+          name={person}
           url={participant.attributes.avatarUrl || null}
           seed={participant.identity}
-          size="xl"
+          size={compact ? 'lg' : 'xl'}
         />
       )}
 
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-xs text-white">
-        {muted && (
-          <span title="Muted">
-            <Icon name="mic-mute" />
-          </span>
+      <span
+        className={cx(
+          'absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-white',
+          compact ? 'text-[11px]' : 'text-xs',
         )}
-        {sharing && (
-          <span title="Sharing screen">
-            <Icon name="display" />
-          </span>
+      >
+        {source === 'screen' ? (
+          <Icon name="display" />
+        ) : (
+          muted && (
+            <span title="Muted">
+              <Icon name="mic-mute" />
+            </span>
+          )
         )}
-        <span className="max-w-[220px] truncate">{name}</span>
-      </div>
-    </div>
+        <span className="truncate">{label}</span>
+      </span>
+
+      <span
+        aria-hidden
+        className="absolute right-2 top-2 rounded-md bg-black/60 px-1.5 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        <Icon name={focused ? 'fullscreen-exit' : 'fullscreen'} />
+      </span>
+    </button>
   );
 }

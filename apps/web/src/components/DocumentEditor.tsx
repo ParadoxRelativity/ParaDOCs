@@ -3,7 +3,7 @@ import { BlockNoteView } from '@blocknote/mantine';
 import { SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
 import type { Block } from '@blocknote/core';
 import type { Doc } from '@paradocs/shared';
-import { useChannels, type DocumentPatch } from '../api/hooks';
+import { useChannels, useUploadFile, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
 import { useCollaboration, type CollabSession, type Peer } from '../lib/collaboration';
 import DocumentMeta from './DocumentMeta';
@@ -80,12 +80,18 @@ function EditorSurface({
   peers: Peer[];
 }) {
   const [title, setTitle] = useState(doc.title);
+  const upload = useUploadFile(workspaceId);
 
   // With collaboration on, the body is never passed as initialContent and never
   // PATCHed: the Y.Doc is the source of truth and the server persists it and
   // re-derives blocks and markdown for search.
   const editor = useCreateBlockNote(
-    { collaboration: { provider: session.provider, fragment: session.fragment, user: collabUser } },
+    {
+      collaboration: { provider: session.provider, fragment: session.fragment, user: collabUser },
+      // Image, video, audio and file blocks, and files dropped or pasted into
+      // the page, upload to the workspace under the server's size limit.
+      uploadFile: async (file: File) => (await upload.mutateAsync({ file, documentId: doc.id })).url,
+    },
     [session],
   );
 

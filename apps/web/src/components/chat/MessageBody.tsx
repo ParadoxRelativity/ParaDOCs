@@ -1,4 +1,5 @@
 import { parseMessage, type MessageReferences } from '@paradocs/shared';
+import { emojiOnly } from '../../lib/emoji';
 import { cx } from '../../lib/util';
 import { DocumentIcon } from '../Icon';
 
@@ -27,9 +28,12 @@ export function MessageBody({
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
+  // A message that is just a few emoji is shown large.
+  const emojiCount = emojiOnly(body);
+  const jumbo = emojiCount > 0 && emojiCount <= 6;
 
   return (
-    <span className="whitespace-pre-wrap break-words">
+    <span className={cx('whitespace-pre-wrap break-words', jumbo && 'text-4xl leading-tight')}>
       {parseMessage(body).map((segment, index) => {
         if (segment.type === 'text') return <span key={index}>{segment.value}</span>;
 

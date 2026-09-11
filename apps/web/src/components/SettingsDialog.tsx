@@ -23,6 +23,7 @@ import UploadsPanel from './UploadsPanel';
 import VoiceSettings from './VoiceSettings';
 import { desktop } from '../lib/desktop';
 import type { Theme } from '../lib/theme';
+import { useCallLayout, type CallLayout } from '../lib/callLayout';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
 import WorkspaceIcon from './WorkspaceIcon';
 
@@ -111,7 +112,11 @@ export default function SettingsDialog(props: Props) {
         <div className="scroll-thin max-h-[60vh] min-w-0 flex-1 overflow-y-auto pr-1">
           {section === 'account' && <AccountSection user={props.user} />}
           {section === 'appearance' && (
-            <AppearanceSection theme={props.theme} onThemeChange={props.onThemeChange} />
+            <AppearanceSection
+              theme={props.theme}
+              onThemeChange={props.onThemeChange}
+              showCallLayout={voiceEnabled}
+            />
           )}
           {section === 'voice' && <VoiceSettings />}
           {section === 'workspace' && (
@@ -273,30 +278,103 @@ const THEMES: { id: Theme; label: string; hint: string; icon: IconName }[] = [
   { id: 'system', label: 'System', hint: 'Follow your OS setting', icon: 'display' },
 ];
 
-function AppearanceSection({ theme, onThemeChange }: { theme: Theme; onThemeChange: (t: Theme) => void }) {
+const CALL_LAYOUTS: { id: CallLayout; label: string; hint: string }[] = [
+  { id: 'side', label: 'Beside', hint: 'Other videos in a column' },
+  { id: 'bottom', label: 'Below', hint: 'Other videos in a row' },
+];
+
+function OptionCard({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
-    <Section title="Theme" hint="Applies to this browser only.">
-      <div className="grid grid-cols-3 gap-2">
-        {THEMES.map((option) => (
-          <button
-            key={option.id}
-            onClick={() => onThemeChange(option.id)}
-            className={cx(
-              'rounded-lg border px-2 py-3 text-center transition-colors',
-              theme === option.id
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
-                : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]',
-            )}
-          >
-            <div className="text-lg">
-              <Icon name={option.icon} />
-            </div>
-            <div className="mt-1 text-xs font-medium">{option.label}</div>
-            <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
-          </button>
+    <button
+      onClick={onClick}
+      aria-pressed={selected}
+      className={cx(
+        'rounded-lg border px-2 py-3 text-center transition-colors',
+        selected
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+          : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** A small picture of the layout: the focused video, and where the others go. */
+function CallLayoutDiagram({ layout }: { layout: CallLayout }) {
+  const side = layout === 'side';
+  return (
+    <div
+      aria-hidden
+      className={cx(
+        'mx-auto flex h-12 w-20 gap-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] p-1',
+        side ? 'flex-row' : 'flex-col',
+      )}
+    >
+      <div className="flex-1 rounded-sm bg-[var(--color-accent)] opacity-70" />
+      <div className={cx('flex gap-1', side ? 'w-4 flex-col' : 'h-2.5 flex-row')}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex-1 rounded-sm bg-[var(--color-muted)] opacity-40" />
         ))}
       </div>
-    </Section>
+    </div>
+  );
+}
+
+function AppearanceSection({
+  theme,
+  onThemeChange,
+  showCallLayout,
+}: {
+  theme: Theme;
+  onThemeChange: (t: Theme) => void;
+  /** Only where the server can hold a call. */
+  showCallLayout: boolean;
+}) {
+  const [callLayout, setCallLayout] = useCallLayout();
+  const scope = desktop ? 'Applies on every server in this app.' : 'Applies to this browser only.';
+
+  return (
+    <>
+      <Section title="Theme" hint={scope}>
+        <div className="grid grid-cols-3 gap-2">
+          {THEMES.map((option) => (
+            <OptionCard key={option.id} selected={theme === option.id} onClick={() => onThemeChange(option.id)}>
+              <div className="text-lg">
+                <Icon name={option.icon} />
+              </div>
+              <div className="mt-1 text-xs font-medium">{option.label}</div>
+              <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
+            </OptionCard>
+          ))}
+        </div>
+      </Section>
+
+      {showCallLayout && (
+        <Section
+          title="Focused video in calls"
+          hint={`Click a camera or shared screen in a call to make it large; the other videos move aside. ${scope}`}
+        >
+          <div className="grid grid-cols-2 gap-2">
+            {CALL_LAYOUTS.map((option) => (
+              <OptionCard key={option.id} selected={callLayout === option.id} onClick={() => setCallLayout(option.id)}>
+                <CallLayoutDiagram layout={option.id} />
+                <div className="mt-2 text-xs font-medium">{option.label}</div>
+                <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
+              </OptionCard>
+            ))}
+          </div>
+        </Section>
+      )}
+    </>
   );
 }
 

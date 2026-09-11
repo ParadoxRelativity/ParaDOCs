@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import { oidcStatus } from './oidc.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
 import { uploadUrlSql } from '../lib/storage.js';
+import { addDefaultVoiceChannel } from './voice.js';
 
 /** The account as the client sees it. */
 const USER_COLUMNS = `id, email, name, ${uploadUrlSql('avatar_key')} AS "avatarUrl"`;
@@ -73,6 +74,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         `INSERT INTO channels (workspace_id, name, topic, created_by) VALUES ($1, 'general', $2, $3)`,
         [wsRows[0].id, 'Everything else', created.id],
       );
+      await addDefaultVoiceChannel(client, wsRows[0].id, created.id);
       return created;
     });
 

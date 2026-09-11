@@ -35,12 +35,41 @@ export interface VoiceOccupant {
 export interface Message {
   id: string;
   channelId: string;
+  /** May be empty when the message is only files. */
   body: string;
   /** Null once the account is gone; the message itself survives. */
   author: MessageAuthor | null;
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
+  /** In the order they were added to the message. */
+  attachments: MessageAttachment[];
+  /** One entry per emoji, in the order each was first used. */
+  reactions: MessageReaction[];
+}
+
+/** A file shared in a message. */
+export interface MessageAttachment {
+  id: string;
+  filename: string;
+  /** As reported by the uploader's browser, so for display only. */
+  mimeType: string;
+  byteSize: number;
+  url: string;
+  /** Pixel size of an image or video, when the uploader could measure it. */
+  width: number | null;
+  height: number | null;
+}
+
+export interface MessageReaction {
+  emoji: string;
+  /** Everyone who reacted with this emoji, earliest first. */
+  users: { id: string; name: string }[];
+}
+
+/** What the server allows for uploads anywhere: chat, documents and canvases. */
+export interface UploadConfig {
+  maxBytes: number;
 }
 
 /**
@@ -75,13 +104,86 @@ export const updateChannelSchema = z.object({
   position: z.number().int().min(0).optional(),
 });
 
-export const createMessageSchema = z.object({
-  body: z.string().trim().min(1, 'Write something first').max(4000),
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+
+/** Distinct emoji on one message. Past this, people can still join existing reactions. */
+export const MAX_REACTIONS_PER_MESSAGE = 20;
+
+export const createMessageSchema = z
+  .object({
+    body: z.string().trim().max(4000).default(''),
+    attachmentIds: z
+      .array(z.string().uuid())
+      .max(MAX_ATTACHMENTS_PER_MESSAGE, `A message can carry up to ${MAX_ATTACHMENTS_PER_MESSAGE} files`)
+      .default([])
+      .refine((ids) => new Set(ids).size === ids.length, 'The same file was attached twice'),
+  })
+  .refine((message) => message.body.length > 0 || message.attachmentIds.length > 0, {
+    message: 'Write something first',
+    path: ['body'],
+  });
+
+/** An edit may empty the text only of a message that has files; the route checks. */
+export const updateMessageSchema = z.object({
+  body: z.string().trim().max(4000),
 });
 
-export const updateMessageSchema = z.object({
-  body: z.string().trim().min(1).max(4000),
+export const reactionSchema = z.object({
+  emoji: z.string().max(32).refine(isEmoji, 'A reaction has to be a single emoji'),
 });
+
+// --- emoji and files ----------------------------------------------------------
+
+/**
+ * One emoji, including skin tones, keycaps, flags and joined sequences such as
+ * families. Used to keep reactions to emoji rather than arbitrary text.
+ */
+const EMOJI =
+  /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}[\u{E0020}-\u{E007F}]*(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}[\u{E0020}-\u{E007F}]*(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
+
+export function isEmoji(value: string): boolean {
+  return EMOJI.test(value);
+}
+
+export type AttachmentKind = 'image' | 'video' | 'audio' | 'file';
+
+const KIND_BY_EXTENSION: Record<string, AttachmentKind> = {
+  png: 'image',
+  jpg: 'image',
+  jpeg: 'image',
+  gif: 'image',
+  webp: 'image',
+  avif: 'image',
+  mp4: 'video',
+  m4v: 'video',
+  webm: 'video',
+  ogv: 'video',
+  mov: 'video',
+  mp3: 'audio',
+  m4a: 'audio',
+  aac: 'audio',
+  ogg: 'audio',
+  oga: 'audio',
+  opus: 'audio',
+  wav: 'audio',
+  flac: 'audio',
+};
+
+/**
+ * How a stored file can be shown, judged by its extension. The server sends a
+ * file with the content type its extension implies, so this — not the type the
+ * uploader's browser claimed — is what the browser will actually receive.
+ * SVG is deliberately not an image here: it can carry script.
+ */
+export function attachmentKind(pathOrName: string): AttachmentKind {
+  const match = /\.([a-z0-9]+)$/i.exec(pathOrName.split(/[?#]/)[0]);
+  return (match && KIND_BY_EXTENSION[match[1].toLowerCase()]) || 'file';
+}
+
+/** Stands in for the text of a message that is only files, in previews. */
+export function attachmentSummary(count: number): string {
+  return count === 1 ? 'Shared a file' : `Shared ${count} files`;
+}
 
 export interface DocumentReference {
   id: string;

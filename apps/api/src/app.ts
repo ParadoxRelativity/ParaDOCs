@@ -8,6 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { HttpError, registerErrorHandler } from './lib/http.js';
+import { servesInline } from './lib/storage.js';
+import { voiceProxyRoutes } from './lib/voiceProxy.js';
 import { sessionPlugin } from './plugins/session.js';
 import { authRoutes } from './routes/auth.js';
 import { workspaceRoutes } from './routes/workspaces.js';
@@ -53,7 +55,21 @@ export async function buildApp() {
   await app.register(sessionPlugin);
 
   fs.mkdirSync(config.uploadDir, { recursive: true });
-  await app.register(fastifyStatic, { root: config.uploadDir, prefix: '/uploads/' });
+  await app.register(fastifyStatic, {
+    root: config.uploadDir,
+    prefix: '/uploads/',
+    // Uploads are whatever people chose to share, served from this origin.
+    // Pictures, audio, video and PDFs are shown in place; anything else is sent
+    // as a download inside a sandbox, so an uploaded HTML or SVG file cannot
+    // run script as the person who opens it.
+    setHeaders: (res, filePath) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (!servesInline(filePath)) {
+        res.setHeader('Content-Disposition', 'attachment');
+        res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+      }
+    },
+  });
 
   app.get('/api/health', async () => ({ ok: true, version: '0.1.0' }));
 
@@ -92,6 +108,9 @@ export async function buildApp() {
   ]) {
     await app.register(routes, { prefix: '/api' });
   }
+
+  // Voice signalling under /rtc, relayed to LiveKit when this server has it.
+  await app.register(voiceProxyRoutes);
 
   return app;
 }

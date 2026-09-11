@@ -1,18 +1,35 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { mentions, type Channel, type Message, type MessageReferences } from '@paradocs/shared';
 import { api } from '../../api/client';
-import { keys, useMessages, useSendMessage, useDeleteMessage, useMarkChannelRead, type MessagePage } from '../../api/hooks';
+import {
+  keys,
+  useMessages,
+  useSendMessage,
+  useDeleteMessage,
+  useMarkChannelRead,
+  useToggleReaction,
+  type MessagePage,
+} from '../../api/hooks';
 import { mergeReferences } from '../../lib/chatEvents';
 import { cx, formatRelative } from '../../lib/util';
 import { EmptyState, IconButton, Spinner } from '../ui';
+import { useToast } from '../Toast';
 import Avatar from '../Avatar';
 import Icon from '../Icon';
+import { EmojiPicker } from './EmojiPicker';
+import { MediaViewer, type ViewerItem } from './MediaViewer';
+import { MessageAttachments } from './MessageAttachments';
 import { MessageBody } from './MessageBody';
-import { MessageComposer } from './MessageComposer';
+import { MessageComposer, type ComposerHandle } from './MessageComposer';
+import { Reactions } from './Reactions';
 
 /** Consecutive messages from one person within this window share a header. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+function carriesFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes('Files');
+}
 
 export function ChatView({
   workspaceId,
@@ -41,13 +58,20 @@ export function ChatView({
   onOpenChannel: (id: string) => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const page = useMessages(channel.id);
   const send = useSendMessage(channel.id);
   const remove = useDeleteMessage();
+  const react = useToggleReaction(channel.id);
   const markRead = useMarkChannelRead(workspaceId);
   const scroller = useRef<HTMLDivElement>(null);
+  const composer = useRef<ComposerHandle>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-
+  const [viewer, setViewer] = useState<{ items: ViewerItem[]; index: number } | null>(null);
+  const [reacting, setReacting] = useState<{ messageId: string; anchor: HTMLElement } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  // dragenter and dragleave fire for every child crossed, so depth is counted.
+  const dragDepth = useRef(0);
 
   // Opening a channel clears its badge, and so does a message arriving while
   // you are looking at it.
@@ -64,6 +88,12 @@ export function ChatView({
     const el = scroller.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [messageCount, channel.id]);
+
+  // A picture that loads after its message can still push the list taller.
+  const keepPinned = useCallback(() => {
+    const el = scroller.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, []);
 
   async function loadOlder() {
     const current = page.data;
@@ -93,11 +123,43 @@ export function ChatView({
     }
   }
 
+  function toggleReaction(messageId: string, emoji: string, on: boolean) {
+    react.mutate(
+      { messageId, emoji, on },
+      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the reaction', 'error') },
+    );
+  }
+
   const messages = page.data?.messages ?? [];
   const references = page.data?.references ?? { documents: [], channels: [], members: [] };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      onDragEnter={(e) => {
+        if (!canPost || !carriesFiles(e)) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        setDragging(true);
+      }}
+      onDragOver={(e) => {
+        if (!canPost || !carriesFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (!canPost || !carriesFiles(e)) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!canPost || !carriesFiles(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragging(false);
+        composer.current?.addFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-line)] px-4">
         <span className="text-sm font-semibold">#{channel.name}</span>
         {channel.topic && (
@@ -149,7 +211,12 @@ export function ChatView({
                 references={references}
                 selfId={selfId}
                 canDelete={canModerate || message.author?.id === selfId}
+                canReact={canPost}
                 onDelete={() => remove.mutate(message.id)}
+                onToggleReaction={(emoji, on) => toggleReaction(message.id, emoji, on)}
+                onAddReaction={(anchor) => setReacting({ messageId: message.id, anchor })}
+                onOpenMedia={(items, itemIndex) => setViewer({ items, index: itemIndex })}
+                onMediaLoad={keepPinned}
                 onOpenDocument={onOpenDocument}
                 onOpenChannel={onOpenChannel}
               />
@@ -159,12 +226,54 @@ export function ChatView({
       </div>
 
       <MessageComposer
+        // A draft, and the files uploaded for it, belong to one channel.
+        key={channel.id}
+        ref={composer}
         workspaceId={workspaceId}
+        channelId={channel.id}
         channels={channels}
         channelName={channel.name}
         disabled={!canPost}
-        onSend={(body) => send.mutate(body)}
+        onSend={async (input) => {
+          await send.mutateAsync(input);
+        }}
       />
+
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-30 grid place-items-center rounded-xl border-2 border-dashed border-[var(--color-accent)] bg-[var(--color-raised)]/85">
+          <div className="text-center">
+            <Icon name="cloud-arrow-up" className="text-3xl text-[var(--color-accent)]" />
+            <p className="mt-2 text-sm font-medium">Drop to share in #{channel.name}</p>
+          </div>
+        </div>
+      )}
+
+      {viewer && (
+        <MediaViewer
+          items={viewer.items}
+          index={viewer.index}
+          // From the latest state, so keys pressed faster than a render still count.
+          onStep={(delta) =>
+            setViewer((current) =>
+              current
+                ? { ...current, index: (current.index + delta + current.items.length) % current.items.length }
+                : current,
+            )
+          }
+          onClose={() => setViewer(null)}
+        />
+      )}
+
+      {reacting && (
+        <EmojiPicker
+          anchor={reacting.anchor}
+          onSelect={(emoji) => {
+            toggleReaction(reacting.messageId, emoji, true);
+            setReacting(null);
+          }}
+          onClose={() => setReacting(null)}
+        />
+      )}
     </div>
   );
 }
@@ -175,7 +284,12 @@ function Row({
   references,
   selfId,
   canDelete,
+  canReact,
   onDelete,
+  onToggleReaction,
+  onAddReaction,
+  onOpenMedia,
+  onMediaLoad,
   onOpenDocument,
   onOpenChannel,
 }: {
@@ -184,11 +298,19 @@ function Row({
   references: MessageReferences;
   selfId: string;
   canDelete: boolean;
+  canReact: boolean;
   onDelete: () => void;
+  onToggleReaction: (emoji: string, on: boolean) => void;
+  onAddReaction: (anchor: HTMLElement) => void;
+  onOpenMedia: (items: ViewerItem[], index: number) => void;
+  onMediaLoad: () => void;
   onOpenDocument: (id: string) => void;
   onOpenChannel: (id: string) => void;
 }) {
   const mentionsMe = !message.deletedAt && mentions(message.body, selfId);
+  // A server that predates files and reactions sends neither.
+  const attachments = message.attachments ?? [];
+  const reactions = message.reactions ?? [];
 
   const grouped =
     previous !== undefined &&
@@ -232,8 +354,8 @@ function Row({
             <span className="text-xs text-[var(--color-muted)]">{formatRelative(message.createdAt)}</span>
           </div>
         )}
-        <div className="flex items-start gap-2 text-sm">
-          <div className="min-w-0 flex-1">
+        {message.body && (
+          <div className="text-sm">
             <MessageBody
               body={message.body}
               references={references}
@@ -243,15 +365,40 @@ function Row({
             />
             {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}
           </div>
+        )}
+        {attachments.length > 0 && (
+          <MessageAttachments
+            attachments={attachments}
+            onOpen={onOpenMedia}
+            onLoad={onMediaLoad}
+            className={message.body ? 'mt-1.5' : 'mt-0.5'}
+          />
+        )}
+        {reactions.length > 0 && (
+          <Reactions
+            reactions={reactions}
+            selfId={selfId}
+            canReact={canReact}
+            onToggle={onToggleReaction}
+            onAdd={onAddReaction}
+          />
+        )}
+      </div>
+
+      {(canReact || canDelete) && (
+        <div className="absolute -top-3 right-2 z-10 hidden items-center gap-0.5 rounded-md border border-[var(--color-line)] bg-[var(--color-raised)] p-0.5 shadow-sm focus-within:flex group-hover:flex">
+          {canReact && (
+            <IconButton label="Add reaction" onClick={(e) => onAddReaction(e.currentTarget)}>
+              <Icon name="emoji-smile" />
+            </IconButton>
+          )}
           {canDelete && (
-            <span className="opacity-0 transition-opacity group-hover:opacity-100">
-              <IconButton label="Delete message" onClick={onDelete}>
-                <Icon name="trash3" />
-              </IconButton>
-            </span>
+            <IconButton label="Delete message" onClick={onDelete}>
+              <Icon name="trash3" />
+            </IconButton>
           )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

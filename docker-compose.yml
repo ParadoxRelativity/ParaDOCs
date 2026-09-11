@@ -1,11 +1,28 @@
-# ParaDOCs, self-hosted: one app container plus Postgres.
+# ParaDOCs, self-hosted.
 #
-#   cp .env.example .env      # then set POSTGRES_PASSWORD and SESSION_SECRET
-#   docker compose up -d --build
+# This file and a .env beside it are the whole deployment: nothing else from
+# the repository is needed. docs/deploying-with-docker.md in the repository
+# walks through setting one up.
 #
-# Values come from a .env file beside this one. Both secrets are required on
+#   docker compose up -d                          # start
+#   docker compose pull && docker compose up -d   # upgrade to the latest release
+#
+# .env must set POSTGRES_PASSWORD and SESSION_SECRET. Both are required on
 # purpose: a default password on an internet-facing deployment is not a default,
 # it is a vulnerability.
+#
+# Voice and video are on, with nothing to set. The one thing outside this file
+# is the firewall: browsers send call media straight to UDP 7882, or TCP 7881
+# where UDP is blocked, so open both. VOICE_ENABLED=false in .env turns voice off.
+#
+# HTTPS is optional, as a profile switched on in .env:
+#
+#   COMPOSE_PROFILES=https         Caddy in front, with automatic certificates
+#
+# Caddy's settings are deliberately not marked required below. Compose checks
+# required variables in every service, including ones whose profile is off, so
+# a required DOMAIN would stop a deployment without HTTPS. Instead, a missing
+# setting shows up in that container's logs.
 
 name: paradocs
 
@@ -30,9 +47,8 @@ services:
       - '5432'
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Published for amd64 and arm64 by each release.
+    image: paradoxrelativity/paradocs:latest
     restart: unless-stopped
     # Waiting for a healthy database means the migrations on boot cannot race
     # Postgres still starting up.
@@ -45,53 +61,152 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       # The API serves the SPA, so requests are same-origin and CORS is unused.
       CORS_ORIGIN: ''
-      # Leave false behind plain HTTP; the TLS overlay turns it on.
+      # Session cookies must be marked Secure once traffic is HTTPS, so set
+      # SECURE_COOKIES=true with the https profile. Over plain HTTP leave it
+      # false, or nobody stays signed in.
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
       UPLOAD_DIR: /data/uploads
+      # Largest file anyone can upload, in megabytes: chat, documents and
+      # canvases alike. Set for the whole server; workspaces cannot change it.
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Voice and video. Unset means voice channels are simply unavailable, so
-      # a deployment that only wants documents and chat changes nothing.
-      # LIVEKIT_URL is dialled by browsers, not by this container, so it has to
-      # be an address they can reach — not the compose service name.
-      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      # Voice and video. On first start the app writes the key pair LiveKit
+      # uses into a volume both containers share, and it relays LiveKit's
+      # signalling under /rtc on its own address, so browsers reach voice
+      # wherever they reach the app. Nothing here needs setting.
+      VOICE_ENABLED: ${VOICE_ENABLED:-true}
+      LIVEKIT_INTERNAL_URL: ${LIVEKIT_INTERNAL_URL:-http://livekit:7880}
+      LIVEKIT_KEY_FILE: /data/voice/keys.yaml
+      # Optional: fixed keys instead of generated ones.
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      # Optional: a LiveKit server browsers reach directly, instead of through
+      # the app.
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
     volumes:
       - uploads:/data/uploads
+      - voice-keys:/data/voice
     # Bound to every interface by default so a fresh install is reachable.
-    # Behind the TLS overlay, set BIND_ADDR=127.0.0.1 so only Caddy can reach it.
+    # With the https profile, set BIND_ADDR=127.0.0.1 so only Caddy reaches it.
     ports:
       - '${BIND_ADDR:-0.0.0.0}:${PORT:-4000}:4000'
     # Reap orphaned processes; tini in the image handles signals.
     init: true
 
-  # Voice and video, behind a profile so it is opt-in:
+  # HTTPS, with the `https` profile. Caddy terminates TLS and obtains and renews
+  # certificates by itself. Point DOMAIN's A/AAAA record at this host before
+  # starting it, or the certificate order fails.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ['https']
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      # The hostname Caddy serves and gets a certificate for.
+      DOMAIN: ${DOMAIN:-}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - '80:80'
+      - '443:443'
+
+  # Voice, video and screen sharing.
   #
-  #   docker compose --profile voice up -d
-  #
-  # Media travels over UDP directly between browsers and this container, which
-  # is why the port range is published rather than proxied: WebRTC media cannot
-  # go through an HTTP reverse proxy.
+  # Signalling reaches this container through the app, so its signalling port
+  # is not published. Media cannot go through an HTTP proxy, so its media ports
+  # are: browsers send audio and video to them directly.
   livekit:
     image: livekit/livekit-server:v1.13.6
-    profiles: ['voice']
     restart: unless-stopped
-    command: --config /etc/livekit.yaml --node-ip ${LIVEKIT_NODE_IP:?set LIVEKIT_NODE_IP to this host's address}
-    volumes:
-      - ./livekit.yaml:/etc/livekit.yaml:ro
+    # The app writes the key file on its first start.
+    depends_on:
+      app:
+        condition: service_healthy
+    # LiveKit has to tell browsers the address to send media to. By default it
+    # asks a public STUN server what this host's address looks like from the
+    # internet. LIVEKIT_NODE_IP names the address instead, for hosts where that
+    # answer is wrong or cannot be had, such as a server on a private network.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        if [ -n "$$LIVEKIT_NODE_IP" ]; then
+          sed 's/use_external_ip: true/use_external_ip: false/' /etc/livekit.yaml > /tmp/livekit.yaml
+          exec /livekit-server --config /tmp/livekit.yaml --node-ip "$$LIVEKIT_NODE_IP"
+        fi
+        exec /livekit-server --config /etc/livekit.yaml
     environment:
-      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}"
+      LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP:-}
+    configs:
+      - source: livekit
+        target: /etc/livekit.yaml
+    volumes:
+      - voice-keys:/keys:ro
     ports:
-      # Signalling. Behind the TLS overlay Caddy reaches this over the compose
-      # network, so set LIVEKIT_BIND=127.0.0.1 to keep it off the public
-      # interface — the same treatment BIND_ADDR gives the app.
-      - '${LIVEKIT_BIND:-0.0.0.0}:${LIVEKIT_PORT:-7880}:7880'
-      - '${LIVEKIT_BIND:-0.0.0.0}:7881:7881'
-      # Media. Must stay reachable from browsers directly: WebRTC over UDP
-      # cannot be proxied, so this range is published whatever else changes.
-      - '50000-50100:50000-50100/udp'
+      # UDP carries every call's media on one port. The numbers must match the
+      # rtc ports in the livekit config below, because those numbers are what
+      # browsers are told.
+      - '7882:7882/udp'
+      # TCP is the fallback for networks that block UDP. It is no more exposed
+      # than the UDP port: nothing is accepted without connection details handed
+      # out over the authenticated signalling connection, and the media on it is
+      # encrypted.
+      - '7881:7881'
+
+# Configuration files, written into the containers that use them. Compose
+# substitutes ${...} variables in this text, so a literal $ is written $$.
+configs:
+  caddyfile:
+    content: |
+      {$$DOMAIN} {
+        encode zstd gzip
+
+        # Uploaded files can be cached; they are content-addressed by a random name.
+        @uploads path /uploads/*
+        header @uploads Cache-Control "public, max-age=31536000, immutable"
+
+        # Everything is the app: the SPA, /api, /uploads, and the collaboration,
+        # chat and voice signalling websockets, which reverse_proxy passes through.
+        reverse_proxy app:4000
+      }
+
+  livekit:
+    content: |
+      port: 7880
+
+      # Written by the app, which shares the same keys.
+      key_file: /keys/keys.yaml
+
+      rtc:
+        # Media over TCP, for networks that block UDP. Networks that allow only
+        # web traffic need TURN over TLS instead, which is not enabled here; see
+        # docs/voice-turn.md in the repository.
+        tcp_port: 7881
+        # Every call's media arrives on this one UDP port, and LiveKit tells
+        # callers apart by their address, so there is nothing to run out of and
+        # one firewall rule covers every call.
+        udp_port: 7882
+        # Find the public address through STUN. Turned off when LIVEKIT_NODE_IP
+        # gives the address instead; see the livekit service above.
+        use_external_ip: true
+
+      # Rooms are created when the first person joins and disappear once the
+      # last one leaves, which is why an empty voice channel costs nothing.
+      room:
+        auto_create: true
+        empty_timeout: 60
+
+      logging:
+        level: info
 
 volumes:
   db-data:
   uploads:
+  caddy-data:
+  caddy-config:
+  voice-keys:

@@ -22,12 +22,18 @@ export interface MediaPreferences {
 export interface Preferences {
   theme?: 'light' | 'dark' | 'system';
   media?: MediaPreferences;
+  /** Where the other videos in a call go when one is focused. */
+  callLayout?: 'side' | 'bottom';
 }
 
 const file = path.join(paths.userData, 'preferences.json');
 
 function isTheme(value: unknown): value is NonNullable<Preferences['theme']> {
   return value === 'light' || value === 'dark' || value === 'system';
+}
+
+function isCallLayout(value: unknown): value is NonNullable<Preferences['callLayout']> {
+  return value === 'side' || value === 'bottom';
 }
 
 /** Pages send these, so every field is checked rather than stored as given. */
@@ -50,6 +56,7 @@ export function getPreferences(): Preferences {
   const stored = readJson<Record<string, unknown>>(file, {});
   const preferences: Preferences = {};
   if (isTheme(stored.theme)) preferences.theme = stored.theme;
+  if (isCallLayout(stored.callLayout)) preferences.callLayout = stored.callLayout;
   const media = sanitizeMedia(stored.media);
   if (media) preferences.media = media;
   return preferences;
@@ -62,9 +69,11 @@ export function setPreference(key: unknown, value: unknown): unknown {
     next.theme = value;
   } else if (key === 'media' && sanitizeMedia(value)) {
     next.media = sanitizeMedia(value);
+  } else if (key === 'callLayout' && isCallLayout(value)) {
+    next.callLayout = value;
   } else {
     return undefined;
   }
   writeJson(file, next);
-  return key === 'theme' ? next.theme : next.media;
+  return key === 'theme' ? next.theme : key === 'media' ? next.media : next.callLayout;
 }

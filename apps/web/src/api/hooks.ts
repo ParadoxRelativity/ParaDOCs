@@ -16,12 +16,14 @@ import type {
   Role,
   SearchHit,
   Tag,
+  UploadConfig,
   User,
   VoiceOccupant,
   Workspace,
   WorkspaceInvite,
   WorkspaceMember,
 } from '@paradocs/shared';
+import { formatBytes } from '../lib/util';
 import { api, qs } from './client';
 
 export interface WorkspaceSummary extends Workspace {
@@ -57,6 +59,7 @@ export const keys = {
   channels: (ws: string) => ['channels', ws] as const,
   messages: (channelId: string) => ['messages', channelId] as const,
   notifications: ['notifications'] as const,
+  uploadConfig: ['uploadConfig'] as const,
 };
 
 // --- session ---------------------------------------------------------------
@@ -418,6 +421,18 @@ export interface UploadedFile {
   url: string;
 }
 
+const uploadConfigQuery = {
+  queryKey: keys.uploadConfig,
+  queryFn: () => api.get<UploadConfig>('/uploads/config'),
+  // The limit is set by whoever runs the server, not changed while someone works.
+  staleTime: Infinity,
+};
+
+/** The server's upload limit, which applies to chat, documents and canvases alike. */
+export function useUploadConfig() {
+  return useQuery(uploadConfigQuery);
+}
+
 /** Uploads a file and returns its served URL. Multipart, so not via api.post. */
 export function useUploadFile(workspaceId: string) {
   const qc = useQueryClient();
@@ -430,6 +445,13 @@ export function useUploadFile(workspaceId: string) {
       /** Recorded on the attachment so the file is not treated as orphaned. */
       documentId?: string;
     }): Promise<UploadedFile> => {
+      // Refused here as well as on the server, which cuts an oversized upload
+      // off partway and cannot always get its explanation back to the browser.
+      const limit = await qc.ensureQueryData(uploadConfigQuery).catch(() => null);
+      if (limit && file.size > limit.maxBytes) {
+        throw new Error(`${file.name} is larger than the ${formatBytes(limit.maxBytes)} limit`);
+      }
+
       const body = new FormData();
       // The document id must precede the file: the server reads fields that
       // arrived before the file part.
@@ -657,7 +679,29 @@ export function useSendMessage(channelId: string) {
   return useMutation({
     // The reply is ignored: the same message arrives over the socket, which is
     // the single path that appends to the list, so there is nothing to de-dupe.
-    mutationFn: (body: string) => api.post<MessagePage>(`/channels/${channelId}/messages`, { body }),
+    mutationFn: (input: { body: string; attachmentIds: string[] }) =>
+      api.post<MessagePage>(`/channels/${channelId}/messages`, input),
+  });
+}
+
+/**
+ * Adds a reaction, or takes one back. The reply updates this view straight
+ * away; everyone else's arrives over the socket.
+ */
+export function useToggleReaction(channelId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ messageId, emoji, on }: { messageId: string; emoji: string; on: boolean }) => {
+      const path = `/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`;
+      return on ? api.put<{ message: Message }>(path) : api.delete<{ message: Message }>(path);
+    },
+    onSuccess: ({ message }) => {
+      qc.setQueryData<MessagePage>(keys.messages(channelId), (current) =>
+        current
+          ? { ...current, messages: current.messages.map((m) => (m.id === message.id ? message : m)) }
+          : current,
+      );
+    },
   });
 }
 

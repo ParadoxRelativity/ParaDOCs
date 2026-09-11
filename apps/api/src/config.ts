@@ -1,6 +1,7 @@
 import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { ensureVoiceKeys } from './lib/voiceKeys.js';
 
 // The .env lives at the repo root so API and web read one file.
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -10,6 +11,60 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env var ${name}. Copy .env.example to .env.`);
   return value;
+}
+
+/**
+ * Voice and video settings. Optional: with no LiveKit server to reach, the
+ * feature turns itself off and the client says so, rather than offering a call
+ * that cannot connect.
+ */
+function livekitSettings() {
+  const fromEnv = {
+    apiKey: process.env.LIVEKIT_API_KEY?.trim() ?? '',
+    apiSecret: process.env.LIVEKIT_API_SECRET?.trim() ?? '',
+  };
+  if (Boolean(fromEnv.apiKey) !== Boolean(fromEnv.apiSecret)) {
+    throw new Error('Set both LIVEKIT_API_KEY and LIVEKIT_API_SECRET, or neither.');
+  }
+
+  // With a key file, as in the Docker deployment, the keys are generated on
+  // first start and shared with LiveKit through it.
+  const keyFile = process.env.LIVEKIT_KEY_FILE?.trim() ?? '';
+  let keys = fromEnv;
+  if (keyFile) {
+    try {
+      keys = ensureVoiceKeys(keyFile, fromEnv);
+    } catch (err) {
+      // Voice is one feature; a volume that cannot be written must not stop
+      // documents and chat from starting.
+      console.error(`Voice is off: could not use the key file ${keyFile}: ${(err as Error).message}`);
+      keys = { apiKey: '', apiSecret: '' };
+    }
+  }
+
+  return {
+    enabled: process.env.VOICE_ENABLED?.trim().toLowerCase() !== 'false',
+    /**
+     * What browsers dial. Unset, they dial this server's own address and it
+     * relays signalling to `internalUrl`. Set it only for a LiveKit server
+     * browsers reach some other way, such as in local development.
+     */
+    url: process.env.LIVEKIT_URL?.trim() ?? '',
+    /** Where this server reaches LiveKit itself, such as http://livekit:7880. */
+    internalUrl: process.env.LIVEKIT_INTERNAL_URL?.trim() ?? '',
+    apiKey: keys.apiKey,
+    apiSecret: keys.apiSecret,
+  };
+}
+
+function megabytes(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback * 1024 * 1024;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a number of megabytes greater than zero, such as 25.`);
+  }
+  return Math.floor(value * 1024 * 1024);
 }
 
 export const config = {
@@ -22,19 +77,15 @@ export const config = {
     .filter(Boolean),
   secureCookies: process.env.SECURE_COOKIES === 'true',
   uploadDir: path.resolve(here, '../../..', process.env.UPLOAD_DIR ?? './data/uploads'),
+  /**
+   * The largest file anyone can upload, whether to chat, a document or a
+   * canvas. It is set for the whole server by whoever runs it, never per
+   * workspace. Profile pictures keep their own, smaller cap.
+   */
+  maxUploadBytes: megabytes('MAX_UPLOAD_MB', 25),
   allowRegistration: process.env.ALLOW_REGISTRATION !== 'false',
   sessionTtlDays: 30,
-  /**
-   * Voice and video. Optional: with no LiveKit server configured the feature
-   * turns itself off and the client says so, rather than offering a call that
-   * cannot connect. `url` is what browsers dial, so it has to be reachable
-   * from them, not just from this process.
-   */
-  livekit: {
-    url: process.env.LIVEKIT_URL ?? '',
-    apiKey: process.env.LIVEKIT_API_KEY ?? '',
-    apiSecret: process.env.LIVEKIT_API_SECRET ?? '',
-  },
+  livekit: livekitSettings(),
 
   // OIDC is stubbed in Phase 1; these are read so deployments can be configured
   // ahead of the implementation landing. See routes/oidc.ts.
