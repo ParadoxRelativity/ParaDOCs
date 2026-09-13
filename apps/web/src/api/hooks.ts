@@ -841,7 +841,8 @@ export interface VoiceConfig {
 }
 
 export interface CallCredentials {
-  url: string;
+  /** Null when the server relays signalling, meaning this page's own origin. */
+  url: string | null;
   token: string;
   room: string;
   channelName: string;

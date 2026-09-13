@@ -18,6 +18,18 @@ chat.attach(app.server);
 // Voice signalling too, relayed to LiveKit, so voice needs no port of its own.
 attachVoiceProxy(app.server, app.log);
 
+// A LIVEKIT_URL left over from before signalling was relayed sends browsers
+// straight past the relay, usually to port 7880, which is no longer published.
+// Joining then fails in the browser with nothing in this server's logs, so it
+// is said here, once, at startup.
+if (config.livekit.url && config.livekit.internalUrl) {
+  app.log.warn(
+    { livekitUrl: config.livekit.url },
+    'LIVEKIT_URL is set, so browsers join calls at that address instead of through this server. ' +
+      'Remove LIVEKIT_URL unless browsers can reach LiveKit there directly.',
+  );
+}
+
 // Expired sessions are dead weight; sweep them hourly.
 const sweep = setInterval(() => {
   query('DELETE FROM sessions WHERE expires_at < now()').catch((err) =>

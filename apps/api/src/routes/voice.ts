@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { ringSchema, type VoiceOccupant } from '@paradocs/shared';
 import { query, type DbClient } from '../db/pool.js';
@@ -47,29 +47,27 @@ function roomService(): RoomServiceClient {
 }
 
 /**
- * The address a browser dials to join a call. LIVEKIT_URL when it is set;
- * otherwise this server's own address, as the browser reached it, since this
- * server relays signalling under /rtc.
+ * The address a browser dials to join a call: LIVEKIT_URL when it is set, or
+ * null when this server relays signalling under /rtc, which means "the address
+ * this page was loaded from".
+ *
+ * The server does not try to work that address out from the request. Between
+ * the browser and here there can be Caddy, another reverse proxy, or the
+ * desktop app's loopback proxy, and any of them may rewrite the Host header or
+ * drop the forwarded protocol — which hands the browser an address it cannot
+ * reach, or plain ws:// on an HTTPS page. Only the page knows its own origin
+ * for certain.
  */
-function signallingUrl(req: FastifyRequest): string {
-  if (config.livekit.url) return config.livekit.url;
-  // Behind Caddy the request arrives here over plain HTTP, but the browser used
-  // HTTPS and may only open wss://. The header can be forged, but only by the
-  // person asking, about the answer they get.
-  const forwarded = String(req.headers['x-forwarded-proto'] ?? '')
-    .split(',')[0]
-    .trim()
-    .toLowerCase();
-  const secure = (forwarded || req.protocol) === 'https';
-  return `${secure ? 'wss' : 'ws'}://${req.headers.host ?? req.hostname}`;
+function signallingUrl(): string | null {
+  return config.livekit.url || null;
 }
 
 export const voiceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
-  app.get('/voice/config', async (req) => ({
+  app.get('/voice/config', async () => ({
     enabled: voiceEnabled(),
-    url: voiceEnabled() ? signallingUrl(req) : null,
+    url: voiceEnabled() ? signallingUrl() : null,
   }));
 
   /**
@@ -158,7 +156,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return {
-      url: signallingUrl(req),
+      url: signallingUrl(),
       token: await token.toJwt(),
       room: req.params.id,
       channelName: access.name,

@@ -26,6 +26,8 @@ export default defineConfig(({ mode }) => {
         // is sent with the handshake.
         '/collab': { target: apiUrl, ws: true, changeOrigin: true },
         '/chat': { target: apiUrl, ws: true, changeOrigin: true },
+        // Voice signalling, which the API relays to LiveKit.
+        '/rtc': { target: apiUrl, ws: true, changeOrigin: true },
       },
     },
   };

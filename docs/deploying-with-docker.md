@@ -220,7 +220,9 @@ or admin adds a voice channel from the Chat sidebar.
 
 Earlier versions needed voice set up by hand. If your `.env` came from one,
 remove `LIVEKIT_URL`, `LIVEKIT_BIND` and `LIVEKIT_PORT`: a `LIVEKIT_URL` with
-port 7880 in it points at a port that is no longer published. `voice` in
+port 7880 in it points at a port that is no longer published, and joining a
+call fails with "Could not reach the voice service at …". While it is set,
+`docker compose logs app` shows a warning about it at startup. `voice` in
 `COMPOSE_PROFILES` no longer does anything and can go too. `LIVEKIT_API_KEY`
 and `LIVEKIT_API_SECRET` can stay: when set, they are used instead of generated
 keys. Then replace `docker-compose.yml` as described in section 9.

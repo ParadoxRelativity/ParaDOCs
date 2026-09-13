@@ -14,6 +14,7 @@ import { api } from '../api/client';
 import type { CallCredentials } from '../api/hooks';
 import { useToast } from '../components/Toast';
 import { InputGainProcessor } from './inputGain';
+import { explainJoinFailure, sameOriginSignallingUrl } from './signalling';
 import {
   canChooseSpeaker,
   connectedDeviceId,
@@ -271,7 +272,12 @@ export function useCall(): Call {
             .on(RoomEvent.ActiveSpeakersChanged, refresh)
             .on(RoomEvent.Disconnected, reset);
 
-          await room.connect(credentials.url, credentials.token);
+          // No address from the server means it relays signalling on the
+          // address this page came from.
+          const signalling = credentials.url ?? sameOriginSignallingUrl();
+          await room.connect(signalling, credentials.token).catch((err: unknown) => {
+            throw explainJoinFailure(err, signalling);
+          });
           setStatus('joined');
 
           // No microphone, or permission refused, is not a reason to be kept

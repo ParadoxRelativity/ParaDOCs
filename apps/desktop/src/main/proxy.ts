@@ -14,7 +14,11 @@ import type { Duplex } from 'node:stream';
  * cookie is a plain same-origin cookie rather than a third-party one.
  */
 
-const PROXIED = ['/api', '/uploads', '/collab', '/chat'];
+// /rtc is voice signalling, which the server relays to LiveKit. Its websocket
+// would be forwarded anyway, but the plain request LiveKit's client makes to
+// learn why a join failed must come here too: to anywhere else it is a
+// cross-origin fetch, which this window's content security policy refuses.
+const PROXIED = ['/api', '/uploads', '/collab', '/chat', '/rtc'];
 
 function isProxied(url: string): boolean {
   const pathname = url.split('?')[0];
