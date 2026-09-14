@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CanvasElement, FrameElement } from '@paradocs/shared';
+import type { CanvasElement, FrameElement, WorkspaceMember } from '@paradocs/shared';
 import CanvasElementView from './CanvasElementView';
 import Connectors from './Connectors';
 import Icon from '../Icon';
@@ -9,6 +9,8 @@ interface Props {
   elements: CanvasElement[];
   startIndex: number;
   dark: boolean;
+  /** So a tag on a slide reads as a name rather than as its markup. */
+  members: WorkspaceMember[];
   onExit: () => void;
   onOpenDocument: (documentId: string) => void;
 }
@@ -17,7 +19,15 @@ interface Props {
  * Presentation view: each frame becomes a slide, scaled to fit the screen.
  * Elements render read-only, so a presenter cannot nudge the board mid-pitch.
  */
-export default function PresentMode({ frames, elements, startIndex, dark, onExit, onOpenDocument }: Props) {
+export default function PresentMode({
+  frames,
+  elements,
+  startIndex,
+  dark,
+  members,
+  onExit,
+  onOpenDocument,
+}: Props) {
   const [index, setIndex] = useState(startIndex);
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const root = useRef<HTMLDivElement>(null);
@@ -145,6 +155,7 @@ export default function PresentMode({ frames, elements, startIndex, dark, onExit
                 selected={false}
                 editing={false}
                 dark={dark}
+                members={members}
                 onChange={() => {}}
                 onStopEditing={() => {}}
                 onOpenDocument={onOpenDocument}

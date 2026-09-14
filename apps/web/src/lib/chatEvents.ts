@@ -53,6 +53,7 @@ export function useChatEvents({
   activeChannelId,
   idle,
   quiet,
+  notify: notifyEnabled = true,
   onNotifyClick,
   onCallEvent,
 }: {
@@ -64,6 +65,12 @@ export function useChatEvents({
   idle: boolean;
   /** Busy: messages still arrive, but nothing pops up. */
   quiet: boolean;
+  /**
+   * Whether this window is the one that raises notifications. A popped-out
+   * channel runs a socket of its own for its messages, and would otherwise
+   * announce every mention a second time.
+   */
+  notify?: boolean;
   onNotifyClick: (workspaceId: string, channelId: string) => void;
   onCallEvent: (event: CallEvent) => void;
 }): {
@@ -87,6 +94,8 @@ export function useChatEvents({
   callHandler.current = onCallEvent;
   const muted = useRef(quiet);
   muted.current = quiet;
+  const announcing = useRef(notifyEnabled);
+  announcing.current = notifyEnabled;
 
   const applyMessage = useCallback(
     (event: ChatMessageEvent) => {
@@ -124,7 +133,7 @@ export function useChatEvents({
         void qc.invalidateQueries({ queryKey: keys.notifications });
       }
 
-      if (!fromSomeoneElse || muted.current) return;
+      if (!fromSomeoneElse || muted.current || !announcing.current) return;
       // Everything in a direct conversation is said to you; in a channel, only
       // a mention is.
       if (!direct && !mentions(event.message.body, selfId)) return;

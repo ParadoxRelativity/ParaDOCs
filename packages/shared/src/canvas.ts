@@ -7,6 +7,9 @@
  * clobbering a single blob.
  */
 
+import { renderCanvasMentions } from './mentions.js';
+import { sheetRefMarkdown } from './sheetRefs.js';
+
 export const CANVAS_ELEMENTS = 'canvas-elements';
 
 export type DocumentMode = 'page' | 'canvas';
@@ -22,7 +25,9 @@ export type CanvasElementType =
   | 'shape'
   | 'node'
   | 'frame'
-  | 'connector';
+  | 'connector'
+  | 'sheetCell'
+  | 'sheetChart';
 
 export type ShapeKind = 'rectangle' | 'ellipse' | 'diamond' | 'triangle';
 
@@ -144,6 +149,28 @@ export interface ConnectorElement extends CanvasElementBase {
   arrow?: boolean;
 }
 
+/**
+ * One cell of a spreadsheet, showing whatever that cell holds now. The board
+ * stores where the value lives, never the value.
+ */
+export interface SheetCellElement extends CanvasElementBase {
+  type: 'sheetCell';
+  spreadsheetId: string;
+  sheetId: string;
+  cell: string;
+  /** What to call it where the value cannot be shown. */
+  label?: string;
+}
+
+/** A chart from a spreadsheet, drawn from the spreadsheet's current data. */
+export interface SheetChartElement extends CanvasElementBase {
+  type: 'sheetChart';
+  spreadsheetId: string;
+  sheetId: string;
+  chartId: string;
+  label?: string;
+}
+
 export type CanvasElement =
   | NoteElement
   | TextElement
@@ -155,7 +182,9 @@ export type CanvasElement =
   | ShapeElement
   | MindNodeElement
   | FrameElement
-  | ConnectorElement;
+  | ConnectorElement
+  | SheetCellElement
+  | SheetChartElement;
 
 export const NOTE_COLORS = ['#fde68a', '#bbf7d0', '#bfdbfe', '#fbcfe8', '#e9d5ff', '#fed7aa'];
 
@@ -173,6 +202,8 @@ export const DEFAULT_SIZE: Record<CanvasElementType, { width: number; height: nu
   node: { width: 180, height: 64 },
   frame: { width: 960, height: 600 },
   connector: { width: 0, height: 0 },
+  sheetCell: { width: 220, height: 96 },
+  sheetChart: { width: 440, height: 300 },
 };
 
 /**
@@ -406,17 +437,25 @@ export function dashArray(dash: ConnectorDash = 'solid', width = 2): string | un
   return undefined;
 }
 
-/** Text a canvas contributes to search, in reading order. */
-export function canvasSearchText(elements: CanvasElement[]): string {
+/**
+ * Text a canvas contributes to search, in reading order.
+ *
+ * `names` resolves the people tagged in that text. A canvas stores a tag as an
+ * id alone, so without them a tag would be indexed as a uuid nobody will ever
+ * search for; with them it reads as the name, which is what someone looking for
+ * it would type.
+ */
+export function canvasSearchText(elements: CanvasElement[], names: Map<string, string> = new Map()): string {
   const lines: string[] = [];
+  const say = (text: string) => renderCanvasMentions(text, names).trim();
   for (const el of [...elements].sort((a, b) => a.y - b.y || a.x - b.x)) {
     switch (el.type) {
       case 'note':
       case 'text':
-        if (el.text.trim()) lines.push(el.text.trim());
+        if (say(el.text)) lines.push(say(el.text));
         break;
       case 'frame':
-        if (el.name.trim()) lines.push(`## ${el.name.trim()}`);
+        if (say(el.name)) lines.push(`## ${say(el.name)}`);
         break;
       case 'link':
         if (el.title) lines.push(el.title);
@@ -427,16 +466,23 @@ export function canvasSearchText(elements: CanvasElement[]): string {
         lines.push(el.title ? `${el.title} — ${el.url}` : el.url);
         break;
       case 'shape':
-        if (el.text?.trim()) lines.push(el.text.trim());
+        if (say(el.text ?? '')) lines.push(say(el.text ?? ''));
         break;
       case 'node':
-        if (el.text.trim()) lines.push(el.parentId ? `- ${el.text.trim()}` : `## ${el.text.trim()}`);
+        if (say(el.text)) lines.push(el.parentId ? `- ${say(el.text)}` : `## ${say(el.text)}`);
         break;
       case 'image':
         if (el.alt) lines.push(el.alt);
         break;
       case 'connector':
-        if (el.label) lines.push(el.label);
+        if (say(el.label ?? '')) lines.push(say(el.label ?? ''));
+        break;
+      // Placeholders, which the export replaces with the spreadsheet's current values.
+      case 'sheetCell':
+        lines.push(sheetRefMarkdown({ kind: 'cell', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, cell: el.cell }, el.label ?? el.cell));
+        break;
+      case 'sheetChart':
+        lines.push(sheetRefMarkdown({ kind: 'chart', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, chartId: el.chartId }, el.label ?? 'Chart'));
         break;
     }
   }

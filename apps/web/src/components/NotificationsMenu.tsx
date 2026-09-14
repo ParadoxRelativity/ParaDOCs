@@ -1,8 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import type { InviteNotification, MessageNotification, Notifications } from '@paradocs/shared';
-import { useAcceptInvite, useDeclineInvite, useMarkNotificationsRead, useNotifications } from '../api/hooks';
+import type {
+  InviteNotification,
+  MentionNotification,
+  MessageNotification,
+  Notifications,
+} from '@paradocs/shared';
+import {
+  useAcceptInvite,
+  useDeclineInvite,
+  useMarkMentionsRead,
+  useMarkNotificationsRead,
+  useNotifications,
+} from '../api/hooks';
 import {
   desktop,
   requireDesktop,
@@ -11,6 +22,8 @@ import {
   type DesktopConnection,
   type Outcome,
 } from '../lib/desktop';
+import { getOpenBehaviour } from '../lib/openBehaviour';
+import { openTab } from '../lib/tabs';
 import { cx, formatRelative } from '../lib/util';
 import Avatar from './Avatar';
 import Icon from './Icon';
@@ -18,8 +31,20 @@ import { useToast } from './Toast';
 import { Button, IconButton, Spinner } from './ui';
 import WorkspaceIcon from './WorkspaceIcon';
 
+/**
+ * Whether this click wants a new tab: the setting says what happens by default,
+ * and holding the platform's modifier does the other one — the same bargain a
+ * browser makes with a link.
+ */
+function wantsNewTab(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  const modified = event.metaKey || event.ctrlKey;
+  return getOpenBehaviour() === 'tab' ? !modified : modified;
+}
+
 interface Actions {
-  openChannel: (message: MessageNotification) => void;
+  openChannel: (message: MessageNotification, newTab: boolean) => void;
+  /** Opens the document or canvas someone tagged you in, and clears the tag. */
+  openMention: (mention: MentionNotification, newTab: boolean) => void;
   accept: (invite: InviteNotification) => Promise<void>;
   decline: (invite: InviteNotification) => Promise<void>;
   markAllRead: () => Promise<void>;
@@ -34,7 +59,8 @@ interface Group {
 }
 
 function countOf(notifications: Notifications): number {
-  return notifications.invites.length + notifications.messages.length;
+  // A server that predates tagging sends no mentions at all.
+  return notifications.invites.length + notifications.messages.length + (notifications.mentions?.length ?? 0);
 }
 
 /**
@@ -55,6 +81,7 @@ export default function NotificationsMenu() {
   const acceptInvite = useAcceptInvite();
   const declineInvite = useDeclineInvite();
   const markRead = useMarkNotificationsRead();
+  const markMentionsRead = useMarkMentionsRead();
 
   useEffect(() => {
     if (!open) return;
@@ -84,9 +111,19 @@ export default function NotificationsMenu() {
       connection: connections.find((c) => c.active) ?? null,
       notifications: here.data,
       actions: {
-        openChannel: (message) => {
+        openChannel: (message, newTab) => {
           close();
-          navigate(`/w/${message.workspace.id}/c/${message.channelId}`);
+          const path = `/w/${message.workspace.id}/c/${message.channelId}`;
+          if (newTab) openTab(path, message.direct ? message.channelName : `#${message.channelName}`);
+          else navigate(path);
+        },
+        openMention: (mention, newTab) => {
+          close();
+          const path = `/w/${mention.workspace.id}/d/${mention.documentId}`;
+          if (newTab) openTab(path, mention.title);
+          else navigate(path);
+          // Going to look at it is what answers the tag.
+          markMentionsRead.mutate([mention.documentId]);
         },
         accept: async (invite) => {
           try {
@@ -107,9 +144,9 @@ export default function NotificationsMenu() {
         },
         markAllRead: async () => {
           try {
-            await markRead.mutateAsync(undefined);
+            await Promise.all([markRead.mutateAsync(undefined), markMentionsRead.mutateAsync(undefined)]);
           } catch (err) {
-            report(err, 'Could not mark messages as read');
+            report(err, 'Could not mark everything as read');
           }
         },
       },
@@ -131,9 +168,16 @@ export default function NotificationsMenu() {
       connection,
       notifications,
       actions: {
+        // Another server's page has its own tabs, and switching to it is
+        // already a change of context; it opens where it opens.
         openChannel: (message) => {
           close();
           void settle(bridge.connections.open(connection.id, `/w/${message.workspace.id}/c/${message.channelId}`));
+        },
+        openMention: (mention) => {
+          close();
+          void settle(bridge.notifications.markMentionsRead(connection.id, [mention.documentId]));
+          void settle(bridge.connections.open(connection.id, `/w/${mention.workspace.id}/d/${mention.documentId}`));
         },
         // Joining happens on that server's own invitation page, which the
         // window switches to.
@@ -142,7 +186,10 @@ export default function NotificationsMenu() {
           await settle(bridge.connections.open(connection.id, `/invite/${invite.token}`));
         },
         decline: (invite) => settle(bridge.notifications.declineInvite(connection.id, invite.id)),
-        markAllRead: () => settle(bridge.notifications.markRead(connection.id)),
+        markAllRead: async () => {
+          await settle(bridge.notifications.markRead(connection.id));
+          await settle(bridge.notifications.markMentionsRead(connection.id));
+        },
       },
     });
   }
@@ -153,6 +200,7 @@ export default function NotificationsMenu() {
   const urgent = groups.some(
     (group) =>
       group.notifications.invites.length > 0 ||
+      (group.notifications.mentions?.length ?? 0) > 0 ||
       group.notifications.messages.some((m) => m.mentions > 0 || m.direct),
   );
 
@@ -193,7 +241,7 @@ export default function NotificationsMenu() {
                 <Icon name="bell" className="text-2xl text-[var(--color-muted)]" />
                 <p className="mt-2 text-sm font-medium">You are all caught up</p>
                 <p className="mt-1 text-xs text-[var(--color-muted)]">
-                  New messages and invitations to workspaces appear here.
+                  New messages, tags and invitations to workspaces appear here.
                 </p>
               </div>
             ) : (
@@ -210,8 +258,10 @@ export default function NotificationsMenu() {
 
 function NotificationGroup({ group, labelled }: { group: Group; labelled: boolean }) {
   const { invites, messages } = group.notifications;
+  const mentions = group.notifications.mentions ?? [];
   if (countOf(group.notifications) === 0) return null;
-  const heading = labelled && group.connection ? group.connection.label : messages.length > 0 ? 'Messages' : null;
+  const unread = messages.length > 0 || mentions.length > 0;
+  const heading = labelled && group.connection ? group.connection.label : unread ? 'Unread' : null;
 
   return (
     <section className="border-b border-[var(--color-line)] last:border-0">
@@ -221,7 +271,7 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
             <Icon name={group.connection.kind === 'local' ? 'laptop' : 'globe2'} />
           )}
           <span className="min-w-0 flex-1 truncate">{heading}</span>
-          {messages.length > 0 && (
+          {unread && (
             <button
               onClick={() => void group.actions.markAllRead()}
               className="shrink-0 font-medium normal-case tracking-normal text-[var(--color-accent)] hover:underline"
@@ -234,10 +284,54 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
       {invites.map((invite) => (
         <InviteRow key={invite.id} invite={invite} actions={group.actions} />
       ))}
+      {mentions.map((mention) => (
+        <MentionRow
+          key={mention.documentId}
+          mention={mention}
+          onOpen={(newTab) => group.actions.openMention(mention, newTab)}
+        />
+      ))}
       {messages.map((message) => (
-        <MessageRow key={message.channelId} message={message} onOpen={() => group.actions.openChannel(message)} />
+        <MessageRow
+          key={message.channelId}
+          message={message}
+          onOpen={(newTab) => group.actions.openChannel(message, newTab)}
+        />
       ))}
     </section>
+  );
+}
+
+/** Someone wrote your name into a document or onto a board. */
+function MentionRow({ mention, onOpen }: { mention: MentionNotification; onOpen: (newTab: boolean) => void }) {
+  return (
+    <button onClick={(event) => onOpen(wantsNewTab(event))} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]">
+      <Avatar
+        name={mention.taggedBy?.name ?? '?'}
+        url={mention.taggedBy?.avatarUrl}
+        seed={mention.taggedBy?.id}
+        size="lg"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
+          <span className="truncate font-medium text-[var(--color-ink)]">
+            <Icon name={mention.mode === 'canvas' ? 'easel' : 'file-earmark-text'} />{' '}
+            {mention.title || 'Untitled'}
+          </span>
+          <span className="truncate">{mention.workspace.name}</span>
+          <span className="ml-auto shrink-0">{formatRelative(mention.createdAt)}</span>
+        </div>
+        <p className="mt-0.5 text-sm">
+          <span className="font-medium">{mention.taggedBy?.name ?? 'Someone'}</span> mentioned you in this{' '}
+          {mention.mode === 'canvas' ? 'canvas' : 'document'}
+        </p>
+        <p className="mt-1">
+          <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
+            Mentioned you
+          </span>
+        </p>
+      </div>
+    </button>
   );
 }
 
@@ -282,10 +376,10 @@ function InviteRow({ invite, actions }: { invite: InviteNotification; actions: A
   );
 }
 
-function MessageRow({ message, onOpen }: { message: MessageNotification; onOpen: () => void }) {
+function MessageRow({ message, onOpen }: { message: MessageNotification; onOpen: (newTab: boolean) => void }) {
   const { latest } = message;
   return (
-    <button onClick={onOpen} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]">
+    <button onClick={(event) => onOpen(wantsNewTab(event))} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]">
       <Avatar
         name={latest.author?.name ?? '?'}
         url={latest.author?.avatarUrl}

@@ -11,6 +11,7 @@ import {
   type FrameElement,
   type MindNodeElement,
   type ShapeKind,
+  type WorkspaceMember,
 } from '@paradocs/shared';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
@@ -30,6 +31,8 @@ interface Props {
   selectedIds: Set<string>;
   onSelectionChange: (ids: Set<string>) => void;
   editable: boolean;
+  /** Who can be tagged in an element's text, and whose names tags resolve to. */
+  members: WorkspaceMember[];
   /** When on, elements sprout anchor ports and dragging between them connects. */
   connectorTool: boolean;
   /** When set, dragging on the board draws a shape of this kind. */
@@ -739,6 +742,7 @@ export default function CanvasSurface(props: Props) {
                   selected={selected}
                   editing={editing}
                   dark={props.dark}
+                  members={props.members}
                   onChange={(patch) => props.onUpdate(element.id, patch)}
                   onStopEditing={() => setEditingId(null)}
                   onOpenDocument={props.onOpenDocument}

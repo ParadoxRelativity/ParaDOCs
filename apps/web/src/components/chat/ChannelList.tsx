@@ -8,6 +8,7 @@ import Icon from '../Icon';
 import { PresenceAvatar } from '../Presence';
 import { useTypists } from '../../lib/typing';
 import { TypingDots } from './Typing';
+import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { cx } from '../../lib/util';
 import { ChannelSettingsDialog } from './ChannelSettingsDialog';
 import { DirectMessageDialog } from './DirectMessageDialog';
@@ -29,6 +30,7 @@ export function ChannelList({
   voiceEnabled,
   occupancy,
   connectedChannelId,
+  poppedOut,
   onSelect,
 }: {
   workspaceId: string;
@@ -45,6 +47,8 @@ export function ChannelList({
   occupancy: Record<string, VoiceOccupant[]>;
   /** The voice channel or direct conversation this session is in a call in, if any. */
   connectedChannelId: string | null;
+  /** Conversations open in windows of their own, in the desktop app. */
+  poppedOut: string[];
   onSelect: (id: string) => void;
 }) {
   const createChannel = useCreateChannel(workspaceId);
@@ -119,6 +123,8 @@ export function ChannelList({
             channel={channel}
             active={channel.id === activeChannelId}
             canManage={canManage}
+            workspaceId={workspaceId}
+            poppedOut={poppedOut.includes(channel.id)}
             onSelect={onSelect}
             onEdit={setEditing}
             onDelete={remove}
@@ -145,6 +151,8 @@ export function ChannelList({
               active={channel.id === activeChannelId}
               connected={channel.id === connectedChannelId}
               canManage={canManage}
+              workspaceId={workspaceId}
+              poppedOut={poppedOut.includes(channel.id)}
               people={occupancy[channel.id] ?? []}
               onSelect={onSelect}
               onEdit={setEditing}
@@ -170,6 +178,8 @@ export function ChannelList({
             status={conversation.peer ? (presence[conversation.peer.id] ?? 'offline') : 'offline'}
             active={conversation.id === activeChannelId}
             inCall={conversation.id === connectedChannelId}
+            poppedOut={poppedOut.includes(conversation.id)}
+            workspaceId={workspaceId}
             onSelect={onSelect}
           />
         ))}
@@ -187,6 +197,40 @@ export function ChannelList({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Opening a conversation from a row. A plain click moves this tab, the way it
+ * always has; the modifier or the middle button puts it in a tab of its own, so
+ * chat can sit beside a document rather than replacing it.
+ */
+function conversationOpener(workspaceId: string, channel: Channel, onSelect: (id: string) => void) {
+  const label = channel.kind === 'direct' ? (channel.peer?.name ?? 'Conversation') : `#${channel.name}`;
+  const path = `/w/${workspaceId}/c/${channel.id}`;
+  return {
+    title: `${label} — hold ${MODIFIER} to open in a new tab`,
+    onClick: (event: React.MouseEvent) => {
+      if (asksForNewTab(event)) openTab(path, label);
+      else onSelect(channel.id);
+    },
+    onAuxClick: (event: React.MouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      openTab(path, label, { background: true });
+    },
+  };
+}
+
+/**
+ * Marks a conversation that is being read in a window of its own, so the row
+ * explains why clicking it raises that window instead of opening it here.
+ */
+function ElsewhereMark({ name }: { name: string }) {
+  return (
+    <span title={`${name} is open in its own window`} className="shrink-0 text-[var(--color-muted)]">
+      <Icon name="window-stack" />
+    </span>
   );
 }
 
@@ -239,6 +283,8 @@ function TextRow({
   channel,
   active,
   canManage,
+  workspaceId,
+  poppedOut,
   onSelect,
   onEdit,
   onDelete,
@@ -246,6 +292,8 @@ function TextRow({
   channel: Channel;
   active: boolean;
   canManage: boolean;
+  workspaceId: string;
+  poppedOut: boolean;
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
@@ -257,6 +305,7 @@ function TextRow({
       channel={channel}
       active={active}
       canManage={canManage}
+      workspaceId={workspaceId}
       onSelect={onSelect}
       onEdit={onEdit}
       onDelete={onDelete}
@@ -271,6 +320,7 @@ function TextRow({
       >
         {channel.name}
       </span>
+      {poppedOut && <ElsewhereMark name={`#${channel.name}`} />}
       {/* A mention count replaces the unread count rather than sitting beside
           it: two numbers on one row is a puzzle, and the one that names you is
           the one worth reading. */}
@@ -298,6 +348,8 @@ function VoiceRow({
   active,
   connected,
   canManage,
+  workspaceId,
+  poppedOut,
   people,
   onSelect,
   onEdit,
@@ -307,6 +359,8 @@ function VoiceRow({
   active: boolean;
   connected: boolean;
   canManage: boolean;
+  workspaceId: string;
+  poppedOut: boolean;
   people: VoiceOccupant[];
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
@@ -318,6 +372,7 @@ function VoiceRow({
         channel={channel}
         active={active}
         canManage={canManage}
+        workspaceId={workspaceId}
         onSelect={onSelect}
         onEdit={onEdit}
         onDelete={onDelete}
@@ -326,6 +381,7 @@ function VoiceRow({
         <span title={channel.topic ?? undefined} className="min-w-0 flex-1 truncate">
           {channel.name}
         </span>
+        {poppedOut && <ElsewhereMark name={channel.name} />}
         {/* Which room you are actually in, as distinct from which one you are
             looking at — they are often not the same once a call outlives the
             view that started it. */}
@@ -359,12 +415,16 @@ function DirectRow({
   status,
   active,
   inCall,
+  poppedOut,
+  workspaceId,
   onSelect,
 }: {
   conversation: Channel;
   status: PresenceStatus;
   active: boolean;
   inCall: boolean;
+  poppedOut: boolean;
+  workspaceId: string;
   onSelect: (id: string) => void;
 }) {
   const unread = conversation.unread ?? 0;
@@ -374,7 +434,7 @@ function DirectRow({
   const typing = useTypists(conversation.id).length > 0;
   return (
     <button
-      onClick={() => onSelect(conversation.id)}
+      {...conversationOpener(workspaceId, conversation, onSelect)}
       className={cx(
         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
         active ? 'bg-[var(--color-line)]/70 font-medium' : 'hover:bg-[var(--color-line)]/40',
@@ -396,6 +456,7 @@ function DirectRow({
           <TypingDots />
         </span>
       )}
+      {poppedOut && <ElsewhereMark name={name} />}
       {inCall && (
         <span title="You are in a call here" className="shrink-0 text-xs text-emerald-500">
           <Icon name="telephone-fill" />
@@ -415,6 +476,7 @@ function Row({
   channel,
   active,
   canManage,
+  workspaceId,
   onSelect,
   onEdit,
   onDelete,
@@ -423,16 +485,18 @@ function Row({
   channel: Channel;
   active: boolean;
   canManage: boolean;
+  workspaceId: string;
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
   children: React.ReactNode;
 }) {
   const quiet = !active && (channel.unread ?? 0) === 0 && (channel.mentions ?? 0) === 0;
+  const open = conversationOpener(workspaceId, channel, onSelect);
   return (
     <div className="group relative">
       <button
-        onClick={() => onSelect(channel.id)}
+        {...open}
         className={cx(
           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
           active ? 'bg-[var(--color-line)]/70 font-medium' : 'hover:bg-[var(--color-line)]/40',

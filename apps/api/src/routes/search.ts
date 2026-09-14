@@ -19,6 +19,63 @@ function toTsQuery(input: string): string | null {
   return terms.map((t) => `${t.replace(/'/g, "''")}:*`).join(' & ');
 }
 
+/** How many spreadsheets a search returns beside its documents. */
+const SHEET_LIMIT = 20;
+
+/**
+ * Spreadsheets that match, searched by title and by what is written in their
+ * cells. They are their own application with their own table, so they are a
+ * second query rather than a union: the document query is shaped around
+ * folders and tags that a spreadsheet does not have.
+ *
+ * A search narrowed by tag or folder has already said it wants documents, and
+ * no spreadsheet can satisfy either filter, so none are returned for it.
+ */
+async function searchSpreadsheets(
+  workspaceId: string,
+  input: { q?: string; tags?: string[]; folderId?: string; from?: string; to?: string; includeArchived?: boolean },
+  tsquery: string | null,
+) {
+  if (input.tags?.length || input.folderId) return [];
+
+  const params: unknown[] = [workspaceId];
+  const where: string[] = ['s.workspace_id = $1'];
+  if (!input.includeArchived) where.push('s.archived_at IS NULL');
+
+  let rankExpr = '0';
+  let snippetExpr = 'left(s.search_text, 180)';
+  if (tsquery) {
+    params.push(tsquery);
+    const p = `$${params.length}`;
+    params.push(input.q!);
+    const rawQ = `$${params.length}`;
+    where.push(`(s.search @@ to_tsquery('english', ${p}) OR s.title ILIKE '%' || ${rawQ} || '%')`);
+    rankExpr = `ts_rank(s.search, to_tsquery('english', ${p}))`;
+    snippetExpr = `ts_headline('english', s.search_text, to_tsquery('english', ${p}),
+      'StartSel=<mark>, StopSel=</mark>, MaxWords=28, MinWords=10, ShortWord=2, MaxFragments=1')`;
+  }
+  if (input.from) {
+    params.push(input.from);
+    where.push(`s.updated_at >= $${params.length}::date`);
+  }
+  if (input.to) {
+    params.push(input.to);
+    where.push(`s.updated_at < ($${params.length}::date + interval '1 day')`);
+  }
+
+  const { rows } = await query(
+    `SELECT s.id, s.title, s.icon, s.updated_at AS "updatedAt",
+            ${rankExpr} AS rank,
+            ${snippetExpr} AS snippet
+       FROM spreadsheets s
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${tsquery ? 'rank DESC, ' : ''}s.updated_at DESC
+      LIMIT ${SHEET_LIMIT}`,
+    params,
+  );
+  return rows;
+}
+
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
@@ -75,9 +132,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
 
       const rankExpr = tsquery ? `ts_rank(d.search, to_tsquery('english', $2))` : '0';
       const snippetExpr = tsquery
-        ? `ts_headline('english', d.body_md, to_tsquery('english', $2),
+        ? `ts_headline('english', regexp_replace(d.body_md, '\\[([^\\]]*)\\]\\(paradocs-sheet://[^)]*\\)?', '\\1', 'g'), to_tsquery('english', $2),
              'StartSel=<mark>, StopSel=</mark>, MaxWords=28, MinWords=10, ShortWord=2, MaxFragments=1')`
-        : `left(d.body_md, 180)`;
+        : `left(regexp_replace(d.body_md, '\\[([^\\]]*)\\]\\(paradocs-sheet://[^)]*\\)?', '\\1', 'g'), 180)`;
 
       params.push(input.limit, input.offset);
       const limitParam = `$${params.length - 1}`;
@@ -112,7 +169,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         params,
       );
 
-      return { hits: rows, query: input.q ?? '' };
+      return { hits: rows, sheets: await searchSpreadsheets(req.params.id, input, tsquery), query: input.q ?? '' };
     },
   );
 };

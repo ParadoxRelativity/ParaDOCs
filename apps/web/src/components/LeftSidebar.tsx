@@ -1,5 +1,14 @@
 import { useState } from 'react';
-import type { Channel, DocumentSummary, FolderNode, PresenceStatus, Tag, User, VoiceOccupant } from '@paradocs/shared';
+import type {
+  Channel,
+  DocumentMode,
+  DocumentSummary,
+  FolderNode,
+  PresenceStatus,
+  Tag,
+  User,
+  VoiceOccupant,
+} from '@paradocs/shared';
 import { AppLauncher, type AppEntry } from './AppLauncher';
 import { Popover } from './Popover';
 import { PresenceAvatar, STATUS_LABEL, StatusMenu } from './Presence';
@@ -7,6 +16,7 @@ import {
   useCreateDocument,
   useCreateFolder,
   useCreateWorkspace,
+  useDeleteDocument,
   useDeleteFolder,
   useUpdateFolder,
   useTags,
@@ -27,8 +37,13 @@ import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
 import type { SettingsSection } from './SettingsDialog';
 import WorkspaceIcon from './WorkspaceIcon';
+import { MODIFIER, asksForNewTab, openTab } from '../lib/tabs';
 import { useToast } from './Toast';
 import { ChannelList } from './chat/ChannelList';
+import { SheetList } from './sheet/SheetList';
+
+/** The apps a workspace offers, each with its own half of the sidebar. */
+export type SidebarSection = 'docs' | 'chat' | 'sheets';
 
 interface Props {
   /** The signed-in account, shown at the foot of the sidebar. */
@@ -38,6 +53,10 @@ interface Props {
   onSelectWorkspace: (id: string) => void;
   documentId: string | null;
   onSelectDocument: (id: string) => void;
+  /** Whether this person may change anything; viewers get no destructive controls. */
+  canEdit: boolean;
+  /** A document was deleted from the tree, so anything showing it must move off. */
+  onDocumentDeleted: (id: string) => void;
   onOpenJournal: () => void;
   onOpenSearch: () => void;
   onOpenAllDocuments: () => void;
@@ -49,9 +68,14 @@ interface Props {
   onOpenSettings: (section: SettingsSection) => void;
   /** Desktop app only: opens the dialog for adding a server. */
   onConnectServer?: () => void;
-  /** Which half of the workspace is showing: the knowledge base, or chat. */
-  section: 'docs' | 'chat';
-  onSelectSection: (section: 'docs' | 'chat') => void;
+  /** Which app the sidebar is showing: the knowledge base, chat, or spreadsheets. */
+  section: SidebarSection;
+  onSelectSection: (section: SidebarSection) => void;
+  /** The spreadsheet open in the Sheets app, if any. */
+  activeSheetId: string | null;
+  onSelectSheet: (id: string) => void;
+  /** A spreadsheet was deleted from the list, so anything showing it must move off. */
+  onSheetDeleted: (id: string) => void;
   channels: Channel[];
   /** The signed-in person's direct conversations, most recent first. */
   directs: Channel[];
@@ -67,6 +91,8 @@ interface Props {
   voiceEnabled: boolean;
   voiceOccupancy: Record<string, VoiceOccupant[]>;
   connectedChannelId: string | null;
+  /** Conversations the desktop app is showing in windows of their own. */
+  poppedOutChannelIds?: string[];
   /** The call in progress, shown as a bar above the footer. Null when idle. */
   callBar: {
     /** The voice channel's name, or the person in a direct call. */
@@ -74,9 +100,18 @@ interface Props {
     direct: boolean;
     connecting: boolean;
     mic: boolean;
-    onToggleMic: () => void;
-    onLeave: () => void;
+    /**
+     * Muting, leaving and moving the call belong to the window holding it, so
+     * they are absent when the call is running in one of its own. What is left
+     * is where to find it.
+     */
+    onToggleMic?: () => void;
+    onLeave?: () => void;
     onOpen: () => void;
+    /** Desktop app only: moves the call into a window of its own. */
+    onPopOut?: () => void;
+    /** Desktop app only: raises the window the call is running in. */
+    onShowWindow?: () => void;
   } | null;
 }
 
@@ -118,7 +153,7 @@ export default function LeftSidebar(props: Props) {
     setCreatingIn(undefined);
   }
 
-  async function addDocument(folderId: string | null, mode: 'page' | 'canvas' = 'page') {
+  async function addDocument(folderId: string | null, mode: DocumentMode = 'page') {
     const doc = await createDocument.mutateAsync({ folderId, mode });
     props.onSelectDocument(doc.id);
   }
@@ -143,9 +178,19 @@ export default function LeftSidebar(props: Props) {
             {workspaces.map((w) => (
               <button
                 key={w.id}
-                onClick={() => {
-                  onSelectWorkspace(w.id);
+                // Holding the modifier opens the workspace in a tab of its own,
+                // which is how two workspaces end up side by side.
+                title={`${w.name} — hold ${MODIFIER} to open in a new tab`}
+                onClick={(event) => {
                   setSwitcherOpen(false);
+                  if (asksForNewTab(event)) openTab(`/w/${w.id}`, w.name);
+                  else onSelectWorkspace(w.id);
+                }}
+                onAuxClick={(event) => {
+                  if (event.button !== 1) return;
+                  event.preventDefault();
+                  setSwitcherOpen(false);
+                  openTab(`/w/${w.id}`, w.name, { background: true });
                 }}
                 className={cx(
                   'flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface)]',
@@ -204,10 +249,11 @@ export default function LeftSidebar(props: Props) {
                 badge: props.unreadTotal,
                 mentions: props.mentionTotal,
               },
+              { id: 'sheets', label: 'Sheets', icon: 'table' },
             ] satisfies AppEntry[]
           }
           currentId={props.section}
-          onSelect={(id) => props.onSelectSection(id as 'docs' | 'chat')}
+          onSelect={(id) => props.onSelectSection(id as SidebarSection)}
         />
       </div>
 
@@ -222,7 +268,16 @@ export default function LeftSidebar(props: Props) {
           voiceEnabled={props.voiceEnabled}
           occupancy={props.voiceOccupancy}
           connectedChannelId={props.connectedChannelId}
+          poppedOut={props.poppedOutChannelIds ?? []}
           onSelect={props.onSelectChannel}
+        />
+      ) : props.section === 'sheets' ? (
+        <SheetList
+          workspaceId={workspaceId}
+          activeSheetId={props.activeSheetId}
+          canEdit={props.canEdit}
+          onSelect={props.onSelectSheet}
+          onDeleted={props.onSheetDeleted}
         />
       ) : (
         <>
@@ -275,7 +330,9 @@ export default function LeftSidebar(props: Props) {
             depth={0}
             workspaceId={workspaceId}
             activeDocumentId={props.documentId}
+            canEdit={props.canEdit}
             onSelectDocument={props.onSelectDocument}
+            onDocumentDeleted={props.onDocumentDeleted}
             onAddDocument={addDocument}
             creatingIn={creatingIn}
             onStartCreate={setCreatingIn}
@@ -323,21 +380,37 @@ export default function LeftSidebar(props: Props) {
             className="min-w-0 flex-1 truncate text-left text-xs"
             title={`Open ${props.callBar.channelName}`}
           >
-            <span className="font-medium">{props.callBar.connecting ? 'Connecting…' : 'In call'}</span>
+            <span className="font-medium">
+              {props.callBar.connecting ? 'Connecting…' : props.callBar.onShowWindow ? 'In call elsewhere' : 'In call'}
+            </span>
             <span className="text-[var(--color-muted)]">
               {' · '}
               <Icon name={props.callBar.direct ? 'telephone' : 'volume-up'} /> {props.callBar.channelName}
             </span>
           </button>
-          <IconButton
-            label={props.callBar.mic ? 'Mute' : 'Unmute'}
-            onClick={props.callBar.onToggleMic}
-          >
-            <Icon name={props.callBar.mic ? 'mic' : 'mic-mute'} />
-          </IconButton>
-          <IconButton label="Leave call" onClick={props.callBar.onLeave}>
-            <Icon name="telephone-x" />
-          </IconButton>
+          {props.callBar.onToggleMic && (
+            <IconButton
+              label={props.callBar.mic ? 'Mute' : 'Unmute'}
+              onClick={props.callBar.onToggleMic}
+            >
+              <Icon name={props.callBar.mic ? 'mic' : 'mic-mute'} />
+            </IconButton>
+          )}
+          {props.callBar.onPopOut && (
+            <IconButton label="Move this call to its own window" onClick={props.callBar.onPopOut}>
+              <Icon name="box-arrow-up-right" />
+            </IconButton>
+          )}
+          {props.callBar.onShowWindow && (
+            <IconButton label="Show the window this call is in" onClick={props.callBar.onShowWindow}>
+              <Icon name="window-stack" />
+            </IconButton>
+          )}
+          {props.callBar.onLeave && (
+            <IconButton label="Leave call" onClick={props.callBar.onLeave}>
+              <Icon name="telephone-x" />
+            </IconButton>
+          )}
         </div>
       )}
 
@@ -472,7 +545,9 @@ function FolderRow({
   depth,
   workspaceId,
   activeDocumentId,
+  canEdit,
   onSelectDocument,
+  onDocumentDeleted,
   onAddDocument,
   creatingIn,
   onStartCreate,
@@ -482,7 +557,9 @@ function FolderRow({
   depth: number;
   workspaceId: string;
   activeDocumentId: string | null;
+  canEdit: boolean;
   onSelectDocument: (id: string) => void;
+  onDocumentDeleted: (id: string) => void;
   onAddDocument: (folderId: string | null) => void;
   creatingIn: string | null | undefined;
   /** Pass a parent id (or null for top level) to start naming; undefined cancels. */
@@ -577,7 +654,9 @@ function FolderRow({
               depth={depth + 1}
               workspaceId={workspaceId}
               activeDocumentId={activeDocumentId}
+              canEdit={canEdit}
               onSelectDocument={onSelectDocument}
+              onDocumentDeleted={onDocumentDeleted}
               onAddDocument={onAddDocument}
               creatingIn={creatingIn}
               onStartCreate={onStartCreate}
@@ -590,7 +669,10 @@ function FolderRow({
               doc={doc}
               depth={depth + 1}
               active={doc.id === activeDocumentId}
+              workspaceId={workspaceId}
+              canEdit={canEdit}
               onSelect={onSelectDocument}
+              onDeleted={onDocumentDeleted}
             />
           ))}
           {count === 0 && !creatingHere && (
@@ -633,30 +715,93 @@ function DocumentRow({
   doc,
   depth,
   active,
+  workspaceId,
+  canEdit,
   onSelect,
+  onDeleted,
 }: {
   doc: DocumentSummary;
   depth: number;
   active: boolean;
+  workspaceId: string;
+  /** Viewers see no delete button rather than one the server would refuse. */
+  canEdit: boolean;
   onSelect: (id: string) => void;
+  /** So whatever is showing the document can move off it once it is gone. */
+  onDeleted: (id: string) => void;
 }) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const remove = useDeleteDocument(workspaceId);
+  const toast = useToast();
+
   return (
-    <button
-      onClick={() => onSelect(doc.id)}
+    // A row rather than one button: the delete control is a button of its own,
+    // and one cannot sit inside another.
+    <div
       className={cx(
-        'flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-sm',
-        active ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]' : 'hover:bg-[var(--color-line)]/50',
+        'group flex items-center gap-1 rounded-md pr-1',
+        active ? 'bg-[var(--color-accent-soft)]' : 'hover:bg-[var(--color-line)]/50',
       )}
-      style={{ paddingLeft: depth * 12 + 22 }}
     >
-      <span className="text-xs">
-        <DocumentIcon doc={doc} />
-      </span>
-      <span className="min-w-0 flex-1 truncate">{doc.title}</span>
-      {doc.tags.slice(0, 2).map((tag) => (
-        <span key={tag.id} className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tag.color }} />
-      ))}
-    </button>
+      <button
+        title={`${doc.title} — hold ${MODIFIER} to open in a new tab`}
+        onClick={(event) => {
+          if (asksForNewTab(event)) openTab(`/w/${workspaceId}/d/${doc.id}`, doc.title, { emoji: doc.icon ?? undefined });
+          else onSelect(doc.id);
+        }}
+        onAuxClick={(event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          openTab(`/w/${workspaceId}/d/${doc.id}`, doc.title, {
+            background: true,
+            emoji: doc.icon ?? undefined,
+          });
+        }}
+        className={cx(
+          'flex min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left text-sm',
+          active && 'font-medium text-[var(--color-accent)]',
+        )}
+        style={{ paddingLeft: depth * 12 + 22 }}
+      >
+        <span className="text-xs">
+          <DocumentIcon doc={doc} />
+        </span>
+        <span className="min-w-0 flex-1 truncate">{doc.title}</span>
+        {doc.tags.slice(0, 2).map((tag) => (
+          <span key={tag.id} className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tag.color }} />
+        ))}
+      </button>
+
+      {canEdit && (
+        <div className="hidden items-center group-hover:flex">
+          <IconButton label={`Delete ${doc.title}`} onClick={() => setConfirmingDelete(true)}>
+            <Icon name="trash3" />
+          </IconButton>
+        </div>
+      )}
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title={`Delete "${doc.title}"?`}
+          // The same warning the document's own properties panel gives, because
+          // it is the same irreversible thing happening.
+          description="This permanently removes the document, its comments and its history. It cannot be undone. Archive it instead if you only want it out of the way."
+          confirmLabel="Delete permanently"
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            remove.mutate(doc.id, {
+              onSuccess: () => {
+                toast(`Deleted "${doc.title}"`);
+                onDeleted(doc.id);
+              },
+              onError: (err) =>
+                toast(err instanceof Error ? err.message : 'Could not delete document', 'error'),
+            });
+          }}
+        />
+      )}
+    </div>
   );
 }
 

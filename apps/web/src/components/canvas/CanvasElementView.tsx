@@ -7,8 +7,18 @@ import {
   type MindNodeElement,
   type ShapeElement,
 } from '@paradocs/shared';
+import type { WorkspaceMember } from '@paradocs/shared';
 import { cx } from '../../lib/util';
 import EmbeddedDocument from './EmbeddedDocument';
+import { SheetCellCard, SheetChartCard } from '../sheet/SheetRefViews';
+import {
+  MentionPicker,
+  applyMention,
+  mentionQueryAt,
+  renderMentionText,
+  useMemberNames,
+  type MentionPick,
+} from './MentionText';
 
 interface Props {
   element: CanvasElement;
@@ -16,6 +26,8 @@ interface Props {
   /** True while this element is in text-editing mode (entered by double-click). */
   editing: boolean;
   dark: boolean;
+  /** Who can be tagged in this element's text, and whose names tags resolve to. */
+  members: WorkspaceMember[];
   onChange: (patch: Partial<CanvasElement>) => void;
   onStopEditing: () => void;
   onOpenDocument: (documentId: string) => void;
@@ -26,6 +38,7 @@ export default function CanvasElementView({
   selected,
   editing,
   dark,
+  members,
   onChange,
   onStopEditing,
   onOpenDocument,
@@ -37,6 +50,7 @@ export default function CanvasElementView({
           value={element.text}
           editing={editing}
           placeholder="Double-click to write"
+          members={members}
           onChange={(text) => onChange({ text } as Partial<CanvasElement>)}
           onStopEditing={onStopEditing}
           className="h-full w-full resize-none rounded-lg p-3 text-sm leading-snug text-zinc-900 outline-none"
@@ -50,6 +64,7 @@ export default function CanvasElementView({
           value={element.text}
           editing={editing}
           placeholder="Double-click to write"
+          members={members}
           onChange={(text) => onChange({ text } as Partial<CanvasElement>)}
           onStopEditing={onStopEditing}
           className="h-full w-full resize-none bg-transparent font-medium outline-none"
@@ -63,6 +78,7 @@ export default function CanvasElementView({
           element={element}
           editing={editing}
           selected={selected}
+          members={members}
           onChange={onChange}
           onStopEditing={onStopEditing}
         />
@@ -81,6 +97,10 @@ export default function CanvasElementView({
             <input
               autoFocus
               value={element.name}
+              // A new frame arrives called "Frame 3", which is a suggestion
+              // rather than a name: selecting it means typing replaces it
+              // instead of landing after it.
+              onFocus={(e) => e.currentTarget.select()}
               onChange={(e) => onChange({ name: e.target.value } as Partial<CanvasElement>)}
               onBlur={onStopEditing}
               onKeyDown={(e) => {
@@ -105,6 +125,27 @@ export default function CanvasElementView({
 
     case 'embed':
       return <Embed element={element} interactive={selected} />;
+
+    case 'sheetCell':
+      return (
+        <SheetCellCard
+          spreadsheetId={element.spreadsheetId}
+          sheetId={element.sheetId}
+          cell={element.cell}
+          label={element.label}
+        />
+      );
+
+    case 'sheetChart':
+      return (
+        <SheetChartCard
+          fill
+          spreadsheetId={element.spreadsheetId}
+          sheetId={element.sheetId}
+          chartId={element.chartId}
+          label={element.label}
+        />
+      );
 
     case 'image':
       return element.url ? (
@@ -145,6 +186,7 @@ export default function CanvasElementView({
           element={element}
           editing={editing}
           selected={selected}
+          members={members}
           onChange={onChange}
           onStopEditing={onStopEditing}
         />
@@ -164,12 +206,14 @@ function Shape({
   element,
   editing,
   selected,
+  members,
   onChange,
   onStopEditing,
 }: {
   element: ShapeElement;
   editing: boolean;
   selected: boolean;
+  members: WorkspaceMember[];
   onChange: (patch: Partial<CanvasElement>) => void;
   onStopEditing: () => void;
 }) {
@@ -223,6 +267,7 @@ function Shape({
           // Only hint inside the selected shape, so a diagram of empty shapes
           // is not covered in placeholder text.
           placeholder={selected ? 'Double-click to write' : ''}
+          members={members}
           onChange={(text) => onChange({ text } as Partial<CanvasElement>)}
           onStopEditing={onStopEditing}
           className="w-full resize-none bg-transparent text-center text-sm leading-snug outline-none"
@@ -241,12 +286,14 @@ function MindNode({
   element,
   editing,
   selected,
+  members,
   onChange,
   onStopEditing,
 }: {
   element: MindNodeElement;
   editing: boolean;
   selected: boolean;
+  members: WorkspaceMember[];
   onChange: (patch: Partial<CanvasElement>) => void;
   onStopEditing: () => void;
 }) {
@@ -269,6 +316,7 @@ function MindNode({
         value={element.text}
         editing={editing}
         placeholder={selected ? 'Double-click to name' : ''}
+        members={members}
         onChange={(text) => onChange({ text } as Partial<CanvasElement>)}
         onStopEditing={onStopEditing}
         className={cx(
@@ -327,6 +375,7 @@ function EditableText({
   value,
   editing,
   placeholder,
+  members,
   onChange,
   onStopEditing,
   className,
@@ -335,6 +384,8 @@ function EditableText({
   value: string;
   editing: boolean;
   placeholder: string;
+  /** Who can be tagged here. Empty outside a workspace context. */
+  members: WorkspaceMember[];
   onChange: (value: string) => void;
   onStopEditing: () => void;
   className?: string;
@@ -343,6 +394,13 @@ function EditableText({
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLTextAreaElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  const names = useMemberNames(members);
+  /** The `@…` being typed, if the caret is in one. */
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  // Dismissing the list with Escape must not bring it straight back on the next
+  // keystroke, so the `@` that was dismissed is remembered until the caret
+  // leaves it.
+  const dismissed = useRef<number | null>(null);
 
   // Take remote edits while not editing; never overwrite what is being typed.
   useEffect(() => {
@@ -356,6 +414,41 @@ function EditableText({
     // Put the caret at the end rather than selecting everything.
     el?.setSelectionRange(el.value.length, el.value.length);
   }, [editing]);
+
+  // Nothing is being typed any more, so nothing can be half-typed.
+  useEffect(() => {
+    if (!editing) {
+      setMention(null);
+      dismissed.current = null;
+    }
+  }, [editing]);
+
+  /** Re-reads the caret to decide whether a tag is being written there. */
+  function syncMention(next: string, caret: number) {
+    if (members.length === 0) return;
+    const at = mentionQueryAt(next, caret);
+    if (!at) {
+      setMention(null);
+      dismissed.current = null;
+      return;
+    }
+    if (dismissed.current === at.start) {
+      setMention(null);
+      return;
+    }
+    setMention(at);
+  }
+
+  function pickMention(member: MentionPick) {
+    if (!mention) return;
+    const { text, caret } = applyMention(draft, mention, member);
+    setMention(null);
+    dismissed.current = null;
+    publish(text);
+    // The caret has to be put back after React has written the new value, or
+    // the browser leaves it where the shorter text used to end.
+    requestAnimationFrame(() => ref.current?.setSelectionRange(caret, caret));
+  }
 
   // Publish while typing so collaborators see it, but debounced: a Yjs write per
   // keystroke re-renders the whole board.
@@ -373,33 +466,59 @@ function EditableText({
   useEffect(() => () => clearTimeout(timer.current), []);
 
   if (!editing) {
-    // Rendered as static text so it never captures pointer events.
+    // Rendered as static text so it never captures pointer events. Tags are
+    // drawn as the names they currently resolve to, not as their markup.
     return (
       <div className={cx(className, 'overflow-hidden whitespace-pre-wrap')} style={style}>
-        {draft || <span className="opacity-40">{placeholder}</span>}
+        {draft ? renderMentionText(draft, names) : <span className="opacity-40">{placeholder}</span>}
       </div>
     );
   }
 
   return (
-    <textarea
-      ref={ref}
-      value={draft}
-      placeholder={placeholder}
-      className={className}
-      style={style}
-      onChange={(e) => publish(e.target.value)}
-      onBlur={() => {
-        flush();
-        onStopEditing();
-      }}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === 'Escape') {
+    <div className="relative h-full w-full">
+      <textarea
+        ref={ref}
+        value={draft}
+        placeholder={placeholder}
+        className={className}
+        style={style}
+        onChange={(e) => {
+          publish(e.target.value);
+          syncMention(e.target.value, e.target.selectionStart);
+        }}
+        // Clicking or arrowing elsewhere can move the caret out of a half-typed
+        // tag, or back into one.
+        onSelect={(e) => {
+          const el = e.currentTarget;
+          syncMention(el.value, el.selectionStart);
+        }}
+        onBlur={() => {
           flush();
           onStopEditing();
-        }
-      }}
-    />
+        }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          // While the list is open it owns the arrows, Enter and Escape; it
+          // handles them in the capture phase, so anything arriving here is
+          // meant for the text.
+          if (e.key === 'Escape' && !mention) {
+            flush();
+            onStopEditing();
+          }
+        }}
+      />
+      {mention && (
+        <MentionPicker
+          members={members}
+          query={mention.query}
+          onPick={pickMention}
+          onDismiss={() => {
+            dismissed.current = mention.start;
+            setMention(null);
+          }}
+        />
+      )}
+    </div>
   );
 }

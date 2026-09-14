@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CONNECTOR_COLORS,
   DEFAULT_SIZE,
@@ -8,6 +8,7 @@ import {
   NODE_GAP_Y,
   SHAPE_FILLS,
   SHAPE_KINDS,
+  canvasSearchText,
   type AnchorSide,
   type CanvasElement,
   type ConnectorDash,
@@ -22,7 +23,8 @@ import {
 import type { CollabSession, Peer } from '../../lib/collaboration';
 import { boundsOf, useCanvasElements } from '../../lib/canvasStore';
 import { cx, useAutosave } from '../../lib/util';
-import { useAllDocuments, useCreateDocument, useUploadFile, type DocumentPatch } from '../../api/hooks';
+import { claimNewDocument } from '../../lib/newDocuments';
+import { useAllDocuments, useCreateDocument, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
 import { useToast } from '../Toast';
 import CanvasSurface, { type Viewport } from './CanvasSurface';
 import PresentMode from './PresentMode';
@@ -30,6 +32,8 @@ import { Modal } from '../Modal';
 import { Button, Tooltip } from '../ui';
 import Avatar from '../Avatar';
 import Icon, { type IconName } from '../Icon';
+import SheetRefPicker from '../sheet/SheetRefPicker';
+import { withCachedSheetValues } from '../../lib/sheetRefs';
 
 interface Props {
   doc: Doc;
@@ -43,6 +47,15 @@ interface Props {
 }
 
 type Inserting = { type: 'embed' | 'image' | 'audio' | 'video' | 'link' } | null;
+
+/**
+ * The elements whose text is the point of them. Adding one is almost always
+ * the first half of writing something, so it is opened for typing straight
+ * away rather than waiting to be double-clicked — and a tool used to draw it
+ * puts itself away, because the next thing wanted is the keyboard, not another
+ * shape.
+ */
+const TEXT_ELEMENTS = new Set<CanvasElement['type']>(['note', 'text', 'shape', 'node', 'frame']);
 
 const SHAPE_ICONS: Record<ShapeKind, IconName> = {
   rectangle: 'square',
@@ -64,6 +77,8 @@ export default function CanvasEditor({
   const { elements, create, update, updateMany, remove, bringToFront } = useCanvasElements(session.ydoc);
   const createDocument = useCreateDocument(workspaceId);
   const uploadFile = useUploadFile(workspaceId);
+  // Who can be tagged on this board, and whose names its tags resolve to.
+  const members = useMembers(workspaceId);
   const toast = useToast();
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -75,6 +90,30 @@ export default function CanvasEditor({
   // Set briefly so a node created by the + button opens for typing.
   const [editRequestId, setEditRequestId] = useState<string | null>(null);
   const [inserting, setInserting] = useState<Inserting>(null);
+  const [sheetInserting, setSheetInserting] = useState<'cell' | 'chart' | null>(null);
+
+  /**
+   * Copying with elements selected, and no text selected, copies what they say
+   * — with each spreadsheet cell as the value it shows and each chart as its
+   * numbers — so a board's figures paste as figures rather than as nothing.
+   */
+  useEffect(() => {
+    function onCopy(event: ClipboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      const chosen = elements.filter((element) => selectedIds.has(element.id));
+      if (chosen.length === 0 || !event.clipboardData) return;
+      const names = new Map((members.data ?? []).map((member) => [member.userId, member.name]));
+      const text = withCachedSheetValues(canvasSearchText(chosen, names)).trim();
+      if (!text) return;
+      event.clipboardData.setData('text/plain', text);
+      event.preventDefault();
+    }
+    document.addEventListener('copy', onCopy);
+    return () => document.removeEventListener('copy', onCopy);
+  }, [elements, selectedIds, members.data]);
   const [presenting, setPresenting] = useState<number | null>(null);
   const [title, setTitle] = useState(doc.title);
 
@@ -82,6 +121,17 @@ export default function CanvasEditor({
     const trimmed = value.trim();
     if (trimmed && trimmed !== doc.title) onPatch({ title: trimmed });
   }, 600);
+
+  const titleRef = useRef<HTMLInputElement>(null);
+  /**
+   * A canvas that has just been made opens on its own name, selected, the same
+   * way a page does: "Untitled" is a prompt for a name, not one.
+   */
+  useEffect(() => {
+    if (!canEdit || !claimNewDocument(doc.id)) return;
+    titleRef.current?.focus();
+    titleRef.current?.select();
+  }, [doc.id, canEdit]);
 
   const frames = useMemo(
     () =>
@@ -116,6 +166,7 @@ export default function CanvasEditor({
         ...extra,
       } as never);
       setSelectedIds(new Set([id]));
+      if (TEXT_ELEMENTS.has(type)) setEditRequestId(id);
       return id;
     },
     [create, viewCentre, elements.length],
@@ -287,6 +338,7 @@ export default function CanvasEditor({
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-[var(--color-line)] px-3 py-2">
         <input
+          ref={titleRef}
           value={title}
           readOnly={!canEdit}
           onChange={(e) => {
@@ -325,15 +377,15 @@ export default function CanvasEditor({
             <ToolButton label="Video — by URL or upload" onClick={() => setInserting({ type: 'video' })}>
               <Icon name="film" />
             </ToolButton>
+            <ToolButton label="Spreadsheet cell — shows its current value" onClick={() => setSheetInserting('cell')}>
+              <Icon name="table" />
+            </ToolButton>
+            <ToolButton label="Spreadsheet chart — drawn from the spreadsheet's current data" onClick={() => setSheetInserting('chart')}>
+              <Icon name="bar-chart" />
+            </ToolButton>
             <ToolButton
               label="Mind map — drops a root node you can branch from"
-              onClick={() => {
-                const id = addElement('node', {
-                  text: '',
-                  color: NODE_COLORS[0],
-                } as Partial<CanvasElement>);
-                setEditRequestId(id);
-              }}
+              onClick={() => addElement('node', { text: '', color: NODE_COLORS[0] } as Partial<CanvasElement>)}
             >
               <Icon name="diagram-3" />
             </ToolButton>
@@ -519,6 +571,7 @@ export default function CanvasEditor({
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
           editable={canEdit}
+          members={members.data ?? []}
           connectorTool={connectorTool}
           shapeTool={shapeTool}
           onDrawShape={(rect) => {
@@ -532,6 +585,11 @@ export default function CanvasEditor({
               dash: 'solid',
             } as never);
             setSelectedIds(new Set([id]));
+            // The shape has been drawn, so the tool has done its job; leaving
+            // it armed would turn the next click meant for the label into
+            // another shape.
+            setShapeTool(null);
+            setEditRequestId(id);
           }}
           onConnect={completeConnection}
           onUpdate={update}
@@ -552,6 +610,7 @@ export default function CanvasEditor({
               color: NOTE_COLORS[0],
             } as never);
             setSelectedIds(new Set([id]));
+            setEditRequestId(id);
           }}
         />
 
@@ -584,12 +643,40 @@ export default function CanvasEditor({
         />
       )}
 
+      {sheetInserting && (
+        <SheetRefPicker
+          kind={sheetInserting}
+          workspaceId={workspaceId}
+          confirmLabel="Add to canvas"
+          onCancel={() => setSheetInserting(null)}
+          onInsert={(ref) => {
+            setSheetInserting(null);
+            if (ref.kind === 'cell') {
+              addElement('sheetCell', {
+                spreadsheetId: ref.spreadsheetId,
+                sheetId: ref.sheetId,
+                cell: ref.cell,
+                label: ref.label,
+              } as Partial<CanvasElement>);
+            } else {
+              addElement('sheetChart', {
+                spreadsheetId: ref.spreadsheetId,
+                sheetId: ref.sheetId,
+                chartId: ref.chartId,
+                label: ref.label,
+              } as Partial<CanvasElement>);
+            }
+          }}
+        />
+      )}
+
       {presenting !== null && (
         <PresentMode
           frames={frames}
           elements={elements}
           startIndex={Math.max(0, presenting)}
           dark={dark}
+          members={members.data ?? []}
           onExit={() => setPresenting(null)}
           onOpenDocument={onOpenDocument}
         />

@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
-import { SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
-import type { Block } from '@blocknote/core';
-import type { Doc } from '@paradocs/shared';
-import { useChannels, useUploadFile, type DocumentPatch } from '../api/hooks';
+import { SuggestionMenuController, getDefaultReactSlashMenuItems, useCreateBlockNote } from '@blocknote/react';
+import { filterSuggestionItems } from '@blocknote/core';
+import { mentionHref, mentionLabel, type Doc } from '@paradocs/shared';
+import { useChannels, useMembers, useUploadFile, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
+import { claimNewDocument } from '../lib/newDocuments';
 import { useCollaboration, type CollabSession, type Peer } from '../lib/collaboration';
 import DocumentMeta from './DocumentMeta';
 import CanvasEditor from './canvas/CanvasEditor';
 import { Spinner } from './ui';
 import Avatar from './Avatar';
+import { documentSchema } from './documentSchema';
+import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
+import { copyEditorSelection } from '../lib/documentClipboard';
 
 interface Props {
   doc: Doc;
@@ -87,6 +91,8 @@ function EditorSurface({
   // re-derives blocks and markdown for search.
   const editor = useCreateBlockNote(
     {
+      // Adds spreadsheet cells and charts; the server's schema matches it.
+      schema: documentSchema,
       collaboration: { provider: session.provider, fragment: session.fragment, user: collabUser },
       // Image, video, audio and file blocks, and files dropped or pasted into
       // the page, upload to the workspace under the server's size limit.
@@ -106,8 +112,48 @@ function EditorSurface({
   }, 600);
 
   // Typing `#` in a document offers the workspace's channels, the same way it
-  // does in chat, and inserts a link that opens the channel in place.
+  // does in chat, and inserts a link that opens the channel in place. `@` does
+  // the same for people.
   const channels = useChannels(workspaceId);
+  const members = useMembers(workspaceId);
+
+  // The slash menu's spreadsheet items ask which cell or chart first.
+  const [sheetPicker, setSheetPicker] = useState<'cell' | 'chart' | null>(null);
+
+  function insertSheetRef(ref: PickedSheetRef) {
+    setSheetPicker(null);
+    editor.focus();
+    if (ref.kind === 'cell') {
+      editor.insertInlineContent([
+        { type: 'sheetCell', props: { spreadsheetId: ref.spreadsheetId, sheetId: ref.sheetId, cell: ref.cell, label: ref.label } },
+        ' ',
+      ]);
+      return;
+    }
+    const chart = {
+      type: 'sheetChart' as const,
+      props: { spreadsheetId: ref.spreadsheetId, sheetId: ref.sheetId, chartId: ref.chartId, label: ref.label },
+    };
+    // The slash menu leaves an empty paragraph behind; the chart takes its place.
+    const current = editor.getTextCursorPosition().block;
+    const empty = Array.isArray(current.content) && current.content.length === 0 && current.type === 'paragraph';
+    if (empty) editor.replaceBlocks([current], [chart]);
+    else editor.insertBlocks([chart], current, 'after');
+  }
+
+  // Copy and cut are handled here rather than by BlockNote, whose handler is
+  // broken against the installed prosemirror-view (see documentClipboard.ts).
+  // The view is read when the event fires, since it only exists once mounted.
+  useEffect(() => {
+    const onCopy = (event: ClipboardEvent) => copyEditorSelection(editor._tiptapEditor.view, event, false);
+    const onCut = (event: ClipboardEvent) => copyEditorSelection(editor._tiptapEditor.view, event, true);
+    document.addEventListener('copy', onCopy, true);
+    document.addEventListener('cut', onCut, true);
+    return () => {
+      document.removeEventListener('copy', onCopy, true);
+      document.removeEventListener('cut', onCut, true);
+    };
+  }, [editor]);
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -116,6 +162,18 @@ function EditorSurface({
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }, [title]);
+
+  /**
+   * A document that has just been made opens on its own title, selected. It
+   * arrives called "Untitled", which is a prompt rather than a name, so the
+   * first thing typed should replace it instead of landing after it.
+   */
+  useEffect(() => {
+    if (!canEdit || !claimNewDocument(doc.id)) return;
+    const el = titleRef.current;
+    el?.focus();
+    el?.select();
+  }, [doc.id, canEdit]);
 
   return (
     <div className="scroll-thin h-full overflow-y-auto">
@@ -177,8 +235,64 @@ function EditorSurface({
             editor={editor}
             editable={canEdit}
             theme={dark ? 'dark' : 'light'}
-            onChange={() => onBlocksChange(editor.document as Block[])}
+            slashMenu={false}
+            onChange={() => onBlocksChange(editor.document)}
           >
+            <SuggestionMenuController
+              triggerCharacter="/"
+              getItems={async (queryText) =>
+                filterSuggestionItems(
+                  [
+                    ...getDefaultReactSlashMenuItems(editor),
+                    {
+                      title: 'Spreadsheet cell',
+                      subtext: 'Show a cell’s current value from a spreadsheet',
+                      aliases: ['sheet', 'cell', 'value', 'spreadsheet', 'number'],
+                      group: 'Spreadsheets',
+                      icon: <span aria-hidden>▦</span>,
+                      onItemClick: () => setSheetPicker('cell'),
+                    },
+                    {
+                      title: 'Spreadsheet chart',
+                      subtext: 'Show a chart from a spreadsheet, kept up to date',
+                      aliases: ['sheet', 'chart', 'graph', 'spreadsheet', 'plot'],
+                      group: 'Spreadsheets',
+                      icon: <span aria-hidden>📊</span>,
+                      onItemClick: () => setSheetPicker('chart'),
+                    },
+                  ],
+                  queryText,
+                )
+              }
+            />
+            {/* Tagging someone writes an ordinary link, the way `#` writes one
+                for a channel: BlockNote's own schema round-trips it, the
+                markdown derived for search reads "@Ada Lovelace", and the
+                server reads the id out of the href to tell them. */}
+            <SuggestionMenuController
+              triggerCharacter="@"
+              getItems={async (queryText) => {
+                const needle = queryText.toLowerCase();
+                return (members.data ?? [])
+                  .filter((member) => member.name.toLowerCase().includes(needle))
+                  .slice(0, 8)
+                  .map((member) => ({
+                    title: mentionLabel(member.name),
+                    subtext: member.isSelf ? 'You' : member.email,
+                    group: 'People',
+                    onItemClick: () => {
+                      editor.insertInlineContent([
+                        {
+                          type: 'link',
+                          href: mentionHref(workspaceId, member.userId),
+                          content: mentionLabel(member.name),
+                        },
+                        ' ',
+                      ]);
+                    },
+                  }));
+              }}
+            />
             <SuggestionMenuController
               triggerCharacter="#"
               getItems={async (queryText) => {
@@ -205,6 +319,18 @@ function EditorSurface({
             />
           </BlockNoteView>
         </div>
+        {sheetPicker && (
+          <SheetRefPicker
+            kind={sheetPicker}
+            workspaceId={workspaceId}
+            confirmLabel="Insert"
+            onInsert={insertSheetRef}
+            onCancel={() => {
+              setSheetPicker(null);
+              editor.focus();
+            }}
+          />
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,23 @@
-import { BaseWindow, WebContentsView, shell, session as electronSession, type WebContents } from 'electron';
-import { partitionFor, rememberLastOpened, rememberPort, type Connection } from './connections.js';
-import { bundlePath, paths, resourcePath } from './paths.js';
-import { readJson, writeJson } from './store.js';
+import { BaseWindow, WebContentsView, session as electronSession, type WebContents } from 'electron';
+import { partitionFor, getConnection, rememberLastOpened, rememberPort, type Connection } from './connections.js';
+import { resourcePath } from './paths.js';
+import {
+  BACKGROUND,
+  clientPreload,
+  confineNavigation,
+  rememberBounds,
+  savedBounds,
+  type Bounds,
+  type DesktopCommand,
+} from './pageSetup.js';
+import {
+  closeAllPopouts,
+  closePopoutsFor,
+  focusedPopout,
+  popoutConnectionId,
+  popoutWebContents,
+  retitlePopouts,
+} from './popouts.js';
 import { startProxy, type ProxyHandle } from './proxy.js';
 import { startLocalServer, type LocalServer } from './localServer.js';
 import { enableScreenSharing } from './screenShare.js';
@@ -13,6 +29,9 @@ import { enableScreenSharing } from './screenShare.js';
  * and hides the rest, so a connection stays loaded once opened: going back to
  * it is instant, and a call on one server keeps running while another is on
  * screen.
+ *
+ * Channels can also be popped out into windows of their own; those are pages
+ * on the same connection, kept in `popouts.ts`, and this window owns them.
  */
 
 interface LoadedConnection {
@@ -22,11 +41,7 @@ interface LoadedConnection {
   local?: LocalServer;
 }
 
-/** Commands the page on screen acts on; the desktop menu sends these. */
-export type DesktopCommand =
-  | { type: 'navigate'; path: string }
-  | { type: 'open-settings'; section: 'account' | 'servers' | 'updates' }
-  | { type: 'connect-server' };
+export type { DesktopCommand };
 
 let appWindow: BaseWindow | null = null;
 const loaded = new Map<string, LoadedConnection>();
@@ -61,12 +76,17 @@ export function loadedOrigin(id: string): string | undefined {
   return loaded.get(id)?.proxy.origin;
 }
 
-/** Which connection a page belongs to, so IPC from anything else can be refused. */
+/**
+ * Which connection a page belongs to, so IPC from anything else can be
+ * refused. A popped-out channel is one of its connection's pages, so it is
+ * answered on the same footing as the page in the main window.
+ */
 export function connectionForWebContents(contents: WebContents): Connection | undefined {
   for (const entry of loaded.values()) {
     if (entry.view.webContents === contents) return entry.connection;
   }
-  return undefined;
+  const popped = popoutConnectionId(contents);
+  return popped ? getConnection(popped) : undefined;
 }
 
 export function activeWebContents(): WebContents | undefined {
@@ -74,11 +94,12 @@ export function activeWebContents(): WebContents | undefined {
   return contents && !contents.isDestroyed() ? contents : undefined;
 }
 
-/** Sends to every loaded page, on screen or not. */
+/** Sends to every page the app has open: connections on screen or not, and pop-outs. */
 export function broadcast(channel: string, ...args: unknown[]): void {
   for (const entry of loaded.values()) {
     if (!entry.view.webContents.isDestroyed()) entry.view.webContents.send(channel, ...args);
   }
+  for (const contents of popoutWebContents()) contents.send(channel, ...args);
 }
 
 /** Hands a command to the page on screen. False when there is no page to take it. */
@@ -90,6 +111,36 @@ export function sendCommand(command: DesktopCommand): boolean {
   return true;
 }
 
+/**
+ * Hands a command to a particular connection's page in the main window,
+ * bringing that connection on screen first. This is how a pop-out gives a call
+ * back: it belongs to the connection it came from, whichever one is showing.
+ */
+export function sendToConnection(id: string, command: DesktopCommand): boolean {
+  const entry = loaded.get(id);
+  if (!entry || entry.view.webContents.isDestroyed()) return false;
+  if (activeId !== id) show(entry);
+  focusAppWindow();
+  entry.view.webContents.send('desktop:command', command);
+  return true;
+}
+
+/**
+ * The page the person is actually working in: a pop-out when that is what has
+ * the focus, otherwise the connection on screen. Reloading and zooming go
+ * here, so those act on the window in front rather than always on the main one.
+ */
+export function focusedPageContents(): WebContents | undefined {
+  const popout = focusedPopout();
+  if (popout && !popout.webContents.isDestroyed()) return popout.webContents;
+  return activeWebContents();
+}
+
+/** The window in front, for the menu items that act on one. */
+export function focusedWindow(): BaseWindow | null {
+  return focusedPopout() ?? appWindow;
+}
+
 export function focusAppWindow(): boolean {
   if (!appWindow) return false;
   if (appWindow.isMinimized()) appWindow.restore();
@@ -98,70 +149,10 @@ export function focusAppWindow(): boolean {
   return true;
 }
 
-// --- window geometry --------------------------------------------------------
-
-interface Bounds {
-  width: number;
-  height: number;
-  x?: number;
-  y?: number;
-  maximized?: boolean;
-}
+// --- shared setup -----------------------------------------------------------
 
 const WINDOW_KEY = 'app';
 const DEFAULT_BOUNDS: Bounds = { width: 1280, height: 860 };
-
-function savedBounds(key: string): Bounds {
-  const all = readJson<Record<string, Bounds>>(paths.windowStateFile, {});
-  return { ...DEFAULT_BOUNDS, ...all[key] };
-}
-
-function rememberBounds(key: string, window: BaseWindow): void {
-  if (window.isDestroyed()) return;
-  const all = readJson<Record<string, Bounds>>(paths.windowStateFile, {});
-  const bounds = window.getNormalBounds();
-  all[key] = { ...bounds, maximized: window.isMaximized() };
-  writeJson(paths.windowStateFile, all);
-}
-
-// --- shared setup -----------------------------------------------------------
-
-/** Painted behind a page before it loads, so opening one is not a white flash. */
-const BACKGROUND = '#0b0b0f';
-
-/**
- * Pages get the desktop bridge: a short list of argument-checked calls for
- * switching connections, adding a server and applying updates. Nothing in it
- * reaches the file system, and the main process answers it only from the main
- * frame of a connection's own page.
- */
-const clientPreload = bundlePath('client-preload.cjs');
-
-/**
- * A page may only ever show its own proxy. Anything else — a link in a
- * document, an embedded page trying to navigate the top frame — opens in the
- * user's browser, where it belongs and where it cannot reach the session.
- */
-function confineNavigation(contents: WebContents, allowedOrigin: string): void {
-  const isAllowed = (target: string) => {
-    try {
-      return new URL(target).origin === allowedOrigin;
-    } catch {
-      return false;
-    }
-  };
-
-  contents.on('will-navigate', (event, url) => {
-    if (isAllowed(url)) return;
-    event.preventDefault();
-    void shell.openExternal(url);
-  });
-
-  contents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) void shell.openExternal(url);
-    return { action: 'deny' };
-  });
-}
 
 /**
  * Voice channels need the microphone and camera; nothing needs location, MIDI
@@ -176,7 +167,9 @@ function configurePermissions(partition: string): void {
     .setPermissionRequestHandler((_contents, permission, callback) => {
       callback(ALLOWED_PERMISSIONS.has(permission));
     });
-  enableScreenSharing(partition, () => appWindow);
+  // A pop-out can share a screen too, and the picker belongs to the window it
+  // was asked for rather than always to the main one.
+  enableScreenSharing(partition, focusedWindow);
 }
 
 /**
@@ -203,7 +196,7 @@ function titleFor(connection: Connection): string {
 function ensureWindow(): BaseWindow {
   if (appWindow && !appWindow.isDestroyed()) return appWindow;
 
-  const bounds = savedBounds(WINDOW_KEY);
+  const bounds = savedBounds(WINDOW_KEY, DEFAULT_BOUNDS);
   const window = new BaseWindow({
     ...bounds,
     minWidth: 720,
@@ -229,6 +222,9 @@ function ensureWindow(): BaseWindow {
   window.on('closed', () => {
     appWindow = null;
     activeId = null;
+    // Pop-outs are windows onto what this one holds, so they go with it rather
+    // than being left behind with nothing underneath them.
+    closeAllPopouts();
     const entries = [...loaded.values()];
     loaded.clear();
     for (const entry of entries) void release(entry);
@@ -271,6 +267,7 @@ export async function unloadConnection(id: string): Promise<void> {
   const entry = loaded.get(id);
   if (!entry) return;
   loaded.delete(id);
+  closePopoutsFor(id);
   if (appWindow && !appWindow.isDestroyed()) appWindow.contentView.removeChildView(entry.view);
   if (activeId === id) activeId = null;
   await release(entry);
@@ -375,10 +372,12 @@ export function refreshConnection(connection: Connection): void {
   if (!entry) return;
   entry.connection = connection;
   if (activeId === connection.id) appWindow?.setTitle(titleFor(connection));
+  retitlePopouts(connection);
 }
 
 /** Shuts every embedded server down cleanly before the app exits. */
 export async function shutdownAll(): Promise<void> {
+  closeAllPopouts();
   const entries = [...loaded.values()];
   loaded.clear();
   await Promise.all(entries.map(release));

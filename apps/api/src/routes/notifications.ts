@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   attachmentSummary,
   messagePreview,
+  type DocumentMode,
+  type MentionNotification,
   type MessageNotification,
   type NotificationWorkspace,
   type Notifications,
@@ -21,6 +23,13 @@ const markReadSchema = z.object({
   channelIds: z.array(z.string().uuid()).max(500).optional(),
 });
 
+const readMentionsSchema = z.object({
+  /** Omit to clear every tag addressed to you. */
+  documentIds: z.array(z.string().uuid()).max(500).optional(),
+});
+
+const MAX_MENTIONS = 50;
+
 interface WorkspaceColumns {
   workspace_id: string;
   workspace_name: string;
@@ -35,6 +44,16 @@ interface InviteRow extends WorkspaceColumns {
   invited_by: string | null;
   created_at: string;
   expires_at: string;
+}
+
+interface MentionRow extends WorkspaceColumns {
+  document_id: string;
+  title: string;
+  mode: DocumentMode;
+  created_at: string;
+  author_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
 }
 
 interface ChannelRow extends WorkspaceColumns {
@@ -91,7 +110,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
   app.get('/notifications', async (req): Promise<Notifications> => {
     const user = req.user!;
 
-    const [{ rows: inviteRows }, { rows: channelRows }] = await Promise.all([
+    const [{ rows: inviteRows }, { rows: channelRows }, { rows: mentionRows }] = await Promise.all([
       query<InviteRow>(
         `SELECT i.id, i.token, i.role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
            FROM workspace_invites i
@@ -156,6 +175,27 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           LIMIT ${MAX_CHANNELS}`,
         [user.id],
       ),
+      // Documents and canvases someone has tagged this person in. Membership is
+      // rechecked here rather than trusted from when the tag was written: being
+      // taken out of a workspace has to take its tags with it.
+      query<MentionRow>(
+        `SELECT dm.document_id, dm.created_at, d.title, d.mode,
+                ${WORKSPACE_SELECT},
+                author.id AS author_id, author.name AS author_name,
+                ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+           FROM document_mentions dm
+           JOIN documents d ON d.id = dm.document_id
+           JOIN workspaces w ON w.id = d.workspace_id
+           JOIN workspace_members wm ON wm.workspace_id = d.workspace_id AND wm.user_id = $1
+           LEFT JOIN users author ON author.id = dm.created_by
+          WHERE dm.user_id = $1
+            AND dm.read_at IS NULL
+            -- An archived document is off the shelf; a tag in one is not news.
+            AND d.archived_at IS NULL
+          ORDER BY dm.created_at DESC
+          LIMIT ${MAX_MENTIONS}`,
+        [user.id],
+      ),
     ]);
 
     const messages: MessageNotification[] = await Promise.all(
@@ -194,6 +234,18 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         workspace: workspaceOf(row),
       })),
       messages,
+      mentions: mentionRows.map(
+        (row): MentionNotification => ({
+          documentId: row.document_id,
+          title: row.title,
+          mode: row.mode,
+          workspace: workspaceOf(row),
+          taggedBy: row.author_id
+            ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+            : null,
+          createdAt: row.created_at,
+        }),
+      ),
     };
   });
 
@@ -208,6 +260,24 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         WHERE ${READABLE_CHANNEL} AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
        ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`,
       [req.user!.id, input.channelIds ?? null],
+    );
+    reply.status(204);
+  });
+
+  /**
+   * Clears tags addressed to you — the ones given, or all of them. Opening the
+   * document is what normally calls this, so a tag stops asking for attention
+   * once it has been paid.
+   */
+  app.post('/notifications/mentions/read', async (req, reply) => {
+    const input = parse(readMentionsSchema, req.body ?? {});
+    await query(
+      `UPDATE document_mentions
+          SET read_at = now()
+        WHERE user_id = $1
+          AND read_at IS NULL
+          AND ($2::uuid[] IS NULL OR document_id = ANY($2::uuid[]))`,
+      [req.user!.id, input.documentIds ?? null],
     );
     reply.status(204);
   });

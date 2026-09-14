@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import type { Channel, PresenceStatus, User } from '@paradocs/shared';
+import { parseMentionHref, type Channel, type PresenceStatus, type User } from '@paradocs/shared';
 import {
   useDeleteDocument,
   useDocument,
@@ -12,8 +12,11 @@ import {
   useWorkspaces,
   useChannels,
   useDirectConversations,
+  useMarkMentionsRead,
+  useNotifications,
   useOpenDirect,
   usePresence,
+  useSpreadsheet,
   usePresenceSettings,
   useVoiceConfig,
   useVoiceParticipants,
@@ -29,8 +32,10 @@ import AllDocuments from './components/AllDocuments';
 import AcceptInvite from './components/AcceptInvite';
 import SettingsDialog, { isSettingsSection, type SettingsSection, type Theme } from './components/SettingsDialog';
 import ConnectServerDialog from './components/ConnectServerDialog';
-import { desktop } from './lib/desktop';
+import { desktop, usePoppedOut } from './lib/desktop';
 import { useTheme } from './lib/theme';
+import ModeSwitch from './components/ModeSwitch';
+import TabBar from './components/TabBar';
 import NotificationsMenu from './components/NotificationsMenu';
 import SearchPalette from './components/SearchPalette';
 import { ChatView } from './components/chat/ChatView';
@@ -43,12 +48,28 @@ import { DirectCallActions, DirectTitle } from './components/chat/DirectHeader';
 import { useCall } from './lib/call';
 import { useDirectCalls } from './lib/directCalls';
 import { effectiveStatus, useIdle } from './lib/idle';
+import { getOpenBehaviour } from './lib/openBehaviour';
+import {
+  activeTab,
+  describePath,
+  ensureTabFor,
+  openTab,
+  updateActiveTab,
+  useTabState,
+  type TabKind,
+} from './lib/tabs';
 import { useToast } from './components/Toast';
-import { EmptyState, IconButton, Spinner } from './components/ui';
+import PopoutWindow from './components/PopoutWindow';
+import SpreadsheetView from './components/sheet/SpreadsheetView';
+import { Button, EmptyState, IconButton, Spinner } from './components/ui';
 import Icon from './components/Icon';
 
 export default function App() {
   const me = useMe();
+  // A popped-out channel is this same client on the same session, with only
+  // the one conversation in it. It has no menu to be steered from, so the
+  // command listener that follows the desktop menu stays out of its way.
+  const popout = useLocation().pathname.startsWith('/popout/');
 
   if (me.isLoading) return <Spinner />;
   if (!me.data?.user) {
@@ -60,18 +81,76 @@ export default function App() {
     );
   }
 
+  // A popped-out channel is one conversation in a window of its own; a row of
+  // tabs above it would be offering to turn it back into the whole app.
   return (
-    <>
-      {desktop && <DesktopNavigation />}
-      <Routes>
-        <Route path="/invite/:token" element={<AcceptInvite />} />
-        <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
-        <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
-        <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
-        <Route path="/w/:workspaceId" element={<Workspace user={me.data.user} />} />
-        <Route path="*" element={<FirstWorkspaceRedirect />} />
-      </Routes>
-    </>
+    <div className="flex h-full flex-col overflow-hidden">
+      {desktop && !popout && <DesktopNavigation />}
+      {!popout && <TabStrip />}
+      <div className="min-h-0 flex-1">
+        <Routes>
+          <Route path="/popout/:workspaceId/:channelId" element={<PopoutWindow user={me.data.user} />} />
+          <Route path="/invite/:token" element={<AcceptInvite />} />
+          <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
+          <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
+          <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
+          <Route path="/w/:workspaceId/s/:sheetId" element={<Workspace user={me.data.user} sheets />} />
+          <Route path="/w/:workspaceId/s" element={<Workspace user={me.data.user} sheets />} />
+          <Route path="/w/:workspaceId" element={<Workspace user={me.data.user} />} />
+          <Route path="*" element={<FirstWorkspaceRedirect />} />
+        </Routes>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The tab bar, and the two halves of keeping it honest.
+ *
+ * Navigating anywhere — a link, the sidebar, a redirect — writes that path into
+ * the tab in front, so a tab always describes where it actually is without
+ * every call site having to say so. Activating a tab navigates to its path.
+ * The two cannot chase each other: the second only fires when the chosen tab
+ * changes, and by then the first has nothing new to write.
+ */
+function TabStrip() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const workspaces = useWorkspaces();
+  const { tabs, activeId } = useTabState();
+  const lastActivated = useRef<string | null>(activeId);
+
+  // There is always somewhere the app is, so there is always at least one tab.
+  useEffect(() => {
+    if (describePath(location.pathname)) ensureTabFor(location.pathname);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (describePath(location.pathname)) updateActiveTab({ path: location.pathname });
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (activeId === lastActivated.current) return;
+    lastActivated.current = activeId;
+    const tab = activeTab();
+    if (tab && tab.path !== location.pathname) navigate(tab.path);
+    // Following the chosen tab is the whole job here; the location is read for
+    // the comparison, not depended on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, navigate]);
+
+  // Nothing to put tabs above until the app is somewhere tabbable.
+  if (!describePath(location.pathname) || tabs.length === 0) return null;
+
+  return (
+    <TabBar
+      workspaces={workspaces.data ?? []}
+      onNewTab={() => {
+        // A new tab opens on the workspace you are in, at its front door.
+        const workspaceId = activeTab()?.workspaceId ?? workspaces.data?.[0]?.id;
+        if (workspaceId) openTab(`/w/${workspaceId}`, '');
+      }}
+    />
   );
 }
 
@@ -111,13 +190,19 @@ function Workspace({
   user,
   allDocuments = false,
   chat = false,
+  sheets = false,
 }: {
   user: User;
   allDocuments?: boolean;
   chat?: boolean;
+  /** The Sheets app: a list of spreadsheets, or one open. */
+  sheets?: boolean;
 }) {
   const userId = user.id;
-  const { workspaceId = '', documentId, channelId } = useParams();
+  const { workspaceId = '', documentId, channelId, sheetId } = useParams();
+  // Spreadsheets are their own records, fetched here only to name the header
+  // and the tab; the grid itself loads inside the Sheets view.
+  const openSheet = useSpreadsheet(sheets ? sheetId : undefined);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -149,6 +234,15 @@ function Workspace({
   const callChannel = findConversation(call.channelId);
   // Only polled while chat is open; a document reader has no use for it.
   const voiceParticipants = useVoiceParticipants(workspaceId, chat && voiceEnabled);
+  // Conversations the desktop app has in windows of their own. They are still
+  // this app's: they share the session, and they close when it does.
+  const poppedOut = usePoppedOut();
+  const poppedOutIds = poppedOut.map((entry) => entry.channelId);
+  const isPoppedOut = (id: string | null | undefined) => Boolean(id) && poppedOutIds.includes(id!);
+  // A call runs in one window at a time, so when it is not this one it is in
+  // one of these — and the sidebar has to say so, or a call simply disappears
+  // from the app that started it.
+  const callElsewhere = poppedOut.find((entry) => entry.inCall);
 
   const presence = usePresence(workspaceId);
   const presenceMap = presence.data ?? {};
@@ -160,6 +254,8 @@ function Workspace({
     !id ? 'offline' : id === userId ? selfStatus : (presenceMap[id] ?? 'offline');
   // Busy mutes what would otherwise interrupt: notifications and ringing.
   const quiet = chosenStatus === 'busy';
+
+  const elsewhereChannel = findConversation(callElsewhere?.channelId);
 
   const directCalls = useDirectCalls({
     call,
@@ -176,7 +272,12 @@ function Workspace({
     activeChannelId: chat ? (channelId ?? null) : null,
     idle,
     quiet,
-    onNotifyClick: (targetWorkspaceId, id) => navigate(`/w/${targetWorkspaceId}/c/${id}`),
+    onNotifyClick: (targetWorkspaceId, id) => {
+      // Clicking a mention should land on the conversation wherever it is
+      // being read, which may be a window of its own rather than this one.
+      if (isPoppedOut(id)) void desktop?.popouts.focus(id).catch(() => {});
+      else navigate(`/w/${targetWorkspaceId}/c/${id}`);
+    },
     onCallEvent: (event) => {
       // A call can be the first anyone hears of a conversation.
       if (event.type === 'call.ringing') void queryClient.invalidateQueries({ queryKey: ['directs'] });
@@ -204,6 +305,20 @@ function Workspace({
   const [connectOpen, setConnectOpen] = useState(false);
 
   const journal = useJournal(workspaceId, journalDate ?? todayISO(), journalDate !== null);
+
+  /**
+   * Opening a document you were tagged in answers the tag, however you got
+   * there — the bell, a link, or the sidebar. Only documents actually carrying
+   * one are cleared, so this costs nothing on an ordinary open.
+   */
+  const notifications = useNotifications();
+  const markMentionsRead = useMarkMentionsRead();
+  const taggedHere = notifications.data?.mentions?.some((m) => m.documentId === documentId) ?? false;
+  useEffect(() => {
+    if (documentId && taggedHere) markMentionsRead.mutate([documentId]);
+    // The mutation object is stable; including it would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentId, taggedHere]);
 
   // Opening a journal is a fetch-then-navigate, since the id is assigned server side.
   useEffect(() => {
@@ -248,7 +363,12 @@ function Workspace({
     return () => window.removeEventListener('keydown', onKey);
   }, [setLeftOpen, setRightOpen]);
 
-  // The desktop menu reaches into the page to open Settings or add a server.
+  // The desktop menu reaches into the page to open Settings or add a server,
+  // and a pop-out reaches into it to give a conversation back. Both arrive on
+  // the same channel; the handler is re-read from a ref so that taking a call
+  // back does not depend on when this effect last ran.
+  const latest = useRef({ call, navigate, workspaceId });
+  latest.current = { call, navigate, workspaceId };
   useEffect(
     () =>
       desktop?.onCommand((command) => {
@@ -256,12 +376,119 @@ function Workspace({
           setSettingsSection(command.section);
         } else if (command.type === 'connect-server') {
           setConnectOpen(true);
+        } else if (command.type === 'take-call') {
+          // The window that had it has already left, so this joins rather than
+          // moving anyone: showing the channel without rejoining would look
+          // like the call had simply been dropped.
+          const current = latest.current;
+          current.navigate(`/w/${command.workspaceId}/c/${command.channelId}`);
+          if (command.join) current.call.join(command.channelId);
         }
       }),
     [],
   );
 
   const patch = useCallback((p: DocumentPatch) => updateDocument.mutate(p), [updateDocument]);
+
+  /**
+   * Names the tab this view is filling. The path says which workspace and
+   * roughly what, but only the view knows the document's title, whether it is a
+   * page or a canvas, and which conversation a channel id is.
+   */
+  const openDoc = document.data;
+  const tabLabel = chat
+    ? activeChannel
+      ? activeChannel.kind === 'direct'
+        ? conversationName(activeChannel)
+        : `#${activeChannel.name}`
+      : 'Chat'
+    : sheets
+      ? sheetId
+        ? (openSheet.data?.title ?? '')
+        : 'Spreadsheets'
+      : allDocuments
+        ? 'All documents'
+        : documentId
+          ? (openDoc?.title ?? '')
+          : (workspace?.name ?? '');
+  const tabKind: TabKind = chat
+    ? 'chat'
+    : sheets
+      ? 'sheet'
+      : allDocuments
+        ? 'all'
+        : documentId
+          ? (openDoc?.mode === 'canvas' ? 'canvas' : 'page')
+          : 'home';
+  const tabEmoji = sheets
+    ? (openSheet.data?.icon ?? undefined)
+    : !chat && !allDocuments && documentId
+      ? (openDoc?.icon ?? undefined)
+      : undefined;
+  useEffect(() => {
+    updateActiveTab({ label: tabLabel, kind: tabKind, emoji: tabEmoji, workspaceId });
+  }, [tabLabel, tabKind, tabEmoji, workspaceId]);
+
+  /**
+   * Moves a conversation into a window of its own.
+   *
+   * A call goes with it rather than being copied into it: audio and video
+   * belong to the page playing them, so this window leaves the room and the new
+   * one joins as it opens. Everything else — messages, typing, who is around —
+   * genuinely is shared, because both windows are the same client on the same
+   * session talking to the same server.
+   *
+   * Leaving first is what keeps the room from seeing one person arrive twice,
+   * but it also means a window that never opens would have cost you the call.
+   * So the leave is provisional: if there turns out to be nowhere for the call
+   * to go, it comes back here.
+   */
+  function popOut(target: Channel, withCall: boolean) {
+    if (!desktop) return;
+    if (withCall) call.leave();
+
+    /**
+     * Rejoins what the leave above gave up, and only if the call is still
+     * where it was left. Between the two there is a trip through the desktop
+     * app, and in that time someone may have answered a call or joined another
+     * room — that call is the one they want, not this one.
+     */
+    const restoreCall = () => {
+      const current = latest.current.call;
+      if (withCall && current.channelId === null && current.status === 'idle') current.join(target.id);
+    };
+
+    const failed = (message: string) => {
+      toast(message, 'error');
+      restoreCall();
+    };
+
+    void desktop.popouts
+      .open({
+        workspaceId,
+        channelId: target.id,
+        kind: target.kind === 'voice' || withCall ? 'voice' : 'text',
+        title:
+          target.kind === 'text' ? `#${target.name}` : conversationName(target),
+        withCall,
+      })
+      .then((result) => {
+        if (!result.ok) failed(result.error);
+      })
+      .catch(() => failed('Could not open that window'));
+  }
+
+  /** Asks a window for its conversation back; a call in it comes back too. */
+  const recall = (id: string) => void desktop?.popouts.recall(id).catch(() => {});
+
+  const popOutButton = (target: Channel, withCall: boolean) => (
+    <IconButton
+      label={withCall ? 'Move this call to its own window' : 'Open this in its own window'}
+      onClick={() => popOut(target, withCall)}
+    >
+      <Icon name="box-arrow-up-right" />
+    </IconButton>
+  );
 
   /** Opens the conversation with someone, starting it if need be. */
   async function messageMember(memberId: string): Promise<Channel | null> {
@@ -308,6 +535,12 @@ function Workspace({
             onSelectWorkspace={(id) => navigate(`/w/${id}`)}
             documentId={documentId ?? null}
             onSelectDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
+            canEdit={canEdit}
+            onDocumentDeleted={(id) => {
+              // Deleting the document you are reading has to move you off it,
+              // or the page sits on something the server no longer has.
+              if (id === documentId) navigate(`/w/${workspaceId}`);
+            }}
             onOpenJournal={() => setJournalDate(todayISO())}
             onOpenSearch={() => setSearchOpen(true)}
             onOpenAllDocuments={() => navigate(`/w/${workspaceId}/all`)}
@@ -321,10 +554,16 @@ function Workspace({
             onSignOut={() => logout.mutate()}
             onOpenSettings={setSettingsSection}
             onConnectServer={desktop ? () => setConnectOpen(true) : undefined}
-            section={chat ? 'chat' : 'docs'}
+            section={chat ? 'chat' : sheets ? 'sheets' : 'docs'}
             onSelectSection={(next) => {
               if (next === 'docs') navigate(`/w/${workspaceId}`);
+              else if (next === 'sheets') navigate(sheetId ? `/w/${workspaceId}/s/${sheetId}` : `/w/${workspaceId}/s`);
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
+            }}
+            activeSheetId={sheetId ?? null}
+            onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
+            onSheetDeleted={(id) => {
+              if (id === sheetId) navigate(`/w/${workspaceId}/s`);
             }}
             channels={channelList}
             directs={directList}
@@ -333,9 +572,11 @@ function Workspace({
             activeChannelId={channelId ?? null}
             onSelectChannel={(id) => {
               // Clicking a voice channel joins it, the way it works elsewhere;
-              // a text channel or direct conversation is only ever opened.
-              const target = channelList.find((c) => c.id === id);
-              if (target?.kind === 'voice') call.join(id);
+              // a text channel or direct conversation is only ever opened. One
+              // already in a window of its own is brought forward instead:
+              // joining here would take the call away from where it is running.
+              if (isPoppedOut(id)) void desktop?.popouts.focus(id).catch(() => {});
+              else if (channelList.find((c) => c.id === id)?.kind === 'voice') call.join(id);
               navigate(`/w/${workspaceId}/c/${id}`);
             }}
             canManageChannels={canManageChannels}
@@ -343,7 +584,10 @@ function Workspace({
             mentionTotal={mentionTotal}
             voiceEnabled={voiceEnabled}
             voiceOccupancy={voiceParticipants.data ?? {}}
-            connectedChannelId={call.channelId}
+            // A call in a window of its own is still your call, so the
+            // channel is marked the same way wherever it is running.
+            connectedChannelId={call.channelId ?? callElsewhere?.channelId ?? null}
+            poppedOutChannelIds={poppedOutIds}
             callBar={
               call.channelId
                 ? {
@@ -354,8 +598,24 @@ function Workspace({
                     onToggleMic: () => call.toggle('mic'),
                     onLeave: call.leave,
                     onOpen: () => navigate(`/w/${workspaceId}/c/${call.channelId}`),
+                    onPopOut: desktop && callChannel ? () => popOut(callChannel, true) : undefined,
                   }
-                : null
+                : callElsewhere
+                  ? {
+                      // Its own title is the fallback: a direct conversation
+                      // this window has never listed has no channel to name.
+                      channelName: elsewhereChannel
+                        ? conversationName(elsewhereChannel)
+                        : callElsewhere.title,
+                      direct: elsewhereChannel?.kind === 'direct',
+                      connecting: false,
+                      mic: false,
+                      // Muting and hanging up belong to the window actually in
+                      // the call; from here the useful thing is finding it.
+                      onOpen: () => void desktop?.popouts.focus(callElsewhere.channelId).catch(() => {}),
+                      onShowWindow: () => void desktop?.popouts.focus(callElsewhere.channelId).catch(() => {}),
+                    }
+                  : null
             }
           />
         </div>
@@ -373,10 +633,24 @@ function Workspace({
                   ? conversationName(activeChannel)
                   : `#${activeChannel.name}`
                 : 'Chat'
-              : allDocuments
-                ? 'All documents'
-                : (document.data?.title ?? '')}
+              : sheets
+                ? sheetId
+                  ? (openSheet.data?.title ?? '')
+                  : 'Spreadsheets'
+                : allDocuments
+                  ? 'All documents'
+                  : (document.data?.title ?? '')}
           </span>
+          {/* Writing and drawing are two views of one document, so moving
+              between them belongs beside the document rather than inside a
+              panel. A journal entry is a dated page and has nowhere to slide. */}
+          {!chat && !sheets && !allDocuments && document.data && !document.data.isJournal && (
+            <ModeSwitch
+              mode={document.data.mode}
+              disabled={!canEdit}
+              onChange={(mode) => patch({ mode })}
+            />
+          )}
           <NotificationsMenu />
           {chat ? (
             <IconButton
@@ -387,7 +661,7 @@ function Workspace({
             >
               <Icon name="people" />
             </IconButton>
-          ) : (
+          ) : sheets ? null : (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
                 <Icon name="search" />
@@ -406,6 +680,12 @@ function Workspace({
           {chat ? (
             channels.isLoading ? (
               <Spinner />
+            ) : activeChannel && isPoppedOut(activeChannel.id) ? (
+              <InItsOwnWindow
+                name={activeChannel.kind === 'text' ? `#${activeChannel.name}` : conversationName(activeChannel)}
+                onShow={() => void desktop?.popouts.focus(activeChannel.id).catch(() => {})}
+                onBringBack={() => recall(activeChannel.id)}
+              />
             ) : activeChannel?.kind === 'voice' ? (
               <VoiceRoom
                 key={activeChannel.id}
@@ -413,6 +693,7 @@ function Workspace({
                 config={voice.data}
                 call={call}
                 selfName={user.name}
+                actions={desktop && popOutButton(activeChannel, call.channelId === activeChannel.id)}
               />
             ) : activeChannel ? (
               <ChatView
@@ -427,9 +708,15 @@ function Workspace({
                 canEditChannel={canManageChannels && activeChannel.kind === 'text'}
                 title={direct ? <DirectTitle channel={direct} status={statusOf(direct.peer?.id)} /> : undefined}
                 actions={
-                  direct?.peer && voiceEnabled && !inDirectCall ? (
-                    <DirectCallActions name={direct.peer.name} onCall={(video) => directCalls.start(direct.id, video)} />
-                  ) : undefined
+                  <>
+                    {direct?.peer && voiceEnabled && !inDirectCall && (
+                      <DirectCallActions
+                        name={direct.peer.name}
+                        onCall={(video) => directCalls.start(direct.id, video)}
+                      />
+                    )}
+                    {desktop && popOutButton(activeChannel, inDirectCall)}
+                  </>
                 }
                 stage={
                   inDirectCall ? (
@@ -468,6 +755,22 @@ function Workspace({
                 }
               />
             )
+          ) : sheets ? (
+            sheetId ? (
+              <SpreadsheetView
+                key={sheetId}
+                workspaceId={workspaceId}
+                sheetId={sheetId}
+                self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+                canEdit={canEdit}
+              />
+            ) : (
+              <EmptyState
+                icon="table"
+                title="No spreadsheet open"
+                hint={canEdit ? 'Pick one on the left, or create one with +.' : 'Pick a spreadsheet on the left.'}
+              />
+            )
           ) : allDocuments ? (
             <AllDocuments
               workspaceId={workspaceId}
@@ -494,14 +797,21 @@ function Workspace({
                 onPatch={patch}
                 onBlocksChange={setLiveBlocks}
                 onOpenDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
-                onOpenInternalLink={(path) => navigate(path)}
+                onOpenInternalLink={(path) => {
+                  // A tag is a link to a person, and a person is not a page:
+                  // following one opens the conversation with them.
+                  const mention = parseMentionHref(path);
+                  if (mention) void messageMember(mention.userId);
+                  else navigate(path);
+                }}
               />
             </ErrorBoundary>
           ) : null}
         </div>
       </main>
 
-      {/* Chat has no document details to show; who is around takes that side instead. */}
+      {/* Chat has no document details to show; who is around takes that side
+          instead. A spreadsheet has neither, and wants the width for columns. */}
       {chat ? (
         <aside
           className={cx(
@@ -520,7 +830,7 @@ function Workspace({
             />
           </div>
         </aside>
-      ) : (
+      ) : sheets ? null : (
         <aside
           className={cx(
             'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
@@ -578,6 +888,7 @@ function Workspace({
             setActiveTagIds([]);
           }}
           onSelect={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
+          onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
         />
       )}
 
@@ -589,6 +900,42 @@ function Workspace({
           onDecline={directCalls.decline}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * What the main window shows where a conversation would be when that
+ * conversation is being read in a window of its own. Two live copies of one
+ * channel is not twice as useful — it is two places for the same unread badge
+ * to be cleared from — so this points at the window that has it instead.
+ */
+function InItsOwnWindow({
+  name,
+  onShow,
+  onBringBack,
+}: {
+  name: string;
+  onShow: () => void;
+  onBringBack: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+      <div className="text-3xl opacity-40">
+        <Icon name="window-stack" />
+      </div>
+      <p className="text-sm font-medium">{name} is in its own window</p>
+      <p className="max-w-xs text-xs text-[var(--color-muted)]">
+        It is still part of this app — it shares your session, and it closes when this window does.
+      </p>
+      <div className="flex gap-2">
+        <Button variant="subtle" onClick={onShow}>
+          Show that window
+        </Button>
+        <Button variant="subtle" onClick={onBringBack}>
+          Bring it back here
+        </Button>
+      </div>
     </div>
   );
 }

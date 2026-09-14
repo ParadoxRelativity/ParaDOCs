@@ -9,11 +9,21 @@ import type { FastifyBaseLogger } from 'fastify';
 import {
   CANVAS_ELEMENTS,
   COLLAB_FRAGMENT,
+  DEFAULT_SHEET_NAME,
+  MAIN_SHEET_ID,
+  SHEET_INFO,
   canvasSearchText,
   normalizeBlocks,
+  sheetIdFromCollabName,
+  sheetMapName,
+  workbookSearchText,
   type CanvasElement,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
+import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions } from '../lib/documentMentions.js';
+import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
+import { setLiveDocumentLookup } from '../lib/liveDocuments.js';
+import { documentSchema } from './documentSchema.js';
 import {
   SESSION_COOKIE,
   documentAccessForUser,
@@ -28,7 +38,7 @@ export const COLLAB_PATH = '/collab';
  * Runs BlockNote's schema server side so the Y.Doc can be converted back into
  * blocks and markdown. Creating it is expensive, so there is exactly one.
  */
-const serverEditor = ServerBlockNoteEditor.create();
+const serverEditor = ServerBlockNoteEditor.create({ schema: documentSchema });
 
 interface CollabContext {
   user: SessionUser;
@@ -50,6 +60,11 @@ function readCookie(header: string | undefined, name: string): string | undefine
  * While a document is open the Y.Doc is the source of truth. On every save it is
  * written to documents.ydoc, and documents.body / body_md are re-derived from it
  * so search, export and the REST API keep seeing current content.
+ *
+ * Spreadsheets ride the same socket. They are a different application with a
+ * different table, and the only thing shared is this machinery, so they are
+ * told apart by a "sheet:" prefix on the document name and handled in their own
+ * branch of each hook. Neither app has to know how the other stores anything.
  */
 export function createCollabServer(log: FastifyBaseLogger) {
   const hocuspocus = new Hocuspocus({
@@ -61,7 +76,10 @@ export function createCollabServer(log: FastifyBaseLogger) {
 
     async onConnect({ documentName, context, connection }) {
       const { user } = context as CollabContext;
-      const access = await documentAccessForUser(user.id, documentName);
+      const sheetId = sheetIdFromCollabName(documentName);
+      const access = sheetId
+        ? await spreadsheetAccessForUser(user.id, sheetId)
+        : await documentAccessForUser(user.id, documentName);
       if (!access) {
         // Rejects the connection rather than silently serving an empty document.
         throw new Error('No access to this document');
@@ -81,6 +99,18 @@ export function createCollabServer(log: FastifyBaseLogger) {
      * Mutating the one we are given does not depend on the class name at all.
      */
     async onLoadDocument({ documentName, document }) {
+      const sheetId = sheetIdFromCollabName(documentName);
+      if (sheetId) {
+        // A spreadsheet has nothing to seed from: an empty grid is a valid
+        // grid, so a new one simply starts blank.
+        const { rows } = await query<{ ydoc: Buffer | null }>(
+          'SELECT ydoc FROM spreadsheets WHERE id = $1',
+          [sheetId],
+        );
+        if (rows[0]?.ydoc) Y.applyUpdate(document, new Uint8Array(rows[0].ydoc));
+        return;
+      }
+
       const { rows } = await query<{ ydoc: Buffer | null; body: unknown; mode: string }>(
         'SELECT ydoc, body, mode FROM documents WHERE id = $1',
         [documentName],
@@ -114,6 +144,43 @@ export function createCollabServer(log: FastifyBaseLogger) {
       const update = Y.encodeStateAsUpdate(document);
       const state = Buffer.from(update);
 
+      const sheetId = sheetIdFromCollabName(documentName);
+      if (sheetId) {
+        // What people typed is what a spreadsheet contributes to search, across
+        // every sheet and under each sheet's name. A formula is indexed as its
+        // text, since the value it works out to is never stored anywhere.
+        const sheets: { id: string; name: string; order: number }[] = [];
+        document.getMap(SHEET_INFO).forEach((value, id) => {
+          if (!(value instanceof Y.Map)) return;
+          sheets.push({ id, name: String(value.get('name') ?? id), order: Number(value.get('order') ?? 0) });
+        });
+        // A spreadsheet nobody has added a second sheet to has no list at all:
+        // it is one sheet, stored under the original names.
+        if (sheets.length === 0) sheets.push({ id: MAIN_SHEET_ID, name: DEFAULT_SHEET_NAME, order: 0 });
+        sheets.sort((a, b) => a.order - b.order);
+
+        const searchText = workbookSearchText(
+          sheets.map((sheet) => {
+            const cells: Record<string, string> = {};
+            document.getMap(sheetMapName('cells', sheet.id)).forEach((value, key) => {
+              if (typeof value === 'string' && value) cells[key] = value;
+            });
+            return { name: sheet.name, cells };
+          }),
+        );
+
+        await query(
+          `UPDATE spreadsheets
+              SET ydoc = $2,
+                  search_text = $3,
+                  last_edited_by = COALESCE($4, last_edited_by),
+                  updated_at = now()
+            WHERE id = $1`,
+          [sheetId, state, searchText, user?.id ?? null],
+        );
+        return;
+      }
+
       const { rows } = await query<{ mode: string }>('SELECT mode FROM documents WHERE id = $1', [
         documentName,
       ]);
@@ -124,12 +191,19 @@ export function createCollabServer(log: FastifyBaseLogger) {
       let body: unknown[] | null = null;
       let markdown: string | null = null;
 
+      // Who has been tagged by name, gathered here and recorded after the
+      // document itself is saved.
+      let mentioned: string[] = [];
+
       if (mode === 'canvas') {
         // A canvas has no blocks. Its text digest is what search indexes.
         const elements = [...document.getMap(CANVAS_ELEMENTS).values()]
           .map((value) => (value instanceof Y.Map ? (value.toJSON() as CanvasElement) : null))
           .filter((el): el is CanvasElement => Boolean(el && el.type));
-        markdown = canvasSearchText(elements);
+        mentioned = mentionsInCanvas(elements);
+        // A board stores a tag as an id, so the names have to be looked up
+        // before its text can be indexed as something people would search for.
+        markdown = canvasSearchText(elements, await namesFor(mentioned));
         body = [];
       } else {
         try {
@@ -141,6 +215,7 @@ export function createCollabServer(log: FastifyBaseLogger) {
           Y.applyUpdate(snapshot, update);
           body = serverEditor.yDocToBlocks(snapshot, COLLAB_FRAGMENT);
           markdown = await serverEditor.blocksToMarkdownLossy(body as never);
+          mentioned = mentionsInBlocks(body);
           snapshot.destroy();
         } catch (err) {
           log.error({ err, documentName }, 'could not derive blocks from collaborative document');
@@ -157,8 +232,22 @@ export function createCollabServer(log: FastifyBaseLogger) {
           WHERE id = $1`,
         [documentName, state, body ? JSON.stringify(body) : null, markdown, user?.id ?? null],
       );
+
+      // After the save, so a tag is never announced for a document whose own
+      // write failed. A failure here costs a notification, not the work.
+      if (mentioned.length > 0) {
+        try {
+          await recordMentions(documentName, mentioned, user?.id ?? null);
+        } catch (err) {
+          log.warn({ err, documentName }, 'could not record document mentions');
+        }
+      }
     },
   });
+
+  // Values referenced from elsewhere should come from the grid being edited,
+  // not from the save a couple of seconds behind it.
+  setLiveDocumentLookup((name) => hocuspocus.documents.get(name));
 
   const wss = new WebSocketServer({ noServer: true });
 

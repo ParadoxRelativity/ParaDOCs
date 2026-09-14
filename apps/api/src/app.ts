@@ -14,6 +14,7 @@ import { sessionPlugin } from './plugins/session.js';
 import { authRoutes } from './routes/auth.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { documentRoutes } from './routes/documents.js';
+import { spreadsheetRoutes } from './routes/spreadsheets.js';
 import { searchRoutes } from './routes/search.js';
 import { tagRoutes } from './routes/tags.js';
 import { commentRoutes } from './routes/comments.js';
@@ -96,6 +97,7 @@ export async function buildApp() {
     authRoutes,
     workspaceRoutes,
     documentRoutes,
+    spreadsheetRoutes,
     searchRoutes,
     tagRoutes,
     commentRoutes,

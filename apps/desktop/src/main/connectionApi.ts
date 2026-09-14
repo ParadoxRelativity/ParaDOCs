@@ -1,7 +1,13 @@
 import { session as electronSession } from 'electron';
 import http from 'node:http';
 import https from 'node:https';
-import type { InviteNotification, MessageNotification, Notifications, Role } from '@paradocs/shared';
+import type {
+  InviteNotification,
+  MentionNotification,
+  MessageNotification,
+  Notifications,
+  Role,
+} from '@paradocs/shared';
 import { partitionFor, type Connection } from './connections.js';
 import { paths } from './paths.js';
 import { readJson, writeJson } from './store.js';
@@ -267,7 +273,27 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
       }),
     );
 
-    return { status: 'ok', notifications: { invites, messages } };
+    const mentions: MentionNotification[] = await Promise.all(
+      records(body.mentions, 100).map(async (mention) => {
+        const author = mention.taggedBy ? record(mention.taggedBy) : null;
+        return {
+          documentId: text(mention.documentId),
+          title: text(mention.title, 'Untitled').slice(0, 200),
+          mode: mention.mode === 'canvas' ? ('canvas' as const) : ('page' as const),
+          workspace: await workspace(mention.workspace),
+          taggedBy: author
+            ? {
+                id: text(author.id),
+                name: text(author.name, 'Someone'),
+                avatarUrl: await picture(fetcher, author.avatarUrl),
+              }
+            : null,
+          createdAt: text(mention.createdAt),
+        };
+      }),
+    );
+
+    return { status: 'ok', notifications: { invites, messages, mentions } };
   } catch {
     return { status: 'unavailable' };
   }

@@ -17,6 +17,8 @@ import type {
   PresenceStatus,
   Role,
   SearchHit,
+  SheetSearchHit,
+  SpreadsheetSummary,
   Tag,
   UploadConfig,
   User,
@@ -26,6 +28,7 @@ import type {
   WorkspaceMember,
 } from '@paradocs/shared';
 import { formatBytes } from '../lib/util';
+import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
 
 export interface WorkspaceSummary extends Workspace {
@@ -65,6 +68,8 @@ export const keys = {
   presenceSettings: ['presenceSettings'] as const,
   notifications: ['notifications'] as const,
   uploadConfig: ['uploadConfig'] as const,
+  spreadsheets: (ws: string) => ['spreadsheets', ws] as const,
+  spreadsheet: (id: string) => ['spreadsheet', id] as const,
 };
 
 // --- session ---------------------------------------------------------------
@@ -331,6 +336,9 @@ export function useCreateDocument(workspaceId: string) {
       qc.setQueryData(keys.document(doc.id), doc);
       qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
       qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
+      // So the editor opens with "Untitled" selected, whichever of the several
+      // ways of making a document was used.
+      rememberNewDocument(doc.id);
     },
   });
 }
@@ -376,6 +384,60 @@ export function useDeleteDocument(workspaceId: string) {
       qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
       qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
     },
+  });
+}
+
+// --- spreadsheets ------------------------------------------------------------
+// Their own application, with their own records: nothing here touches the
+// document hooks above, and nothing there knows these exist.
+
+export function useSpreadsheets(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.spreadsheets(workspaceId ?? ''),
+    queryFn: () => api.get<SpreadsheetSummary[]>(`/workspaces/${workspaceId}/spreadsheets`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useSpreadsheet(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.spreadsheet(id ?? ''),
+    queryFn: () => api.get<SpreadsheetSummary>(`/spreadsheets/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useCreateSpreadsheet(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { title?: string } = {}) =>
+      api.post<SpreadsheetSummary>(`/workspaces/${workspaceId}/spreadsheets`, input),
+    onSuccess: (sheet) => {
+      qc.setQueryData(keys.spreadsheet(sheet.id), sheet);
+      void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
+      // The same "open on the name, selected" welcome a new document gets.
+      rememberNewDocument(sheet.id);
+    },
+  });
+}
+
+export function useUpdateSpreadsheet(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string; title?: string; icon?: string | null; archived?: boolean }) =>
+      api.patch<SpreadsheetSummary>(`/spreadsheets/${id}`, patch),
+    onSuccess: (sheet) => {
+      qc.setQueryData(keys.spreadsheet(sheet.id), sheet);
+      void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
+    },
+  });
+}
+
+export function useDeleteSpreadsheet(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/spreadsheets/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) }),
   });
 }
 
@@ -540,15 +602,22 @@ export interface SearchFilters {
   folderId?: string;
 }
 
+/** Documents and spreadsheets that match. A server older than spreadsheets sends no `sheets`. */
+export interface SearchResults {
+  hits: SearchHit[];
+  sheets?: SheetSearchHit[];
+  query: string;
+}
+
 export function useSearch(workspaceId: string | undefined, filters: SearchFilters, enabled: boolean) {
   const query = qs({ ...filters, limit: 40 });
   return useQuery({
     queryKey: keys.search(workspaceId ?? '', query),
-    queryFn: () => api.get<{ hits: SearchHit[]; query: string }>(`/workspaces/${workspaceId}/search${query}`),
+    queryFn: () => api.get<SearchResults>(`/workspaces/${workspaceId}/search${query}`),
     enabled: Boolean(workspaceId) && enabled,
     // Search results are cheap to refetch and stale ones feel broken while typing.
     staleTime: 0,
-  } satisfies UseQueryOptions<{ hits: SearchHit[]; query: string }>);
+  } satisfies UseQueryOptions<SearchResults>);
 }
 
 // --- comments --------------------------------------------------------------
@@ -822,6 +891,20 @@ export function useMarkNotificationsRead() {
       void qc.invalidateQueries({ queryKey: ['channels'] });
       void qc.invalidateQueries({ queryKey: ['directs'] });
     },
+  });
+}
+
+/**
+ * Clears tags addressed to you in the given documents, or in all of them.
+ * Opening a document you were tagged in calls this, so the bell stops asking
+ * about something you have already read.
+ */
+export function useMarkMentionsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (documentIds?: string[]) =>
+      api.post('/notifications/mentions/read', documentIds ? { documentIds } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
   });
 }
 

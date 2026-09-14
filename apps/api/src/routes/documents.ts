@@ -3,6 +3,8 @@ import type { DbClient } from '../db/pool.js';
 import { createDocumentSchema, isoDate, updateDocumentSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
+import { resolveSheetRefs } from './spreadsheets.js';
+import { replaceSheetRefs, sheetRefsInMarkdown } from '@paradocs/shared';
 import { blocksToMarkdown, deriveTitle } from '../lib/blocksToMarkdown.js';
 import { DOCUMENT_SUMMARY_COLUMNS } from '../lib/documentColumns.js';
 import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
@@ -198,8 +200,13 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       '---',
       '',
     ].join('\n');
+    // References to spreadsheets are stored as placeholders; what is handed out
+    // is what each one shows now, to this reader.
+    const stored = doc.bodyMd ?? '';
+    const refs = sheetRefsInMarkdown(stored);
+    const body = refs.length ? replaceSheetRefs(stored, await resolveSheetRefs(req.user!.id, refs)) : stored;
     reply.header('content-type', 'text/markdown; charset=utf-8');
-    return `${frontmatter}${doc.bodyMd}\n`;
+    return `${frontmatter}${body}\n`;
   });
 
   /**

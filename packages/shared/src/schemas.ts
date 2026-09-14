@@ -146,3 +146,16 @@ export type CreateTagInput = z.infer<typeof createTagSchema>;
 export type SearchQuery = z.infer<typeof searchQuerySchema>;
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
 export type CreateEventInput = z.infer<typeof createEventSchema>;
+
+// --- spreadsheets ------------------------------------------------------------
+
+export const createSpreadsheetSchema = z.object({
+  title: z.string().trim().max(200).optional(),
+  icon: z.string().trim().max(8).nullish(),
+});
+
+export const updateSpreadsheetSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  icon: z.string().trim().max(8).nullish(),
+  archived: z.boolean().optional(),
+});

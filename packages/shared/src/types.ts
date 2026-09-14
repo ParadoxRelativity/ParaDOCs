@@ -127,6 +127,21 @@ export interface SearchHit {
   tags: Tag[];
 }
 
+/**
+ * A spreadsheet that matched a search. Kept apart from SearchHit rather than
+ * folded into it: a spreadsheet has no folder, tags or mode, and giving every
+ * document hit an optional version of each would make both harder to read.
+ */
+export interface SheetSearchHit {
+  id: string;
+  title: string;
+  icon: string | null;
+  updatedAt: string;
+  /** Highlighted snippet from the cells, with <mark> around matches. */
+  snippet: string;
+  rank: number;
+}
+
 export interface Comment {
   id: string;
   documentId: string;
@@ -200,8 +215,23 @@ export interface MessageNotification {
   };
 }
 
+/**
+ * A document or canvas where someone tagged you by name. One per document,
+ * however many times your name appears in it.
+ */
+export interface MentionNotification {
+  documentId: string;
+  title: string;
+  mode: DocumentMode;
+  workspace: NotificationWorkspace;
+  /** Who was editing when the tag appeared. Null if that account is gone. */
+  taggedBy: { id: string; name: string; avatarUrl: string | null } | null;
+  createdAt: string;
+}
+
 /** Everything on a server that wants the signed-in person's attention. */
 export interface Notifications {
   invites: InviteNotification[];
   messages: MessageNotification[];
+  mentions: MentionNotification[];
 }

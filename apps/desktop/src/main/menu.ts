@@ -1,18 +1,26 @@
 import { app, Menu, dialog, shell, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import { listConnections } from './connections.js';
 import { check } from './updater.js';
-import { activeConnectionId, activeWebContents, getAppWindow, openConnection, sendCommand } from './windows.js';
+import {
+  activeConnectionId,
+  focusedPageContents,
+  focusedWindow,
+  getAppWindow,
+  openConnection,
+  sendCommand,
+} from './windows.js';
 
 const isMac = process.platform === 'darwin';
 
 /**
- * Runs against the page on screen. The window's pages are views inside it
- * rather than its own, so reloading, zooming and developer tools are wired to
- * the active view explicitly instead of through the built-in roles.
+ * Runs against the page in front — a popped-out channel when that is what has
+ * the focus, otherwise the connection on screen. The main window's pages are
+ * views inside it rather than its own, so reloading, zooming and developer
+ * tools are wired to a page explicitly instead of through the built-in roles.
  */
 function onPage(action: (contents: WebContents) => void): () => void {
   return () => {
-    const contents = activeWebContents();
+    const contents = focusedPageContents();
     if (contents) action(contents);
   };
 }
@@ -93,7 +101,9 @@ export function buildMenu(): void {
         {
           label: isMac ? 'Close Window' : 'Close',
           accelerator: 'CmdOrCtrl+W',
-          click: () => getAppWindow()?.close(),
+          // A popped-out channel is a window like any other, so this closes
+          // the one in front rather than always the main one.
+          click: () => focusedWindow()?.close(),
         },
         ...(isMac ? [] : ([{ role: 'quit' }] as MenuItemConstructorOptions[])),
       ],
@@ -138,7 +148,7 @@ export function buildMenu(): void {
           label: 'Toggle Full Screen',
           accelerator: isMac ? 'Ctrl+Cmd+F' : 'F11',
           click: () => {
-            const window = getAppWindow();
+            const window = focusedWindow();
             window?.setFullScreen(!window.isFullScreen());
           },
         },
@@ -152,11 +162,11 @@ export function buildMenu(): void {
     {
       label: 'Window',
       submenu: [
-        { label: 'Minimize', accelerator: 'CmdOrCtrl+M', click: () => getAppWindow()?.minimize() },
+        { label: 'Minimize', accelerator: 'CmdOrCtrl+M', click: () => focusedWindow()?.minimize() },
         {
           label: 'Zoom',
           click: () => {
-            const window = getAppWindow();
+            const window = focusedWindow();
             if (!window) return;
             if (window.isMaximized()) window.unmaximize();
             else window.maximize();

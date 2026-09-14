@@ -164,6 +164,18 @@ export function useCall(): Call {
   // Closing the tab, or leaving the workspace, must not leave a ghost in a room.
   useEffect(() => () => void roomRef.current?.disconnect().catch(() => {}), []);
 
+  /**
+   * React's cleanup does not run when the window itself goes, which is exactly
+   * what closing a popped-out call is. Without this the room keeps the
+   * participant until the server times them out, and everyone else watches a
+   * frozen tile in the meantime.
+   */
+  useEffect(() => {
+    const hangUp = () => void roomRef.current?.disconnect().catch(() => {});
+    window.addEventListener('pagehide', hangUp);
+    return () => window.removeEventListener('pagehide', hangUp);
+  }, []);
+
   const enqueue = useCallback(
     (task: () => Promise<unknown>) => {
       deviceQueue.current = deviceQueue.current.then(task).catch((err) => {
@@ -270,7 +282,13 @@ export function useCall(): Call {
             })
             .on(RoomEvent.LocalTrackUnpublished, refresh)
             .on(RoomEvent.ActiveSpeakersChanged, refresh)
-            .on(RoomEvent.Disconnected, reset);
+            // A room that has already been replaced still says goodbye on its
+            // way out, and that arrives after whatever replaced it. Acting on
+            // it then would clear the call that is actually running and leave
+            // the app showing nobody in a room it is still connected to.
+            .on(RoomEvent.Disconnected, () => {
+              if (roomRef.current === room) reset();
+            });
 
           // No address from the server means it relays signalling on the
           // address this page came from.

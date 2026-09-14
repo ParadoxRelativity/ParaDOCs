@@ -24,6 +24,8 @@ export interface Preferences {
   media?: MediaPreferences;
   /** Where the other videos in a call go when one is focused. */
   callLayout?: 'side' | 'bottom';
+  /** Whether clicking a notification moves the current tab or opens a new one. */
+  openNotifications?: 'here' | 'tab';
 }
 
 const file = path.join(paths.userData, 'preferences.json');
@@ -34,6 +36,10 @@ function isTheme(value: unknown): value is NonNullable<Preferences['theme']> {
 
 function isCallLayout(value: unknown): value is NonNullable<Preferences['callLayout']> {
   return value === 'side' || value === 'bottom';
+}
+
+function isOpenBehaviour(value: unknown): value is NonNullable<Preferences['openNotifications']> {
+  return value === 'here' || value === 'tab';
 }
 
 /** Pages send these, so every field is checked rather than stored as given. */
@@ -57,6 +63,7 @@ export function getPreferences(): Preferences {
   const preferences: Preferences = {};
   if (isTheme(stored.theme)) preferences.theme = stored.theme;
   if (isCallLayout(stored.callLayout)) preferences.callLayout = stored.callLayout;
+  if (isOpenBehaviour(stored.openNotifications)) preferences.openNotifications = stored.openNotifications;
   const media = sanitizeMedia(stored.media);
   if (media) preferences.media = media;
   return preferences;
@@ -71,9 +78,11 @@ export function setPreference(key: unknown, value: unknown): unknown {
     next.media = sanitizeMedia(value);
   } else if (key === 'callLayout' && isCallLayout(value)) {
     next.callLayout = value;
+  } else if (key === 'openNotifications' && isOpenBehaviour(value)) {
+    next.openNotifications = value;
   } else {
     return undefined;
   }
   writeJson(file, next);
-  return key === 'theme' ? next.theme : key === 'media' ? next.media : next.callLayout;
+  return next[key as keyof Preferences];
 }

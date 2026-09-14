@@ -25,6 +25,7 @@ import VoiceSettings from './VoiceSettings';
 import { desktop } from '../lib/desktop';
 import type { Theme } from '../lib/theme';
 import { useCallLayout, type CallLayout } from '../lib/callLayout';
+import { useOpenBehaviour, type OpenBehaviour } from '../lib/openBehaviour';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
 import WorkspaceIcon from './WorkspaceIcon';
 
@@ -312,6 +313,11 @@ const CALL_LAYOUTS: { id: CallLayout; label: string; hint: string }[] = [
   { id: 'bottom', label: 'Below', hint: 'Other videos in a row' },
 ];
 
+const OPEN_BEHAVIOURS: { id: OpenBehaviour; label: string; hint: string; icon: IconName }[] = [
+  { id: 'here', label: 'In this tab', hint: 'Leaves what you were on', icon: 'box-arrow-in-right' },
+  { id: 'tab', label: 'In a new tab', hint: 'Keeps what you were on', icon: 'window-plus' },
+];
+
 function OptionCard({
   selected,
   onClick,
@@ -369,6 +375,7 @@ function AppearanceSection({
   showCallLayout: boolean;
 }) {
   const [callLayout, setCallLayout] = useCallLayout();
+  const [openBehaviour, setOpenBehaviour] = useOpenBehaviour();
   const scope = desktop ? 'Applies on every server in this app.' : 'Applies to this browser only.';
 
   return (
@@ -377,6 +384,27 @@ function AppearanceSection({
         <div className="grid grid-cols-3 gap-2">
           {THEMES.map((option) => (
             <OptionCard key={option.id} selected={theme === option.id} onClick={() => onThemeChange(option.id)}>
+              <div className="text-lg">
+                <Icon name={option.icon} />
+              </div>
+              <div className="mt-1 text-xs font-medium">{option.label}</div>
+              <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
+            </OptionCard>
+          ))}
+        </div>
+      </Section>
+
+      <Section
+        title="Opening a notification"
+        hint={`Where a message, mention or invitation goes when you click it in the bell. Holding ${'\u2318'} or Ctrl while clicking does the other one. ${scope}`}
+      >
+        <div className="grid grid-cols-2 gap-2">
+          {OPEN_BEHAVIOURS.map((option) => (
+            <OptionCard
+              key={option.id}
+              selected={openBehaviour === option.id}
+              onClick={() => setOpenBehaviour(option.id)}
+            >
               <div className="text-lg">
                 <Icon name={option.icon} />
               </div>

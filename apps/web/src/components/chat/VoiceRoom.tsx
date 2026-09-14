@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Channel } from '@paradocs/shared';
 import type { VoiceConfig } from '../../api/hooks';
 import type { Call } from '../../lib/call';
@@ -18,11 +19,14 @@ export function VoiceRoom({
   config,
   call,
   selfName,
+  actions,
 }: {
   channel: Channel;
   config: VoiceConfig | undefined;
   call: Call;
   selfName: string;
+  /** Controls at the end of the header, such as moving the room to its own window. */
+  actions?: ReactNode;
 }) {
   const here = call.channelId === channel.id;
   const joined = here && call.status === 'joined';
@@ -46,6 +50,7 @@ export function VoiceRoom({
         {channel.topic && (
           <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">{channel.topic}</span>
         )}
+        {actions && <span className="ml-auto flex shrink-0 items-center gap-2">{actions}</span>}
       </header>
 
       {!joined ? (
