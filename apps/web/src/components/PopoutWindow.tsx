@@ -214,6 +214,7 @@ export default function PopoutWindow({ user }: { user: User }) {
         onEnableNotifications={chatEvents.requestPermission}
         onTyping={chatEvents.sendTyping}
         onOpenDocument={(id) => showInMain(`/w/${workspaceId}/d/${id}`)}
+        onOpenSpreadsheet={(id) => showInMain(`/w/${workspaceId}/s/${id}`)}
         onOpenChannel={(id) => showInMain(`/w/${workspaceId}/c/${id}`)}
       />
     </div>

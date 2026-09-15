@@ -53,6 +53,7 @@ export function ChatView({
   notifications,
   onEnableNotifications,
   onOpenDocument,
+  onOpenSpreadsheet,
   onOpenChannel,
   onTyping,
 }: {
@@ -75,6 +76,7 @@ export function ChatView({
   notifications: 'unsupported' | 'default' | 'granted' | 'denied';
   onEnableNotifications: () => void;
   onOpenDocument: (id: string) => void;
+  onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
   /** Tells everyone else in a channel that you are typing there, or have stopped. */
   onTyping?: (channelId: string, typing: boolean) => void;
@@ -158,7 +160,7 @@ export function ChatView({
   }
 
   const messages = page.data?.messages ?? [];
-  const references = page.data?.references ?? { documents: [], channels: [], members: [] };
+  const references = page.data?.references ?? { documents: [], spreadsheets: [], channels: [], members: [] };
 
   return (
     <div
@@ -279,6 +281,7 @@ export function ChatView({
                 onOpenMedia={(items, itemIndex) => setViewer({ items, index: itemIndex })}
                 onMediaLoad={keepPinned}
                 onOpenDocument={onOpenDocument}
+                onOpenSpreadsheet={onOpenSpreadsheet}
                 onOpenChannel={onOpenChannel}
               />
             ))}
@@ -359,6 +362,7 @@ function Row({
   onOpenMedia,
   onMediaLoad,
   onOpenDocument,
+  onOpenSpreadsheet,
   onOpenChannel,
 }: {
   message: Message;
@@ -373,6 +377,7 @@ function Row({
   onOpenMedia: (items: ViewerItem[], index: number) => void;
   onMediaLoad: () => void;
   onOpenDocument: (id: string) => void;
+  onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
 }) {
   const mentionsMe = !message.deletedAt && mentions(message.body, selfId);
@@ -429,6 +434,7 @@ function Row({
               references={references}
               selfId={selfId}
               onOpenDocument={onOpenDocument}
+              onOpenSpreadsheet={onOpenSpreadsheet}
               onOpenChannel={onOpenChannel}
             />
             {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}

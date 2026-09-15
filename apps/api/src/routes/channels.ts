@@ -51,7 +51,7 @@ const MESSAGE_COLUMNS = `m.id, m.channel_id AS "channelId", m.body,
       ) r
   ), '[]'::json) AS reactions`;
 
-const NO_REFERENCES: MessageReferences = { documents: [], channels: [], members: [] };
+const NO_REFERENCES: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [] };
 
 type Queryable = { query: typeof query };
 

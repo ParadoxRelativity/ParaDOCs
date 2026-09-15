@@ -417,6 +417,13 @@ function short(value: number): string {
   return String(Number(value.toPrecision(4)));
 }
 
+/**
+ * Drawn over the top-right of the plot rather than beside it, so naming the
+ * series costs a chart no drawing room. It is positioned against the box
+ * `ChartPlot` establishes — never against whatever happens to be positioned
+ * further up the page, which is a different place in a document, on a board and
+ * on a sheet.
+ */
 function Legend({ names }: { names: string[] }) {
   if (names.length < 2) return null;
   return (
@@ -431,9 +438,23 @@ function Legend({ names }: { names: string[] }) {
   );
 }
 
-/** A chart's drawing alone, without the frame around it. Used wherever a chart is shown. */
+/**
+ * A chart's drawing alone, without the frame around it. Used wherever a chart is
+ * shown — on its sheet, in a document, on a board.
+ *
+ * It fills its container and establishes the box its legend is placed against.
+ * That box belongs here rather than to each caller: the legend is this
+ * component's own, and a caller that forgot to position itself did not get a
+ * misplaced legend so much as one that escaped to the top of the page.
+ */
 export function ChartPlot({ kind, data }: { kind: ChartKind; data: ChartData }) {
-  if (kind === 'pie') return <PiePlot data={data} />;
+  if (kind === 'pie') {
+    return (
+      <div className="relative h-full w-full">
+        <PiePlot data={data} />
+      </div>
+    );
+  }
 
   const numbers = data.series.flatMap((series) => series.values.filter((v): v is number => v !== null));
   const xs = kind === 'scatter' ? data.categories.map(Number).filter(Number.isFinite) : [];
@@ -453,7 +474,7 @@ export function ChartPlot({ kind, data }: { kind: ChartKind; data: ChartData }) 
   const labelEvery = Math.ceil(count / 8);
 
   return (
-    <>
+    <div className="relative h-full w-full">
       <Legend names={data.series.map((series) => series.name)} />
       <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="none" className="h-full w-full" role="img">
         {scale.ticks.map((tick) => (
@@ -523,7 +544,7 @@ export function ChartPlot({ kind, data }: { kind: ChartKind; data: ChartData }) 
           );
         })}
       </svg>
-    </>
+    </div>
   );
 }
 

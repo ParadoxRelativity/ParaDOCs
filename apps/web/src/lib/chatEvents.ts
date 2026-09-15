@@ -25,13 +25,16 @@ function permissionState(): NotificationPermissionState {
 /** Shared with the chat view, which merges the references of an older page. */
 export function mergeReferences(a: MessageReferences, b: MessageReferences): MessageReferences {
   const documents = new Map(a.documents.map((d) => [d.id, d]));
+  const spreadsheets = new Map(a.spreadsheets.map((s) => [s.id, s]));
   const channels = new Map(a.channels.map((c) => [c.id, c]));
   const members = new Map(a.members.map((m) => [m.id, m]));
   for (const d of b.documents) documents.set(d.id, d);
+  for (const s of b.spreadsheets) spreadsheets.set(s.id, s);
   for (const c of b.channels) channels.set(c.id, c);
   for (const m of b.members) members.set(m.id, m);
   return {
     documents: [...documents.values()],
+    spreadsheets: [...spreadsheets.values()],
     channels: [...channels.values()],
     members: [...members.values()],
   };

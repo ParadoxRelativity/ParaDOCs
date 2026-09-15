@@ -24,7 +24,7 @@ import { claimNewDocument } from '../../lib/newDocuments';
 import { useToast } from '../Toast';
 import { Tooltip } from '../ui';
 import Icon, { type IconName } from '../Icon';
-import SheetGrid, { selectionRanges, type GridMenuTarget, type Selection } from './SheetGrid';
+import SheetGrid, { selectionRanges, type GridMenuTarget, type Selection, type SheetGridHandle } from './SheetGrid';
 import SheetTabs from './SheetTabs';
 import SheetChartView from './SheetChartView';
 import SheetContextMenu, { type SheetMenuItem } from './SheetContextMenu';
@@ -78,6 +78,7 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
   const [menu, setMenu] = useState<{ x: number; y: number; target: GridMenuTarget } | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const formulaInput = useRef<HTMLInputElement>(null);
+  const grid = useRef<SheetGridHandle>(null);
   const formulaAssist = useFormulaAssist(formulaInput, formulaDraft, setFormulaDraft);
 
   useEffect(() => setTitle(record.title), [record.id, record.title]);
@@ -573,11 +574,14 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
             if (event.key === 'Enter') {
               event.preventDefault();
               commit(focus, formulaDraft ?? focusText, 'down');
-              event.currentTarget.blur();
+              // Blurring alone would leave the keyboard on nothing, so the
+              // cell it just moved to could not be typed into. Hand it to the
+              // grid, which is where the next keystroke belongs.
+              grid.current?.focus();
             } else if (event.key === 'Escape') {
               event.preventDefault();
               setFormulaDraft(null);
-              event.currentTarget.blur();
+              grid.current?.focus();
             }
           }}
           className="min-w-0 flex-1 bg-transparent px-2 text-xs outline-none"
@@ -586,6 +590,7 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
       </div>
 
       <SheetGrid
+        ref={grid}
         sheet={sheet}
         selection={selection}
         selectionVisible={selectedChartId === null}

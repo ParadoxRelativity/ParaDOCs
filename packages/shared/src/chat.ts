@@ -202,6 +202,16 @@ export interface DocumentReference {
   mode: 'page' | 'canvas';
 }
 
+/**
+ * A spreadsheet carries no mode: there is only one kind of grid, so there is
+ * nothing for the chip to choose an icon by beyond the one the sheet was given.
+ */
+export interface SpreadsheetReference {
+  id: string;
+  title: string;
+  icon: string | null;
+}
+
 export interface ChannelReference {
   id: string;
   name: string;
@@ -217,6 +227,7 @@ export interface MemberReference {
 /** What a page of messages points at, resolved once. */
 export interface MessageReferences {
   documents: DocumentReference[];
+  spreadsheets: SpreadsheetReference[];
   channels: ChannelReference[];
   members: MemberReference[];
 }
@@ -305,22 +316,33 @@ export const RING_TIMEOUT_MS = 45_000;
 // --- references -------------------------------------------------------------
 
 /**
- * Documents, channels and people are referenced by id inside a message, not by
- * name: `<doc:uuid>`, `<#uuid>` and `<@uuid>`. Rendering resolves them, so
- * someone changing their display name updates every message that mentions them
- * instead of leaving a stale name scattered through the history.
+ * Documents, spreadsheets, channels and people are referenced by id inside a
+ * message, not by name: `<doc:uuid>`, `<sheet:uuid>`, `<#uuid>` and `<@uuid>`.
+ * Rendering resolves them, so someone changing their display name updates every
+ * message that mentions them instead of leaving a stale name scattered through
+ * the history.
+ *
+ * A spreadsheet gets a token of its own rather than riding along as a document
+ * in another mode, for the same reason it has a table of its own: it is not one.
+ * The two resolve from different places and open to different apps, and one
+ * token covering both would have to carry which it meant anyway.
  */
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const REFERENCE = new RegExp(`<(?:doc:(${UUID})|#(${UUID})|@(${UUID}))>`, 'g');
+const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID}))>`, 'g');
 
 export type MessageSegment =
   | { type: 'text'; value: string }
   | { type: 'document'; id: string }
+  | { type: 'spreadsheet'; id: string }
   | { type: 'channel'; id: string }
   | { type: 'member'; id: string };
 
 export function documentRef(id: string): string {
   return `<doc:${id}>`;
+}
+
+export function spreadsheetRef(id: string): string {
+  return `<sheet:${id}>`;
 }
 
 export function channelRef(id: string): string {
@@ -341,8 +363,9 @@ export function parseMessage(body: string): MessageSegment[] {
   for (let match = pattern.exec(body); match; match = pattern.exec(body)) {
     if (match.index > index) segments.push({ type: 'text', value: body.slice(index, match.index) });
     if (match[1]) segments.push({ type: 'document', id: match[1].toLowerCase() });
-    else if (match[2]) segments.push({ type: 'channel', id: match[2].toLowerCase() });
-    else if (match[3]) segments.push({ type: 'member', id: match[3].toLowerCase() });
+    else if (match[2]) segments.push({ type: 'spreadsheet', id: match[2].toLowerCase() });
+    else if (match[3]) segments.push({ type: 'channel', id: match[3].toLowerCase() });
+    else if (match[4]) segments.push({ type: 'member', id: match[4].toLowerCase() });
     index = match.index + match[0].length;
   }
   if (index < body.length) segments.push({ type: 'text', value: body.slice(index) });
@@ -352,20 +375,28 @@ export function parseMessage(body: string): MessageSegment[] {
 /** The ids a message points at, so a client can resolve them in one request. */
 export function collectReferences(bodies: string[]): {
   documentIds: string[];
+  spreadsheetIds: string[];
   channelIds: string[];
   userIds: string[];
 } {
   const documentIds = new Set<string>();
+  const spreadsheetIds = new Set<string>();
   const channelIds = new Set<string>();
   const userIds = new Set<string>();
   for (const body of bodies) {
     for (const segment of parseMessage(body)) {
       if (segment.type === 'document') documentIds.add(segment.id);
+      if (segment.type === 'spreadsheet') spreadsheetIds.add(segment.id);
       if (segment.type === 'channel') channelIds.add(segment.id);
       if (segment.type === 'member') userIds.add(segment.id);
     }
   }
-  return { documentIds: [...documentIds], channelIds: [...channelIds], userIds: [...userIds] };
+  return {
+    documentIds: [...documentIds],
+    spreadsheetIds: [...spreadsheetIds],
+    channelIds: [...channelIds],
+    userIds: [...userIds],
+  };
 }
 
 /**
@@ -374,6 +405,7 @@ export function collectReferences(bodies: string[]): {
  */
 export function messagePreview(body: string, references: MessageReferences): string {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
+  const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
 
@@ -381,6 +413,7 @@ export function messagePreview(body: string, references: MessageReferences): str
     .map((segment) => {
       if (segment.type === 'text') return segment.value;
       if (segment.type === 'document') return documents.get(segment.id)?.title ?? 'a document';
+      if (segment.type === 'spreadsheet') return spreadsheets.get(segment.id)?.title ?? 'a spreadsheet';
       if (segment.type === 'channel') {
         const channel = channels.get(segment.id);
         return channel ? `#${channel.name}` : 'a channel';

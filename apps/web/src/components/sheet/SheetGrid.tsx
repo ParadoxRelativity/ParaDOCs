@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import {
   DEFAULT_COLUMN_WIDTH,
   HEADER_HEIGHT,
@@ -76,21 +76,36 @@ interface Props {
 /** How far past the viewport to draw, so a fast scroll does not show gaps. */
 const OVERSCAN = 4;
 
-export default function SheetGrid({
-  sheet,
-  selection,
-  onSelectionChange,
-  selectionVisible = true,
-  editable,
-  editing,
-  onEditingChange,
-  onCommit,
-  interceptKey,
-  onOpenMenu,
-  overlay,
-}: Props) {
+export interface SheetGridHandle {
+  /**
+   * Puts the keyboard back on the grid. For whoever commits a cell from
+   * outside it — the formula bar — so that finishing there leaves you typing
+   * into the sheet rather than into nothing.
+   */
+  focus: () => void;
+}
+
+export default forwardRef<SheetGridHandle, Props>(function SheetGrid(
+  {
+    sheet,
+    selection,
+    onSelectionChange,
+    selectionVisible = true,
+    editable,
+    editing,
+    onEditingChange,
+    onCommit,
+    interceptKey,
+    onOpenMenu,
+    overlay,
+  },
+  ref,
+) {
   const scroller = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLInputElement>(null);
+  // Set when a commit means to carry on in the grid — Enter and Tab — so the
+  // focus follows the selection instead of being dropped with the editor.
+  const returnFocus = useRef(false);
   const [viewport, setViewport] = useState({ top: 0, left: 0, width: 800, height: 600 });
   const [dragging, setDragging] = useState(false);
   const [lineDrag, setLineDrag] = useState<'row' | 'column' | null>(null);
@@ -98,6 +113,8 @@ export default function SheetGrid({
   // Set by a click on a row or column header, whose selection runs off the
   // screen; following its focus there would throw away where you were looking.
   const holdScroll = useRef(false);
+
+  useImperativeHandle(ref, () => ({ focus: () => scroller.current?.focus() }), []);
 
   const assist = useFormulaAssist(editor, editing ? editing.value : null, (value) => {
     if (editing) onEditingChange({ ref: editing.ref, value });
@@ -171,8 +188,17 @@ export default function SheetGrid({
   }, [selection.focus, widthOf]);
 
   // The editor takes the focus while a cell is open, and gives it back after.
+  // Giving it back is what makes the cell Enter or Tab lands on typeable: the
+  // editor unmounts on commit, and without this the focus goes to the document
+  // and the next keystroke has nowhere to go.
   useEffect(() => {
-    if (editing) editor.current?.focus();
+    if (editing) {
+      editor.current?.focus();
+      return;
+    }
+    if (!returnFocus.current) return;
+    returnFocus.current = false;
+    scroller.current?.focus();
   }, [editing?.ref.row, editing?.ref.column]);
 
   // --- column resizing -------------------------------------------------------
@@ -434,9 +460,11 @@ export default function SheetGrid({
                           if (assist.onKeyDown(event)) return;
                           if (event.key === 'Enter') {
                             event.preventDefault();
+                            returnFocus.current = true;
                             onCommit(editing.ref, editing.value, 'down');
                           } else if (event.key === 'Tab') {
                             event.preventDefault();
+                            returnFocus.current = true;
                             onCommit(editing.ref, editing.value, 'right');
                           } else if (event.key === 'Escape') {
                             event.preventDefault();
@@ -462,7 +490,7 @@ export default function SheetGrid({
       {assist.popup}
     </div>
   );
-}
+});
 
 function justify(align: string): string {
   return align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start';

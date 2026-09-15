@@ -1,10 +1,11 @@
 import { parseMessage, type MessageReferences } from '@paradocs/shared';
 import { emojiOnly } from '../../lib/emoji';
 import { cx } from '../../lib/util';
-import { DocumentIcon } from '../Icon';
+import { DocumentIcon, SpreadsheetIcon } from '../Icon';
 
 /**
- * Renders a message body, turning `<doc:…>` and `<#…>` tokens into links.
+ * Renders a message body, turning `<doc:…>`, `<sheet:…>` and `<#…>` tokens
+ * into links.
  *
  * References are resolved from the page's reference table rather than baked
  * into the text, so renaming a document updates every message that mentions it.
@@ -16,6 +17,7 @@ export function MessageBody({
   references,
   selfId,
   onOpenDocument,
+  onOpenSpreadsheet,
   onOpenChannel,
 }: {
   body: string;
@@ -23,9 +25,11 @@ export function MessageBody({
   /** Whose mentions should stand out. */
   selfId: string;
   onOpenDocument: (id: string) => void;
+  onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
 }) {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
+  const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
   // A message that is just a few emoji is shown large.
@@ -43,6 +47,16 @@ export function MessageBody({
           return (
             <Chip key={index} onClick={() => onOpenDocument(doc.id)}>
               <DocumentIcon doc={doc} /> {doc.title || 'Untitled'}
+            </Chip>
+          );
+        }
+
+        if (segment.type === 'spreadsheet') {
+          const sheet = spreadsheets.get(segment.id);
+          if (!sheet) return <UnknownRef key={index} label="unknown spreadsheet" />;
+          return (
+            <Chip key={index} onClick={() => onOpenSpreadsheet(sheet.id)}>
+              <SpreadsheetIcon sheet={sheet} /> {sheet.title || 'Untitled'}
             </Chip>
           );
         }

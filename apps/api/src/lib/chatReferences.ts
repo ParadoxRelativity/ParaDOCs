@@ -4,13 +4,21 @@ import {
   type DocumentReference,
   type MemberReference,
   type MessageReferences,
+  type SpreadsheetReference,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 
-export type { ChannelReference, DocumentReference, MemberReference, MessageReferences };
+export type {
+  ChannelReference,
+  DocumentReference,
+  MemberReference,
+  MessageReferences,
+  SpreadsheetReference,
+};
 
 /**
- * Resolves the `<doc:…>` and `<#…>` tokens in a batch of message bodies.
+ * Resolves the `<doc:…>`, `<sheet:…>` and `<#…>` tokens in a batch of message
+ * bodies.
  *
  * Sent alongside the messages so a page of chat renders its links in one round
  * trip. Everything is constrained to the workspace the channel belongs to: a
@@ -21,15 +29,31 @@ export async function resolveReferences(
   bodies: string[],
   workspaceId: string,
 ): Promise<MessageReferences> {
-  const { documentIds, channelIds, userIds } = collectReferences(bodies);
-  const empty: MessageReferences = { documents: [], channels: [], members: [] };
-  if (documentIds.length === 0 && channelIds.length === 0 && userIds.length === 0) return empty;
+  const { documentIds, spreadsheetIds, channelIds, userIds } = collectReferences(bodies);
+  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [] };
+  if (
+    documentIds.length === 0 &&
+    spreadsheetIds.length === 0 &&
+    channelIds.length === 0 &&
+    userIds.length === 0
+  ) {
+    return empty;
+  }
 
-  const [documents, channels, members] = await Promise.all([
+  const [documents, spreadsheets, channels, members] = await Promise.all([
     documentIds.length
       ? query<DocumentReference>(
           `SELECT id, title, icon, mode FROM documents WHERE id = ANY($1::uuid[]) AND workspace_id = $2`,
           [documentIds, workspaceId],
+        ).then((r) => r.rows)
+      : Promise.resolve([]),
+    spreadsheetIds.length
+      ? // Same workspace constraint as documents, for the same reason. An
+        // archived sheet still resolves: the message linking it is history, and
+        // a chip that goes blank when someone archives reads as a bug.
+        query<SpreadsheetReference>(
+          `SELECT id, title, icon FROM spreadsheets WHERE id = ANY($1::uuid[]) AND workspace_id = $2`,
+          [spreadsheetIds, workspaceId],
         ).then((r) => r.rows)
       : Promise.resolve([]),
     channelIds.length
@@ -52,5 +76,5 @@ export async function resolveReferences(
       : Promise.resolve([]),
   ]);
 
-  return { documents, channels, members };
+  return { documents, spreadsheets, channels, members };
 }

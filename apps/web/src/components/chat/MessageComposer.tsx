@@ -14,17 +14,18 @@ import {
   channelRef,
   documentRef,
   memberRef,
+  spreadsheetRef,
   type AttachmentKind,
   type Channel,
   type MessageAttachment,
 } from '@paradocs/shared';
 import { api } from '../../api/client';
-import { useAllDocuments, useMembers, useUploadConfig } from '../../api/hooks';
+import { useAllDocuments, useMembers, useSpreadsheets, useUploadConfig } from '../../api/hooks';
 import { uploadChatFile } from '../../lib/chatFiles';
 import { useTypingReporter } from '../../lib/typing';
 import { replaceShortcodes, searchEmoji, type EmojiOption } from '../../lib/emoji';
 import { cx, formatBytes } from '../../lib/util';
-import Icon, { DocumentIcon } from '../Icon';
+import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
 import { useToast } from '../Toast';
 import { IconButton } from '../ui';
 import { EmojiPicker } from './EmojiPicker';
@@ -34,9 +35,15 @@ import { fileIcon } from './MessageAttachments';
  * The message box, with inline pickers for the things you can reference and
  * the files going out with the message.
  *
- * Typing `#` offers channels, `@` people and `[[` documents. What gets
- * inserted is the id token, not the name — so the rendered link follows a
- * rename — while what you typed to find it never appears in the message.
+ * Typing `#` offers channels, `@` people and `[[` documents and spreadsheets.
+ * What gets inserted is the id token, not the name — so the rendered link
+ * follows a rename — while what you typed to find it never appears in the
+ * message.
+ *
+ * `[[` offers both kinds together because linking a thing is one gesture: the
+ * person reaching for it is thinking of what they want to point at, not which
+ * of the app's tables it lives in. Each kind keeps its own token, so what is
+ * inserted still says which it was.
  * Typing `:` and a couple of letters offers emoji.
  *
  * Files upload the moment they are added, so sending is instant.
@@ -48,6 +55,9 @@ interface Trigger {
   start: number;
   query: string;
 }
+
+/** How many rows a picker offers before you are better off narrowing the query. */
+const PICKER_LIMIT = 6;
 
 const TRIGGERS: { kind: Trigger['kind']; token: string }[] = [
   { kind: 'document', token: '[[' },
@@ -134,13 +144,14 @@ export const MessageComposer = forwardRef<
     archived: false,
     limit: 200,
   });
+  const spreadsheets = useSpreadsheets(trigger?.kind === 'document' ? workspaceId : undefined);
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
 
   const emojiQuery = trigger?.kind === 'emoji' ? trigger.query : null;
   useEffect(() => {
     if (emojiQuery === null) return;
     let cancelled = false;
-    void searchEmoji(emojiQuery, 6).then((results) => {
+    void searchEmoji(emojiQuery, PICKER_LIMIT).then((results) => {
       if (!cancelled) setEmojiOptions(results);
     });
     return () => {
@@ -164,13 +175,13 @@ export const MessageComposer = forwardRef<
     if (trigger.kind === 'channel') {
       return channels
         .filter((c) => c.name.includes(needle))
-        .slice(0, 6)
+        .slice(0, PICKER_LIMIT)
         .map((c) => ({ id: c.id, label: `#${c.name}`, hint: c.topic ?? '', insert: `#${c.name}`, token: channelRef(c.id) }));
     }
     if (trigger.kind === 'member') {
       return (members.data ?? [])
         .filter((m) => m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle))
-        .slice(0, 6)
+        .slice(0, PICKER_LIMIT)
         .map((m) => ({
           id: m.userId,
           label: `@${m.name}`,
@@ -179,19 +190,39 @@ export const MessageComposer = forwardRef<
           token: memberRef(m.userId),
         }));
     }
-    return (documents.data?.documents ?? [])
-      .filter((d) => (d.title || 'Untitled').toLowerCase().includes(needle))
-      .slice(0, 6)
-      .map((d) => ({
-        id: d.id,
-        icon: <DocumentIcon doc={d} />,
-        label: d.title || 'Untitled',
-        hint: '',
-        // What appears in the box: the title, not the id token.
-        insert: `[[${d.title || 'Untitled'}]]`,
-        token: documentRef(d.id),
-      }));
-  }, [trigger, channels, documents.data, members.data, emojiOptions]);
+    // Both lists arrive newest-first, so interleaving by title would bury a
+    // sheet someone just touched under documents they have not opened in
+    // months. They are matched separately and concatenated, documents first.
+    const matchesTitle = (title: string) => (title || 'Untitled').toLowerCase().includes(needle);
+    const documentOptions = (documents.data?.documents ?? []).filter((d) => matchesTitle(d.title)).map((d) => ({
+      id: d.id,
+      icon: <DocumentIcon doc={d} />,
+      label: d.title || 'Untitled',
+      hint: '',
+      // What appears in the box: the title, not the id token.
+      insert: `[[${d.title || 'Untitled'}]]`,
+      token: documentRef(d.id),
+    }));
+    const sheetOptions = (spreadsheets.data ?? []).filter((s) => matchesTitle(s.title)).map((s) => ({
+      id: s.id,
+      icon: <SpreadsheetIcon sheet={s} />,
+      label: s.title || 'Untitled',
+      hint: 'Spreadsheet',
+      insert: `[[${s.title || 'Untitled'}]]`,
+      token: spreadsheetRef(s.id),
+    }));
+    // Six rows in all, but documents cannot crowd spreadsheets out of a list
+    // that offers both: each kind is guaranteed up to half, and whatever the
+    // other kind does not use is handed back.
+    const documentShare = Math.min(
+      documentOptions.length,
+      Math.max(PICKER_LIMIT - sheetOptions.length, PICKER_LIMIT / 2),
+    );
+    return [
+      ...documentOptions.slice(0, documentShare),
+      ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
+    ];
+  }, [trigger, channels, documents.data, spreadsheets.data, members.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {
@@ -433,7 +464,7 @@ export const MessageComposer = forwardRef<
         ? 'People'
         : trigger?.kind === 'emoji'
           ? 'Emoji'
-          : 'Documents';
+          : 'Documents & spreadsheets';
 
   return (
     <div className="relative border-t border-[var(--color-line)] p-3">

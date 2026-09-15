@@ -31,3 +31,15 @@ export function DocumentIcon({
     />
   );
 }
+
+/** The same, for a spreadsheet, which has no mode to choose a fallback by. */
+export function SpreadsheetIcon({
+  sheet,
+  className,
+}: {
+  sheet: { icon?: string | null };
+  className?: string;
+}) {
+  if (sheet.icon) return <span className={className}>{sheet.icon}</span>;
+  return <Icon name="table" className={className} />;
+}

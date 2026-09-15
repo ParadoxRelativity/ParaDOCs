@@ -740,6 +740,7 @@ function Workspace({
                 onEnableNotifications={chatEvents.requestPermission}
                 onTyping={chatEvents.sendTyping}
                 onOpenDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
+                onOpenSpreadsheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
                 onOpenChannel={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
               />
             ) : channelId && directs.isLoading ? (

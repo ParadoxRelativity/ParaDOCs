@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Doc, FolderNode } from '@paradocs/shared';
 import { useCreateTag, useTags, useTree, type DocumentPatch } from '../api/hooks';
-import { countWords, cx, formatDateTime, formatRelative } from '../lib/util';
+import { countWords, cx, formatDateTime, formatRelative, useLocalStorage } from '../lib/util';
 import { TagChip } from './ui';
 import Icon from './Icon';
 
@@ -292,43 +292,118 @@ function ReadOnly({ children, hint }: { children: React.ReactNode; hint?: string
 }
 
 /**
+ * Whether the block is open, remembered across documents rather than per
+ * document: it is a preference about how much chrome someone wants above the
+ * writing, not a fact about any one page — and storing it per document would
+ * grow a key for every document ever opened.
+ */
+const META_OPEN_KEY = 'paradocs.documentMeta.open';
+
+/** Enough tags to recognize a document by; past this the block is worth opening. */
+const SUMMARY_TAGS = 5;
+
+/**
  * The metadata block shown directly under a document's title, so folder, tags
  * and properties are editable on the document itself rather than only in the
  * right sidebar.
+ *
+ * It collapses, because a document is usually something to read rather than
+ * something to file, and six rows of metadata between the title and the first
+ * paragraph is a lot to scroll past to reach the writing. Collapsed it still
+ * shows the tags and how many properties there are: a summary that hid those
+ * would just be opened every time, which is the state it was meant to save.
+ *
+ * Nothing inside is rendered while it is shut, so a closed block costs neither
+ * the folder tree nor the workspace's tags.
  */
 export default function DocumentMeta({ doc, workspaceId, onPatch, readOnly }: MetaProps) {
-  const [open, setOpen] = useState(
-    () => doc.tags.length > 0 || Object.keys(doc.properties ?? {}).length > 0 || Boolean(readOnly),
-  );
+  const propertyCount = Object.keys(doc.properties ?? {}).length;
+  // Until someone has expressed a preference, a document that already carries
+  // tags or properties opens showing them rather than hiding what is filled in.
+  const [open, setOpen] = useLocalStorage(META_OPEN_KEY, doc.tags.length > 0 || propertyCount > 0);
 
-  if (!open) {
-    return (
+  return (
+    <div className="mt-3">
       <button
-        onClick={() => setOpen(true)}
-        className="mt-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="group flex w-full items-center gap-1.5 py-0.5 text-left"
       >
-        + Add tags or properties
+        <span
+          className={cx(
+            'w-3 shrink-0 text-[10px] text-[var(--color-muted)] transition-transform',
+            open && 'rotate-90',
+          )}
+        >
+          <Icon name="chevron-right" />
+        </span>
+        <span className="shrink-0 text-xs text-[var(--color-muted)] group-hover:text-[var(--color-ink)]">
+          Details
+        </span>
+        {!open && <MetaSummary doc={doc} propertyCount={propertyCount} readOnly={readOnly} />}
       </button>
+
+      {open && (
+        <div className="mt-1.5 space-y-1.5 border-l-2 border-[var(--color-line)] pl-3">
+          <MetaRow label="Folder">
+            <div className="max-w-xs">
+              <FolderPicker doc={doc} workspaceId={workspaceId} onPatch={onPatch} readOnly={readOnly} />
+            </div>
+          </MetaRow>
+          <MetaRow label="Tags">
+            <TagEditor doc={doc} workspaceId={workspaceId} onPatch={onPatch} readOnly={readOnly} />
+          </MetaRow>
+
+          <BuiltInProperties doc={doc} />
+
+          <div className="pt-1">
+            <PropertyEditor doc={doc} onPatch={onPatch} readOnly={readOnly} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the shut block says about itself. A viewer who can change nothing is not
+ * invited to add anything, so for them an empty document's block says nothing
+ * at all rather than offering something they cannot do.
+ */
+function MetaSummary({
+  doc,
+  propertyCount,
+  readOnly,
+}: {
+  doc: Doc;
+  propertyCount: number;
+  readOnly?: boolean;
+}) {
+  if (doc.tags.length === 0 && propertyCount === 0) {
+    if (readOnly) return null;
+    return (
+      <span className="truncate text-xs text-[var(--color-muted)] group-hover:text-[var(--color-accent)]">
+        Add tags or properties
+      </span>
     );
   }
 
+  const shown = doc.tags.slice(0, SUMMARY_TAGS);
   return (
-    <div className="mt-3 space-y-1.5 border-l-2 border-[var(--color-line)] pl-3">
-      <MetaRow label="Folder">
-        <div className="max-w-xs">
-          <FolderPicker doc={doc} workspaceId={workspaceId} onPatch={onPatch} readOnly={readOnly} />
-        </div>
-      </MetaRow>
-      <MetaRow label="Tags">
-        <TagEditor doc={doc} workspaceId={workspaceId} onPatch={onPatch} readOnly={readOnly} />
-      </MetaRow>
-
-      <BuiltInProperties doc={doc} />
-
-      <div className="pt-1">
-        <PropertyEditor doc={doc} onPatch={onPatch} readOnly={readOnly} />
-      </div>
-    </div>
+    <span className="flex min-w-0 items-center gap-1">
+      {shown.map((tag) => (
+        <TagChip key={tag.id} name={tag.name} color={tag.color} />
+      ))}
+      {doc.tags.length > shown.length && (
+        <span className="text-[11px] text-[var(--color-muted)]">+{doc.tags.length - shown.length}</span>
+      )}
+      {propertyCount > 0 && (
+        <span className="truncate text-[11px] text-[var(--color-muted)]">
+          {doc.tags.length > 0 && '· '}
+          {propertyCount === 1 ? '1 property' : `${propertyCount} properties`}
+        </span>
+      )}
+    </span>
   );
 }
 
