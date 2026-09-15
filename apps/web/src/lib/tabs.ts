@@ -21,7 +21,7 @@ import { randomId } from './util';
  * it survives walking off to read a document.
  */
 
-export type TabKind = 'page' | 'canvas' | 'sheet' | 'chat' | 'all' | 'home';
+export type TabKind = 'page' | 'canvas' | 'sheet' | 'chat' | 'all' | 'people' | 'home';
 
 export interface Tab {
   id: string;
@@ -50,13 +50,17 @@ const MAX_TABS = 24;
 const STORAGE_KEY = 'paradocs.tabs';
 
 const UUID = '[0-9a-fA-F-]{36}';
-const WORKSPACE_PATH = new RegExp(`^/w/(${UUID})(?:/(d|c|s|all)(?:/(${UUID}))?)?/?$`);
+const WORKSPACE_PATH = new RegExp(
+  `^/w/(${UUID})(?:/(d|c|s|all)(?:/(${UUID}))?|/(people)(?:/(?:members|teams))?)?/?$`,
+);
 
 /** What a path is, as far as a tab is concerned. Null for anything not tabbable. */
 export function describePath(path: string): { workspaceId: string; kind: TabKind } | null {
   const match = WORKSPACE_PATH.exec(path.split('?')[0]);
   if (!match) return null;
-  const [, workspaceId, section] = match;
+  const [, workspaceId, section, , people] = match;
+  // The People app names its pages rather than numbering them.
+  if (people) return { workspaceId, kind: 'people' };
   if (section === 'd') return { workspaceId, kind: 'page' };
   if (section === 'c') return { workspaceId, kind: 'chat' };
   // Spreadsheets are their own app, under their own letter.

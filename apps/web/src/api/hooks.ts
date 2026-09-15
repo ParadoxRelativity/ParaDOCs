@@ -290,6 +290,18 @@ export function useDeleteTeam(workspaceId: string) {
   });
 }
 
+/** Every team one member is on, replacing what was there. */
+export function useSetMemberTeams(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, teamIds }: { userId: string; teamIds: string[] }) =>
+      api.put(`/workspaces/${workspaceId}/members/${userId}/teams`, { teamIds }),
+    // Returned so the mutation stays pending until the teams are fresh, and a
+    // second change is never made from the list the first one replaced.
+    onSuccess: () => refetchAfterAccessChange(qc),
+  });
+}
+
 export function useAccessSettings(target: AccessTarget | null) {
   return useQuery({
     queryKey: keys.access(target?.kind ?? '', target?.id ?? ''),

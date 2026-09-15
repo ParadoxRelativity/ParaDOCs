@@ -190,7 +190,7 @@ export function AccessDialog({
 
   return (
     <Modal
-      title={`Who can see ${target.name}`}
+      title={`Permissions for ${target.name}`}
       onClose={onClose}
       wide
       footer={

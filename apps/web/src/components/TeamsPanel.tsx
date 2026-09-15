@@ -104,8 +104,13 @@ function TeamRow({
   const toast = useToast();
   const [name, setName] = useState(team.name);
   const [confirming, setConfirming] = useState(false);
+  const [search, setSearch] = useState('');
 
   const onTeam = members.filter((m) => team.memberIds.includes(m.userId));
+  const needle = search.trim().toLowerCase();
+  const listed = (canManage ? members : onTeam).filter(
+    (m) => !needle || m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle),
+  );
   const failed = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
 
   function rename() {
@@ -159,8 +164,21 @@ function TeamRow({
               />
             </label>
           )}
+          {canManage && (
+            <input
+              type="search"
+              className={FIELD}
+              placeholder="Find a member by name or email"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label={`Find a member to add to ${team.name}`}
+            />
+          )}
+          {needle && listed.length === 0 && (
+            <p className="text-xs text-[var(--color-muted)]">Nobody matches “{search.trim()}”.</p>
+          )}
           <ul className="space-y-1">
-            {(canManage ? members : onTeam).map((member) => {
+            {listed.map((member) => {
               const checked = team.memberIds.includes(member.userId);
               return (
                 <li key={member.userId}>

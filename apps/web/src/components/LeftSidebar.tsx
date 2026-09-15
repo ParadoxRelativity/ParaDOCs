@@ -20,6 +20,7 @@ import {
   useDeleteFolder,
   useUpdateFolder,
   useTags,
+  useTeams,
   useTree,
   type WorkspaceSummary,
 } from '../api/hooks';
@@ -36,6 +37,7 @@ import Icon, { DocumentIcon, type IconName } from './Icon';
 import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
 import type { SettingsSection } from './SettingsDialog';
+import type { PeopleSection } from './PeopleApp';
 import WorkspaceIcon from './WorkspaceIcon';
 import { MODIFIER, asksForNewTab, openTab } from '../lib/tabs';
 import { useToast } from './Toast';
@@ -45,7 +47,7 @@ import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
 import SheetContextMenu, { type SheetMenuItem } from './sheet/SheetContextMenu';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
-export type SidebarSection = 'docs' | 'chat' | 'sheets';
+export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'people';
 
 interface Props {
   /** The signed-in account, shown at the foot of the sidebar. */
@@ -72,7 +74,7 @@ interface Props {
   onOpenSettings: (section: SettingsSection) => void;
   /** Desktop app only: opens the dialog for adding a server. */
   onConnectServer?: () => void;
-  /** Which app the sidebar is showing: the knowledge base, chat, or spreadsheets. */
+  /** Which app the sidebar is showing: the knowledge base, chat, spreadsheets, or the people in the workspace. */
   section: SidebarSection;
   onSelectSection: (section: SidebarSection) => void;
   /** The spreadsheet open in the Sheets app, if any. */
@@ -80,6 +82,9 @@ interface Props {
   onSelectSheet: (id: string) => void;
   /** A spreadsheet was deleted from the list, so anything showing it must move off. */
   onSheetDeleted: (id: string) => void;
+  /** The page open in the People app. */
+  activePeopleSection: PeopleSection;
+  onSelectPeopleSection: (section: PeopleSection) => void;
   channels: Channel[];
   /** The signed-in person's direct conversations, most recent first. */
   directs: Channel[];
@@ -123,6 +128,8 @@ export default function LeftSidebar(props: Props) {
   const { workspaceId, workspaces, onSelectWorkspace } = props;
   const tree = useTree(workspaceId);
   const tags = useTags(workspaceId);
+  // Only counted for the People app's navigation.
+  const teams = useTeams(props.section === 'people' ? workspaceId : undefined);
   const createFolder = useCreateFolder(workspaceId);
   const createDocument = useCreateDocument(workspaceId);
   const createWorkspace = useCreateWorkspace();
@@ -255,6 +262,7 @@ export default function LeftSidebar(props: Props) {
                 mentions: props.mentionTotal,
               },
               { id: 'sheets', label: 'Sheets', icon: 'table' },
+              { id: 'people', label: 'People', icon: 'people' },
             ] satisfies AppEntry[]
           }
           currentId={props.section}
@@ -277,6 +285,23 @@ export default function LeftSidebar(props: Props) {
           onSelect={props.onSelectChannel}
           onManageAccess={setSecuring}
         />
+      ) : props.section === 'people' ? (
+        <div className="scroll-thin min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+          <SidebarAction
+            icon="person-lines-fill"
+            label="Members"
+            hint={current ? String(current.memberCount) : undefined}
+            active={props.activePeopleSection === 'members'}
+            onClick={() => props.onSelectPeopleSection('members')}
+          />
+          <SidebarAction
+            icon="diagram-3"
+            label="Teams"
+            hint={teams.data ? String(teams.data.length) : undefined}
+            active={props.activePeopleSection === 'teams'}
+            onClick={() => props.onSelectPeopleSection('teams')}
+          />
+        </div>
       ) : props.section === 'sheets' ? (
         <SheetList
           workspaceId={workspaceId}
@@ -304,7 +329,7 @@ export default function LeftSidebar(props: Props) {
           icon="people"
           label="Members"
           hint={current ? String(current.memberCount) : undefined}
-          onClick={() => props.onOpenSettings('members')}
+          onClick={() => props.onSelectPeopleSection('members')}
         />
       </div>
 
@@ -717,7 +742,7 @@ function FolderRow({
   if (canManageAccess) {
     if (menuItems.length > 0) menuItems.push('divider');
     menuItems.push({
-      label: 'Who can see this folder',
+      label: 'Permissions',
       icon: 'shield-lock',
       onSelect: () => onManageAccess({ kind: 'folder', id: folder.id, name: folder.name }),
     });
@@ -952,7 +977,7 @@ function DocumentRow({
         <div className="hidden items-center group-hover:flex">
           {canManageAccess && (
             <IconButton
-              label={`Who can see ${doc.title}`}
+              label={`Permissions for ${doc.title}`}
               onClick={() => onManageAccess({ kind: 'document', id: doc.id, name: doc.title })}
             >
               <Icon name="shield-lock" />

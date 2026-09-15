@@ -19,6 +19,7 @@ const KIND_ICON: Record<TabKind, IconName> = {
   sheet: 'table',
   chat: 'chat-dots',
   all: 'collection',
+  people: 'people',
   home: 'house',
 };
 
@@ -28,6 +29,7 @@ const KIND_FALLBACK: Record<TabKind, string> = {
   sheet: 'Spreadsheet',
   chat: 'Chat',
   all: 'All documents',
+  people: 'People',
   home: 'Workspace',
 };
 

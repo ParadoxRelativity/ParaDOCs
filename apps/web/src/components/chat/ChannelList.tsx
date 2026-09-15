@@ -534,7 +534,7 @@ function Row({
           <IconButton label={`Edit ${channel.name}`} onClick={() => onEdit(channel)}>
             <Icon name="pencil" />
           </IconButton>
-          <IconButton label={`Who can see ${channel.name}`} onClick={() => onSecure(channel)}>
+          <IconButton label={`Permissions for ${channel.name}`} onClick={() => onSecure(channel)}>
             <Icon name="shield-lock" />
           </IconButton>
           <IconButton label={`Delete ${channel.name}`} onClick={() => onDelete(channel)}>

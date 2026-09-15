@@ -61,6 +61,7 @@ import {
 import { useToast } from './components/Toast';
 import PopoutWindow from './components/PopoutWindow';
 import SpreadsheetView from './components/sheet/SpreadsheetView';
+import PeopleApp, { isPeopleSection } from './components/PeopleApp';
 import { Button, EmptyState, IconButton, Spinner } from './components/ui';
 import Icon from './components/Icon';
 
@@ -96,6 +97,8 @@ export default function App() {
           <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
           <Route path="/w/:workspaceId/s/:sheetId" element={<Workspace user={me.data.user} sheets />} />
           <Route path="/w/:workspaceId/s" element={<Workspace user={me.data.user} sheets />} />
+          <Route path="/w/:workspaceId/people/:peopleSection" element={<Workspace user={me.data.user} people />} />
+          <Route path="/w/:workspaceId/people" element={<Workspace user={me.data.user} people />} />
           <Route path="/w/:workspaceId" element={<Workspace user={me.data.user} />} />
           <Route path="*" element={<FirstWorkspaceRedirect />} />
         </Routes>
@@ -191,15 +194,19 @@ function Workspace({
   allDocuments = false,
   chat = false,
   sheets = false,
+  people = false,
 }: {
   user: User;
   allDocuments?: boolean;
   chat?: boolean;
   /** The Sheets app: a list of spreadsheets, or one open. */
   sheets?: boolean;
+  /** The People app: the workspace's members, and the teams they are on. */
+  people?: boolean;
 }) {
   const userId = user.id;
-  const { workspaceId = '', documentId, channelId, sheetId } = useParams();
+  const { workspaceId = '', documentId, channelId, sheetId, peopleSection: peopleParam } = useParams();
+  const peopleSection = isPeopleSection(peopleParam) ? peopleParam : 'members';
   // Spreadsheets are their own records, fetched here only to name the header
   // and the tab; the grid itself loads inside the Sheets view.
   const openSheet = useSpreadsheet(sheets ? sheetId : undefined);
@@ -406,20 +413,24 @@ function Workspace({
       ? sheetId
         ? (openSheet.data?.title ?? '')
         : 'Spreadsheets'
-      : allDocuments
-        ? 'All documents'
-        : documentId
-          ? (openDoc?.title ?? '')
-          : (workspace?.name ?? '');
+      : people
+        ? 'People'
+        : allDocuments
+          ? 'All documents'
+          : documentId
+            ? (openDoc?.title ?? '')
+            : (workspace?.name ?? '');
   const tabKind: TabKind = chat
     ? 'chat'
     : sheets
       ? 'sheet'
-      : allDocuments
-        ? 'all'
-        : documentId
-          ? (openDoc?.mode === 'canvas' ? 'canvas' : 'page')
-          : 'home';
+      : people
+        ? 'people'
+        : allDocuments
+          ? 'all'
+          : documentId
+            ? (openDoc?.mode === 'canvas' ? 'canvas' : 'page')
+            : 'home';
   const tabEmoji = sheets
     ? (openSheet.data?.icon ?? undefined)
     : !chat && !allDocuments && documentId
@@ -555,12 +566,15 @@ function Workspace({
             onSignOut={() => logout.mutate()}
             onOpenSettings={setSettingsSection}
             onConnectServer={desktop ? () => setConnectOpen(true) : undefined}
-            section={chat ? 'chat' : sheets ? 'sheets' : 'docs'}
+            section={chat ? 'chat' : sheets ? 'sheets' : people ? 'people' : 'docs'}
             onSelectSection={(next) => {
               if (next === 'docs') navigate(`/w/${workspaceId}`);
               else if (next === 'sheets') navigate(sheetId ? `/w/${workspaceId}/s/${sheetId}` : `/w/${workspaceId}/s`);
+              else if (next === 'people') navigate(`/w/${workspaceId}/people`);
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}
+            activePeopleSection={peopleSection}
+            onSelectPeopleSection={(next) => navigate(`/w/${workspaceId}/people/${next}`)}
             activeSheetId={sheetId ?? null}
             onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
             onSheetDeleted={(id) => {
@@ -638,14 +652,16 @@ function Workspace({
                 ? sheetId
                   ? (openSheet.data?.title ?? '')
                   : 'Spreadsheets'
-                : allDocuments
-                  ? 'All documents'
-                  : (document.data?.title ?? '')}
+                : people
+                  ? 'People'
+                  : allDocuments
+                    ? 'All documents'
+                    : (document.data?.title ?? '')}
           </span>
           {/* Writing and drawing are two views of one document, so moving
               between them belongs beside the document rather than inside a
               panel. A journal entry is a dated page and has nowhere to slide. */}
-          {!chat && !sheets && !allDocuments && document.data && !document.data.isJournal && (
+          {!chat && !sheets && !people && !allDocuments && document.data && !document.data.isJournal && (
             <ModeSwitch
               mode={document.data.mode}
               disabled={!canEdit || document.data.permission !== 'edit'}
@@ -662,7 +678,7 @@ function Workspace({
             >
               <Icon name="people" />
             </IconButton>
-          ) : sheets ? null : (
+          ) : sheets || people ? null : (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
                 <Icon name="search" />
@@ -758,6 +774,12 @@ function Workspace({
                 }
               />
             )
+          ) : people ? (
+            workspace ? (
+              <PeopleApp workspace={workspace} section={peopleSection} />
+            ) : (
+              <Spinner />
+            )
           ) : sheets ? (
             sheetId ? (
               <SpreadsheetView
@@ -834,7 +856,7 @@ function Workspace({
             />
           </div>
         </aside>
-      ) : sheets ? null : (
+      ) : sheets || people ? null : (
         <aside
           className={cx(
             'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',

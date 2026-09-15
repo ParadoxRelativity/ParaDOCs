@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   createTeamSchema,
   updateAccessSchema,
+  updateMemberTeamsSchema,
   updateTeamSchema,
   type AccessEntry,
   type AccessMode,
@@ -207,6 +208,40 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
     await query('DELETE FROM teams WHERE id = $1', [req.params.id]);
     accessChanged(workspaceId);
     reply.status(204);
+  });
+
+  // Every team one person is on, set from their line in the member list rather
+  // than from each team in turn. Teams left as they were keep their place.
+  app.put<{ Params: { id: string; userId: string } }>('/workspaces/:id/members/:userId/teams', async (req) => {
+    const workspaceId = req.params.id;
+    await assertWorkspaceAccess(req, workspaceId, 'admin');
+    const teamIds = [...new Set(parse(updateMemberTeamsSchema, req.body).teamIds)];
+    const { userId } = req.params;
+    if (!UUID.test(userId)) throw notFound('That person is not a member of this workspace');
+    const { rows } = await query('SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
+      workspaceId,
+      userId,
+    ]);
+    if (!rows.length) throw notFound('That person is not a member of this workspace');
+    await assertTeams(workspaceId, teamIds);
+
+    await transaction(async (client) => {
+      await client.query(
+        `DELETE FROM team_members tm USING teams t
+          WHERE t.id = tm.team_id AND t.workspace_id = $1 AND tm.user_id = $2
+            AND NOT (tm.team_id = ANY($3::uuid[]))`,
+        [workspaceId, userId, teamIds],
+      );
+      await client.query(
+        `INSERT INTO team_members (team_id, user_id)
+         SELECT picked.team_id, $2 FROM unnest($1::uuid[]) AS picked(team_id)
+          WHERE NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = picked.team_id AND tm.user_id = $2)`,
+        [teamIds, userId],
+      );
+    });
+    // Who is on a team is who every list naming it lets in, or keeps out.
+    accessChanged(workspaceId);
+    return { userId, teamIds };
   });
 
   // --- locks -------------------------------------------------------------------

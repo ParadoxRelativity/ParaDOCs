@@ -188,6 +188,11 @@ export const updateTeamSchema = z.object({
   memberIds: z.array(uuid).max(1000).optional(),
 });
 
+/** Every team one member is on, replacing what was there. */
+export const updateMemberTeamsSchema = z.object({
+  teamIds: z.array(uuid).max(1000),
+});
+
 export type UpdateAccessInput = z.infer<typeof updateAccessSchema>;
 
 // --- spreadsheets ------------------------------------------------------------

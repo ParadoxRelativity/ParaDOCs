@@ -19,8 +19,6 @@ import { AwayAfterSelect, StatusChoices, useStatusControls } from './Presence';
 import { useToast } from './Toast';
 import { Button } from './ui';
 import Icon, { type IconName } from './Icon';
-import MembersPanel from './MembersPanel';
-import TeamsPanel from './TeamsPanel';
 import UploadsPanel from './UploadsPanel';
 import VoiceSettings from './VoiceSettings';
 import { desktop } from '../lib/desktop';
@@ -35,8 +33,6 @@ export const SETTINGS_SECTIONS = [
   'appearance',
   'voice',
   'workspace',
-  'members',
-  'teams',
   'uploads',
   'servers',
   'updates',
@@ -71,8 +67,7 @@ export default function SettingsDialog(props: Props) {
     { id: 'appearance', label: 'Appearance', icon: 'palette' },
     ...(voiceEnabled ? [{ id: 'voice' as const, label: 'Voice & video', icon: 'headset' as const }] : []),
     { id: 'workspace', label: 'Workspace', icon: 'briefcase' },
-    { id: 'members', label: 'Members', icon: 'people' },
-    { id: 'teams', label: 'Teams', icon: 'diagram-3' },
+    // Members and teams are managed in the People app, not here.
     // Storage housekeeping is an admin job, so the section is hidden otherwise.
     ...(canManageWorkspace ? [{ id: 'uploads' as const, label: 'Uploads', icon: 'paperclip' as const }] : []),
     // The desktop app's own settings, which mean nothing in a browser.
@@ -131,10 +126,6 @@ export default function SettingsDialog(props: Props) {
               onDeleted={props.onWorkspaceDeleted}
             />
           )}
-          {section === 'members' && (
-            <MembersPanel workspaceId={workspace.id} myRole={workspace.role} />
-          )}
-          {section === 'teams' && <TeamsPanel workspaceId={workspace.id} myRole={workspace.role} />}
           {section === 'uploads' &&
             (canManageWorkspace ? (
               <UploadsPanel workspaceId={workspace.id} onOpenDocument={props.onOpenDocument} />
