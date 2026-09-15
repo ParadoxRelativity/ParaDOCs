@@ -2,17 +2,26 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { DbClient } from '../db/pool.js';
 import { createDocumentSchema, isoDate, updateDocumentSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
-import { badRequest, notFound, parse } from '../lib/http.js';
+import { badRequest, forbidden, notFound, parse } from '../lib/http.js';
 import { resolveSheetRefs } from './spreadsheets.js';
 import { replaceSheetRefs, sheetRefsInMarkdown } from '@paradocs/shared';
 import { blocksToMarkdown, deriveTitle } from '../lib/blocksToMarkdown.js';
-import { DOCUMENT_SUMMARY_COLUMNS } from '../lib/documentColumns.js';
+import { documentSummaryColumns } from '../lib/documentColumns.js';
+import {
+  assertFolderAccess,
+  assertMoveKeepsAccess,
+  documentAccess,
+  documentLevelSql,
+  roleSql,
+} from '../lib/access.js';
 import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
 
-/** The full document, adding the body and derived fields to the shared summary. */
-const DOC_COLUMNS = `${DOCUMENT_SUMMARY_COLUMNS}, d.body, d.body_md AS "bodyMd", d.properties,
+/** The full document as `user` sees it, adding the body and derived fields to the shared summary. */
+function docColumns(user: string): string {
+  return `${documentSummaryColumns(user, roleSql(user, 'd.workspace_id'))}, d.body, d.body_md AS "bodyMd", d.properties,
   (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email)
      FROM users u WHERE u.id = d.created_by) AS owner`;
+}
 
 async function replaceTags(client: DbClient, documentId: string, workspaceId: string, tagIds: string[]) {
   // Reject tags from another workspace rather than silently dropping them.
@@ -34,8 +43,8 @@ async function replaceTags(client: DbClient, documentId: string, workspaceId: st
   }
 }
 
-async function fetchDocument(id: string) {
-  const { rows } = await query(`SELECT ${DOC_COLUMNS} FROM documents d WHERE d.id = $1`, [id]);
+async function fetchDocument(id: string, userId: string) {
+  const { rows } = await query(`SELECT ${docColumns('$2')} FROM documents d WHERE d.id = $1`, [id, userId]);
   if (!rows[0]) throw notFound('Document not found');
   return rows[0];
 }
@@ -46,12 +55,13 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Flat document listing that backs the All Documents view. Unlike the sidebar
    * tree this includes unfiled documents, which is where new documents land.
+   * Only what the reader may see is listed.
    */
   app.get<{
     Params: { id: string };
     Querystring: { limit?: string; offset?: string; sort?: string; archived?: string; unfiled?: string };
   }>('/workspaces/:id/documents', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id);
     const limit = Math.min(Math.max(Number(req.query.limit ?? 100) || 100, 1), 200);
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
     const archived = req.query.archived === 'true';
@@ -62,16 +72,20 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         req.query.sort ?? 'updated'
       ] ?? 'd.updated_at DESC';
 
-    const conditions = ['d.workspace_id = $1', '(d.archived_at IS NOT NULL) = $2'];
+    const conditions = [
+      'd.workspace_id = $1',
+      '(d.archived_at IS NOT NULL) = $2',
+      `${documentLevelSql('$5', '$6')} > 0`,
+    ];
     if (req.query.unfiled === 'true') conditions.push('d.folder_id IS NULL');
 
     const { rows } = await query(
-      `SELECT ${DOCUMENT_SUMMARY_COLUMNS}
+      `SELECT ${documentSummaryColumns('$5', '$6')}
          FROM documents d
         WHERE ${conditions.join(' AND ')}
         ORDER BY ${orderBy}
         LIMIT $3 OFFSET $4`,
-      [req.params.id, archived, limit, offset],
+      [req.params.id, archived, limit, offset, req.user!.id, role],
     );
     // `hasMore` lets the client offer "load more" without a second count query.
     return { documents: rows, hasMore: rows.length === limit };
@@ -80,17 +94,12 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string } }>('/workspaces/:id/documents', async (req, reply) => {
     await assertWorkspaceAccess(req, req.params.id, 'editor');
     const input = parse(createDocumentSchema, req.body);
+    // Filing into a folder takes being allowed to change what is in it.
+    if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id);
     const body = input.body ?? [];
     const bodyMd = blocksToMarkdown(body);
 
     const id = await transaction(async (client) => {
-      if (input.folderId) {
-        const { rowCount } = await client.query('SELECT 1 FROM folders WHERE id = $1 AND workspace_id = $2', [
-          input.folderId,
-          req.params.id,
-        ]);
-        if (!rowCount) throw notFound('Folder not found');
-      }
       const { rows } = await client.query<{ id: string }>(
         `INSERT INTO documents (workspace_id, folder_id, title, icon, body, body_md, created_by, mode)
          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8) RETURNING id`,
@@ -110,17 +119,26 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     });
 
     reply.status(201);
-    return fetchDocument(id);
+    return fetchDocument(id, req.user!.id);
   });
 
   app.get<{ Params: { id: string } }>('/documents/:id', async (req) => {
     await assertDocumentAccess(req, req.params.id);
-    return fetchDocument(req.params.id);
+    return fetchDocument(req.params.id, req.user!.id);
   });
 
   app.patch<{ Params: { id: string } }>('/documents/:id', async (req) => {
-    const { workspaceId } = await assertDocumentAccess(req, req.params.id, 'editor');
+    const { workspaceId, role } = await assertDocumentAccess(req, req.params.id, 'editor');
     const input = parse(updateDocumentSchema, req.body);
+
+    if (input.folderId !== undefined) {
+      if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', workspaceId);
+      const { rows: current } = await query<{ access: string; folder_id: string | null }>(
+        'SELECT access, folder_id FROM documents WHERE id = $1',
+        [req.params.id],
+      );
+      await assertMoveKeepsAccess(role, { access: current[0].access, folderId: current[0].folder_id }, input.folderId ?? null);
+    }
 
     // The client sends markdown it rendered with BlockNote's own exporter; fall
     // back to the server converter when only blocks arrive.
@@ -128,13 +146,6 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       input.bodyMd ?? (input.body !== undefined ? blocksToMarkdown(input.body) : undefined);
 
     await transaction(async (client) => {
-      if (input.folderId) {
-        const { rowCount } = await client.query('SELECT 1 FROM folders WHERE id = $1 AND workspace_id = $2', [
-          input.folderId,
-          workspaceId,
-        ]);
-        if (!rowCount) throw notFound('Folder not found');
-      }
       await client.query(
         `UPDATE documents
             SET title = COALESCE($2, title),
@@ -172,7 +183,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       if (input.tagIds) await replaceTags(client, req.params.id, workspaceId, input.tagIds);
     });
 
-    return fetchDocument(req.params.id);
+    return fetchDocument(req.params.id, req.user!.id);
   });
 
   app.delete<{ Params: { id: string } }>('/documents/:id', async (req, reply) => {
@@ -184,7 +195,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   /** Markdown export, for backups and for moving a document out of ParaDOCs. */
   app.get<{ Params: { id: string } }>('/documents/:id/markdown', async (req, reply) => {
     await assertDocumentAccess(req, req.params.id);
-    const doc = (await fetchDocument(req.params.id)) as {
+    const doc = (await fetchDocument(req.params.id, req.user!.id)) as {
       title: string;
       bodyMd: string;
       tags: { name: string }[];
@@ -218,68 +229,77 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     await assertWorkspaceAccess(req, req.params.id, 'editor');
     const date = parse(isoDate, req.params.date);
 
-    const existing = await query(
-      `SELECT ${DOC_COLUMNS} FROM documents d
+    const existing = await query<{ id: string }>(
+      `SELECT d.id FROM documents d
         WHERE d.workspace_id = $1 AND d.is_journal AND d.journal_date = $2::date`,
       [req.params.id, date],
     );
-    if (existing.rows[0]) return existing.rows[0];
 
-    const id = await transaction(async (client) => {
-      // Journal entries land in a "Journal" folder, created once per workspace.
-      const { rows: folder } = await client.query<{ id: string }>(
-        `WITH existing AS (
-           SELECT id FROM folders WHERE workspace_id = $1 AND parent_id IS NULL AND name = 'Journal' LIMIT 1
-         ), created AS (
-           INSERT INTO folders (workspace_id, name, position)
-           SELECT $1, 'Journal', 0 WHERE NOT EXISTS (SELECT 1 FROM existing)
-           RETURNING id
-         )
-         SELECT id FROM existing UNION ALL SELECT id FROM created`,
-        [req.params.id],
-      );
-      const title = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        timeZone: 'UTC',
-      });
-      const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO documents (workspace_id, folder_id, title, is_journal, journal_date, body, body_md, created_by)
-         VALUES ($1, $2, $3, true, $4::date, '[]'::jsonb, '', $5)
-         ON CONFLICT (workspace_id, journal_date) WHERE is_journal DO UPDATE SET updated_at = documents.updated_at
-         RETURNING id`,
-        [req.params.id, folder[0]?.id ?? null, title, date, req.user!.id],
-      );
-      return rows[0].id;
-    });
+    const id =
+      existing.rows[0]?.id ??
+      (await transaction(async (client) => {
+        // Journal entries land in a "Journal" folder, created once per workspace.
+        const { rows: folder } = await client.query<{ id: string }>(
+          `WITH existing AS (
+             SELECT id FROM folders WHERE workspace_id = $1 AND parent_id IS NULL AND name = 'Journal' LIMIT 1
+           ), created AS (
+             INSERT INTO folders (workspace_id, name, position)
+             SELECT $1, 'Journal', 0 WHERE NOT EXISTS (SELECT 1 FROM existing)
+             RETURNING id
+           )
+           SELECT id FROM existing UNION ALL SELECT id FROM created`,
+          [req.params.id],
+        );
+        const title = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          timeZone: 'UTC',
+        });
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO documents (workspace_id, folder_id, title, is_journal, journal_date, body, body_md, created_by)
+           VALUES ($1, $2, $3, true, $4::date, '[]'::jsonb, '', $5)
+           ON CONFLICT (workspace_id, journal_date) WHERE is_journal DO UPDATE SET updated_at = documents.updated_at
+           RETURNING id`,
+          [req.params.id, folder[0]?.id ?? null, title, date, req.user!.id],
+        );
+        return rows[0].id;
+      }));
 
-    return fetchDocument(id);
+    // The journal belongs to the workspace and is filed in its Journal folder,
+    // which can be locked like any other.
+    if (!(await documentAccess(req.user!.id, id))) {
+      throw forbidden('The journal is in a folder you cannot open');
+    }
+    return fetchDocument(id, req.user!.id);
   });
 
   /** Which days have journals or document activity, for the calendar dots. */
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>(
     '/workspaces/:id/activity',
     async (req) => {
-      await assertWorkspaceAccess(req, req.params.id);
+      const role = await assertWorkspaceAccess(req, req.params.id);
       const from = parse(isoDate, req.query.from ?? new Date().toISOString().slice(0, 8) + '01');
       const to = parse(isoDate, req.query.to ?? from);
+      // Only documents this reader may see leave a dot: a day of work on a
+      // locked document is not theirs to know about.
+      const visible = `d.workspace_id = $1 AND ${documentLevelSql('$4', '$5')} > 0`;
       const { rows } = await query(
         `SELECT to_char(day, 'YYYY-MM-DD') AS day,
                 count(*) FILTER (WHERE kind = 'created')::int AS created,
                 count(*) FILTER (WHERE kind = 'updated')::int AS updated,
                 bool_or(is_journal) AS "hasJournal"
            FROM (
-             SELECT date_trunc('day', created_at)::date AS day, 'created' AS kind, is_journal
-               FROM documents WHERE workspace_id = $1
+             SELECT date_trunc('day', d.created_at)::date AS day, 'created' AS kind, d.is_journal
+               FROM documents d WHERE ${visible}
              UNION ALL
-             SELECT date_trunc('day', updated_at)::date, 'updated', is_journal
-               FROM documents WHERE workspace_id = $1
+             SELECT date_trunc('day', d.updated_at)::date, 'updated', d.is_journal
+               FROM documents d WHERE ${visible}
            ) activity
           WHERE day BETWEEN $2::date AND $3::date
           GROUP BY day ORDER BY day`,
-        [req.params.id, from, to],
+        [req.params.id, from, to, req.user!.id, role],
       );
       return rows;
     },

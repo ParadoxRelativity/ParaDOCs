@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { SuggestionMenuController, getDefaultReactSlashMenuItems, useCreateBlockNote } from '@blocknote/react';
 import { filterSuggestionItems } from '@blocknote/core';
+import { withCollaboration } from '@blocknote/core/yjs';
+import { syntaxHighlighter } from '@blocknote/code-block';
 import { mentionHref, mentionLabel, type Doc } from '@paradocs/shared';
 import { useChannels, useMembers, useUploadFile, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
@@ -90,14 +92,21 @@ function EditorSurface({
   // PATCHed: the Y.Doc is the source of truth and the server persists it and
   // re-derives blocks and markdown for search.
   const editor = useCreateBlockNote(
-    {
+    withCollaboration({
       // Adds spreadsheet cells and charts; the server's schema matches it.
       schema: documentSchema,
-      collaboration: { provider: session.provider, fragment: session.fragment, user: collabUser },
+      // BlockNote reads only the provider's awareness, for cursors. Hocuspocus
+      // types it as nullable where BlockNote expects undefined.
+      collaboration: {
+        provider: { awareness: session.provider.awareness ?? undefined },
+        fragment: session.fragment,
+        user: collabUser,
+      },
+      extensions: [syntaxHighlighter],
       // Image, video, audio and file blocks, and files dropped or pasted into
       // the page, upload to the workspace under the server's size limit.
       uploadFile: async (file: File) => (await upload.mutateAsync({ file, documentId: doc.id })).url,
-    },
+    }),
     [session],
   );
 
@@ -145,8 +154,8 @@ function EditorSurface({
   // broken against the installed prosemirror-view (see documentClipboard.ts).
   // The view is read when the event fires, since it only exists once mounted.
   useEffect(() => {
-    const onCopy = (event: ClipboardEvent) => copyEditorSelection(editor._tiptapEditor.view, event, false);
-    const onCut = (event: ClipboardEvent) => copyEditorSelection(editor._tiptapEditor.view, event, true);
+    const onCopy = (event: ClipboardEvent) => copyEditorSelection(editor.prosemirrorView, event, false);
+    const onCut = (event: ClipboardEvent) => copyEditorSelection(editor.prosemirrorView, event, true);
     document.addEventListener('copy', onCopy, true);
     document.addEventListener('cut', onCut, true);
     return () => {

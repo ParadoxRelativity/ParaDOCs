@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createTagSchema, updateTagSchema } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { conflict, notFound, parse } from '../lib/http.js';
+import { documentLevelSql } from '../lib/access.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
 const PALETTE = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6'];
@@ -10,17 +11,19 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/tags', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id);
+    // Counts only what the reader may see, so a tag's number matches what
+    // following it turns up.
     const { rows } = await query(
       `SELECT t.id, t.workspace_id AS "workspaceId", t.name, t.color,
-              count(dt.document_id)::int AS "documentCount"
+              count(d.id) FILTER (WHERE ${documentLevelSql('$2', '$3')} > 0)::int AS "documentCount"
          FROM tags t
          LEFT JOIN document_tags dt ON dt.tag_id = t.id
          LEFT JOIN documents d ON d.id = dt.document_id AND d.archived_at IS NULL
         WHERE t.workspace_id = $1
         GROUP BY t.id
         ORDER BY t.name`,
-      [req.params.id],
+      [req.params.id, req.user!.id, role],
     );
     return rows;
   });

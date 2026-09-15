@@ -17,7 +17,7 @@ const external = ['electron', '@electric-sql/pglite', 'electron-updater', 'jsdom
 const common = {
   bundle: true,
   platform: 'node',
-  target: 'node20', // Electron 33 ships Node 20
+  target: 'node24', // Electron 44 ships Node 24
   // Source maps roughly triple the bundle, so they are a development aid only.
   sourcemap: watch,
   // Bundling renames colliding classes, and some dependencies identify types by

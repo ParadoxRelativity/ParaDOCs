@@ -13,6 +13,50 @@ export interface User {
 
 export type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 
+/**
+ * Who can reach a folder, document or channel. `open` is everyone in the
+ * workspace, `allow` only the teams and people listed, and `deny` everyone
+ * except them. Folders and documents may `inherit` the setting of the nearest
+ * folder above them that has one of its own; the nearest setting wins. Owners
+ * and admins are never kept out.
+ */
+export type AccessMode = 'inherit' | 'open' | 'allow' | 'deny';
+
+/** What someone may do with a folder, document or channel. */
+export type Permission = 'none' | 'view' | 'edit';
+
+/** A named group of members, so access can be given to several people at once. */
+export interface Team {
+  id: string;
+  workspaceId: string;
+  name: string;
+  memberIds: string[];
+  createdAt: string;
+}
+
+/** One line of an allow or deny list. */
+export interface AccessEntry {
+  subject:
+    | { kind: 'team'; id: string; name: string }
+    | { kind: 'user'; id: string; name: string; avatarUrl: string | null };
+  /**
+   * On an allow list, `view` or `edit`. On a deny list, `none` or `view`: a
+   * deny list only ever takes access away.
+   */
+  permission: Permission;
+}
+
+/** Who can reach one folder, document or channel, as owners and admins manage it. */
+export interface AccessSettings {
+  access: AccessMode;
+  entries: AccessEntry[];
+  /**
+   * For something that inherits, the folder whose setting applies to it. Null
+   * when no folder above it has one, which means it is open.
+   */
+  inheritedFrom: { id: string; name: string; access: AccessMode } | null;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -71,6 +115,13 @@ export interface Folder {
 
 /** A folder plus its children and the documents filed in it. */
 export interface FolderNode extends Folder {
+  /** Its own setting; see AccessMode. */
+  access: AccessMode;
+  /**
+   * What the signed-in person may do in it. `none` for a folder shown only
+   * because something inside it is visible to them.
+   */
+  permission: Permission;
   children: FolderNode[];
   documents: DocumentSummary[];
 }
@@ -96,6 +147,10 @@ export interface DocumentSummary {
   createdAt: string;
   updatedAt: string;
   tags: Tag[];
+  /** Its own setting; see AccessMode. */
+  access: AccessMode;
+  /** What the signed-in person may do with it: `view` or `edit`. */
+  permission: Permission;
 }
 
 /**

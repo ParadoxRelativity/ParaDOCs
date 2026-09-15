@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { PresenceStatus } from './presence.js';
+import type { AccessMode, Permission } from './types.js';
 
 /**
  * A voice channel is a place to meet; it carries no messages. A direct
@@ -27,6 +28,13 @@ export interface Channel {
   peer?: MessageAuthor | null;
   /** In a direct conversation, when the latest message was sent. */
   lastMessageAt?: string | null;
+  /** A named channel's access setting. A channel has no folder, so it never inherits. */
+  access?: Exclude<AccessMode, 'inherit'>;
+  /**
+   * What the signed-in person may do: `view` reads a text channel or listens in
+   * a voice one, `edit` also posts or speaks. Absent means `edit`.
+   */
+  permission?: Permission;
 }
 
 export interface MessageAuthor {
@@ -275,7 +283,11 @@ export type CallEvent =
 export type WorkspaceEvent =
   | { type: 'presence.changed'; workspaceId: string; userId: string; status: PresenceStatus }
   | { type: 'channels.changed'; workspaceId: string }
-  | { type: 'members.changed'; workspaceId: string };
+  | { type: 'members.changed'; workspaceId: string }
+  /** Who can see what has changed: a lock, a team, or someone's role. Refetch what is shown. */
+  | { type: 'access.changed'; workspaceId: string }
+  /** Everyone now in a voice channel; an empty list means it has emptied. */
+  | { type: 'voice.changed'; workspaceId: string; channelId: string; occupants: VoiceOccupant[] };
 
 /**
  * Someone typing, or no longer typing, in a channel or direct conversation.

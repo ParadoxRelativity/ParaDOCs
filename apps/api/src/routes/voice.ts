@@ -1,11 +1,13 @@
-import type { FastifyPluginAsync } from 'fastify';
-import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
+import { AccessToken, RoomServiceClient, WebhookReceiver, type WebhookEvent } from 'livekit-server-sdk';
 import { ringSchema, type VoiceOccupant } from '@paradocs/shared';
 import { query, type DbClient } from '../db/pool.js';
-import { badRequest, notFound, parse } from '../lib/http.js';
-import { channelAccessFor, channelParticipants } from '../lib/channels.js';
+import { badRequest, notFound, parse, unauthorized } from '../lib/http.js';
+import { channelAccessFor, channelParticipants, UUID } from '../lib/channels.js';
+import { channelLevelSql } from '../lib/access.js';
+import { onAccessChanged } from '../lib/accessEvents.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
-import { publishToUser } from '../chat/hub.js';
+import { publishToChannel, publishToUser } from '../chat/hub.js';
 import { config } from '../config.js';
 
 /**
@@ -62,8 +64,56 @@ function signallingUrl(): string | null {
   return config.livekit.url || null;
 }
 
+type Participant = Awaited<ReturnType<RoomServiceClient['listParticipants']>>[number];
+
+/** Someone in a room, as the channel list shows them. */
+function toOccupant(p: Participant): VoiceOccupant {
+  return { name: p.name || p.identity, avatarUrl: p.attributes?.avatarUrl || null };
+}
+
+/**
+ * Brings the people in a workspace's calls into line with who may be there
+ * now: anyone locked out of a voice channel is removed from its room, anyone
+ * cut down to listening loses the right to speak, and anyone allowed to speak
+ * again gets it back. A token only says what was allowed when it was minted.
+ */
+async function enforceVoiceAccess(workspaceId: string): Promise<void> {
+  if (!voiceEnabled()) return;
+  const { rows } = await query<{ id: string }>(
+    `SELECT id FROM channels WHERE workspace_id = $1 AND kind = 'voice'`,
+    [workspaceId],
+  );
+  if (rows.length === 0) return;
+  const service = roomService();
+  const rooms = await service.listRooms(rows.map((r) => r.id));
+  for (const room of rooms.filter((r) => r.numParticipants > 0)) {
+    for (const participant of await service.listParticipants(room.name)) {
+      const access = await channelAccessFor(participant.identity, room.name);
+      if (!access) {
+        await service.removeParticipant(room.name, participant.identity);
+        continue;
+      }
+      const canSpeak = access.level >= 2;
+      if (participant.permission && participant.permission.canPublish !== canSpeak) {
+        await service.updateParticipant(room.name, participant.identity, undefined, {
+          canPublish: canSpeak,
+          canSubscribe: true,
+          canPublishData: true,
+        });
+      }
+    }
+  }
+}
+
 export const voiceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
+
+  const stopEnforcing = onAccessChanged((workspaceId) => {
+    enforceVoiceAccess(workspaceId).catch((err) =>
+      app.log.warn({ err, workspaceId }, 'could not apply an access change to calls in progress'),
+    );
+  });
+  app.addHook('onClose', async () => stopEnforcing());
 
   app.get('/voice/config', async () => ({
     enabled: voiceEnabled(),
@@ -79,13 +129,15 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
    * simply empty.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/voice/participants', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id);
     const occupancy: Record<string, VoiceOccupant[]> = {};
     if (!voiceEnabled()) return occupancy;
 
+    // Who is in a locked channel is only for those who may see it.
     const { rows } = await query<{ id: string }>(
-      `SELECT id FROM channels WHERE workspace_id = $1 AND kind = 'voice'`,
-      [req.params.id],
+      `SELECT c.id FROM channels c
+        WHERE c.workspace_id = $1 AND c.kind = 'voice' AND ${channelLevelSql('$2', '$3')} > 0`,
+      [req.params.id, req.user!.id, role],
     );
     if (rows.length === 0) return occupancy;
 
@@ -105,10 +157,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
         .map(async (room) => {
           try {
             const participants = await service.listParticipants(room.name);
-            occupancy[room.name] = participants.map((p) => ({
-              name: p.name || p.identity,
-              avatarUrl: p.attributes?.avatarUrl || null,
-            }));
+            occupancy[room.name] = participants.map(toOccupant);
           } catch {
             // Fall back to the count if the room went away mid-request.
             occupancy[room.name] = Array.from({ length: room.numParticipants }, () => ({
@@ -137,6 +186,8 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     const access = await channelAccessFor(req.user!.id, req.params.id);
     if (!access) throw notFound('Channel not found');
     if (access.kind !== 'voice' && access.kind !== 'direct') throw badRequest('That channel is not a voice channel');
+    // A lock can let someone listen in without speaking.
+    const canSpeak = access.level >= 2;
 
     const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
       identity: req.user!.id,
@@ -148,7 +199,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     token.addGrant({
       room: req.params.id,
       roomJoin: true,
-      canPublish: true,
+      canPublish: canSpeak,
       canSubscribe: true,
       // Screenshare and camera are published as ordinary tracks; data is used
       // by the client SDK for its own signalling.
@@ -160,6 +211,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
       token: await token.toJwt(),
       room: req.params.id,
       channelName: access.name,
+      canSpeak,
     };
   });
 
@@ -203,3 +255,96 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     reply.status(204);
   });
 };
+
+/** What LiveKit reports that changes who is in a room. */
+const OCCUPANCY_EVENTS = new Set(['participant_joined', 'participant_left', 'participant_connection_aborted', 'room_finished']);
+
+/**
+ * Each room's announcement in progress. Two changes landing together are
+ * worked out one after the other, so the later list is the one sent last.
+ */
+const announcing = new Map<string, Promise<void>>();
+
+/**
+ * Tells everyone with a workspace open who is now in one of its voice channels.
+ *
+ * Direct calls are left out: who is on a call between two people is nobody
+ * else's business, and the channel list does not show them anyway.
+ */
+async function announceOccupancy(event: WebhookEvent, room: string): Promise<void> {
+  if (!UUID.test(room)) return;
+  const { rows } = await query<{ workspace_id: string }>(
+    `SELECT workspace_id FROM channels WHERE id = $1 AND kind = 'voice'`,
+    [room],
+  );
+  const workspaceId = rows[0]?.workspace_id;
+  if (!workspaceId) return;
+
+  let participants: Participant[] = [];
+  if (event.event !== 'room_finished') {
+    try {
+      participants = await roomService().listParticipants(room);
+    } catch {
+      // The room closed on the way; nobody is in it.
+    }
+    // The event is the last word on the person it is about, whatever the list
+    // caught of them.
+    const who = event.participant;
+    if (who) {
+      participants = participants.filter((p) => p.identity !== who.identity);
+      if (event.event === 'participant_joined') participants.push(who);
+    }
+  }
+
+  // To the channel's subscribers, each checked when they subscribed and again
+  // whenever access changes, so a locked room's occupants stay its business.
+  publishToChannel(room, {
+    type: 'voice.changed',
+    workspaceId,
+    channelId: room,
+    occupants: participants.map(toOccupant),
+  });
+}
+
+/**
+ * LiveKit's webhook: joins and leaves, pushed to the chat sockets.
+ *
+ * Outside the signed-in routes, since LiveKit has no session. It signs each
+ * request with the key pair this server shares with it, which is checked
+ * before anything is believed.
+ */
+export const voiceWebhookRoutes: FastifyPluginAsync = async (app) => {
+  // The signature covers the exact bytes sent, so the body stays text.
+  app.addContentTypeParser('application/webhook+json', { parseAs: 'string' }, (_req, body, done) => done(null, body));
+
+  app.post('/voice/webhook', async (req, reply) => {
+    if (!voiceEnabled()) throw notFound();
+    if (typeof req.body !== 'string') throw badRequest('Expected a LiveKit webhook');
+
+    let event: WebhookEvent;
+    try {
+      const receiver = new WebhookReceiver(config.livekit.apiKey, config.livekit.apiSecret);
+      event = await receiver.receive(req.body, req.headers.authorization);
+    } catch {
+      throw unauthorized('Webhook signature is not valid');
+    }
+
+    const room = event.room?.name;
+    if (room && OCCUPANCY_EVENTS.has(event.event)) {
+      // Answered straight away: LiveKit does not wait long, and the work here
+      // is asking LiveKit itself a question.
+      queueAnnouncement(room, event, req.log);
+    }
+    reply.status(204);
+  });
+};
+
+function queueAnnouncement(room: string, event: WebhookEvent, log: FastifyBaseLogger): void {
+  const next = (announcing.get(room) ?? Promise.resolve())
+    .then(() => announceOccupancy(event, room))
+    .catch((err) => log.warn({ err, room }, 'could not announce voice occupancy'));
+  announcing.set(room, next);
+  void next.then(() => {
+    if (announcing.get(room) === next) announcing.delete(room);
+  });
+}

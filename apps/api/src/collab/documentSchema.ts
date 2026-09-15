@@ -53,6 +53,6 @@ const sheetChart = createBlockSpec(SHEET_CHART_BLOCK, {
 });
 
 export const documentSchema = BlockNoteSchema.create({
-  blockSpecs: { ...defaultBlockSpecs, sheetChart },
+  blockSpecs: { ...defaultBlockSpecs, sheetChart: sheetChart() },
   inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell },
 });

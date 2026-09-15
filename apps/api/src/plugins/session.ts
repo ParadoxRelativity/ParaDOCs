@@ -4,6 +4,7 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { forbidden, notFound, unauthorized } from '../lib/http.js';
 import { uploadUrlSql } from '../lib/storage.js';
+import { documentAccess } from '../lib/access.js';
 
 export const SESSION_COOKIE = 'paradocs_session';
 
@@ -97,33 +98,38 @@ export async function assertWorkspaceAccess(
   return role;
 }
 
-/** Resolves a document and checks the caller's role in its workspace. */
+/**
+ * Resolves a document and checks what the caller may do with it: their role in
+ * its workspace, and any lock on the document or its folders. `editor` asks
+ * whether they may change it; `admin` and `owner` are about the workspace role
+ * alone. Someone who may not see it at all gets 404, as for a document that
+ * does not exist.
+ */
 export async function assertDocumentAccess(
   req: FastifyRequest,
   documentId: string,
   minimum: Role = 'viewer',
-): Promise<{ workspaceId: string; role: Role }> {
+): Promise<{ workspaceId: string; role: Role; canEdit: boolean }> {
   if (!req.user) throw unauthorized();
-  const { rows } = await query<{ workspace_id: string }>(
-    'SELECT workspace_id FROM documents WHERE id = $1',
-    [documentId],
-  );
-  if (!rows[0]) throw notFound('Document not found');
-  const workspaceId = rows[0].workspace_id;
-  const role = await assertWorkspaceAccess(req, workspaceId, minimum);
-  return { workspaceId, role };
+  const access = await documentAccess(req.user.id, documentId);
+  if (!access) throw notFound('Document not found');
+  if (roleAtLeast(minimum, 'admin')) {
+    if (!roleAtLeast(access.role, minimum)) throw forbidden(`This action requires the ${minimum} role or higher`);
+  } else if (minimum === 'editor' && access.level < 2) {
+    throw forbidden(
+      access.role === 'viewer'
+        ? 'This action requires the editor role or higher'
+        : 'You can view this document but not change it',
+    );
+  }
+  return { workspaceId: access.workspaceId, role: access.role, canEdit: access.level === 2 };
 }
 
 /** Same check without a request, for the websocket handshake. */
 export async function documentAccessForUser(
   userId: string,
   documentId: string,
-): Promise<{ workspaceId: string; role: Role } | null> {
-  const { rows } = await query<{ workspace_id: string }>(
-    'SELECT workspace_id FROM documents WHERE id = $1',
-    [documentId],
-  );
-  if (!rows[0]) return null;
-  const role = await workspaceRole(userId, rows[0].workspace_id);
-  return role ? { workspaceId: rows[0].workspace_id, role } : null;
+): Promise<{ workspaceId: string; role: Role; canEdit: boolean } | null> {
+  const access = await documentAccess(userId, documentId);
+  return access ? { workspaceId: access.workspaceId, role: access.role, canEdit: access.level === 2 } : null;
 }

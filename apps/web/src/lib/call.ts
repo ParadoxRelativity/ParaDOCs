@@ -298,19 +298,26 @@ export function useCall(): Call {
           });
           setStatus('joined');
 
-          // No microphone, or permission refused, is not a reason to be kept
-          // out: listening in is a legitimate way to attend. The join stands
-          // and the button honestly shows the mic as off.
-          try {
-            await room.localParticipant.setMicrophoneEnabled(true);
-            setMic(true);
-          } catch {
+          if (credentials.canSpeak === false) {
+            // A lock lets this person listen here but not speak. The token
+            // already refuses their microphone, so it is not asked for.
             setMic(false);
-            toast('Joined without a microphone. Check the permission to speak.', 'error');
+            toast('You can listen in this channel, but not speak.');
+          } else {
+            // No microphone, or permission refused, is not a reason to be kept
+            // out: listening in is a legitimate way to attend. The join stands
+            // and the button honestly shows the mic as off.
+            try {
+              await room.localParticipant.setMicrophoneEnabled(true);
+              setMic(true);
+            } catch {
+              setMic(false);
+              toast('Joined without a microphone. Check the permission to speak.', 'error');
+            }
           }
           // The same goes for a camera on a video call: better to be heard
           // without it than kept out.
-          if (options.video) {
+          if (options.video && credentials.canSpeak !== false) {
             try {
               await room.localParticipant.setCameraEnabled(true);
               setCamera(true);

@@ -2,7 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import type { Role } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { notFound, unauthorized } from './http.js';
-import { assertWorkspaceAccess, workspaceRole } from '../plugins/session.js';
+import { assertWorkspaceAccess, roleAtLeast, workspaceRole } from '../plugins/session.js';
 
 /**
  * Who may open a spreadsheet: the same question documents answer, asked of a
@@ -25,11 +25,11 @@ export async function assertSpreadsheetAccess(
 export async function spreadsheetAccessForUser(
   userId: string,
   spreadsheetId: string,
-): Promise<{ workspaceId: string; role: Role } | null> {
+): Promise<{ workspaceId: string; role: Role; canEdit: boolean } | null> {
   const workspaceId = await workspaceOf(spreadsheetId);
   if (!workspaceId) return null;
   const role = await workspaceRole(userId, workspaceId);
-  return role ? { workspaceId, role } : null;
+  return role ? { workspaceId, role, canEdit: roleAtLeast(role, 'editor') } : null;
 }
 
 async function workspaceOf(spreadsheetId: string): Promise<string | null> {

@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js
 import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess, roleAtLeast, workspaceRole, type Role } from '../plugins/session.js';
 import { publishToWorkspace } from '../chat/hub.js';
+import { accessChanged } from '../lib/accessEvents.js';
 
 /** Everyone with the workspace open refreshes who is in it. */
 function membersChanged(workspaceId: string): void {
@@ -65,6 +66,9 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
         [req.params.id, req.params.userId, input.role],
       );
       membersChanged(req.params.id);
+      // A role sets how far a lock reaches: admins pass every one, viewers
+      // never get past viewing.
+      accessChanged(req.params.id);
       return rows[0];
     },
   );
@@ -85,11 +89,29 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
         throw badRequest('A workspace must keep at least one owner');
       }
 
-      await query('DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
-        req.params.id,
-        req.params.userId,
-      ]);
+      await transaction(async (client) => {
+        await client.query('DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
+          req.params.id,
+          req.params.userId,
+        ]);
+        // Their place on the workspace's teams and lists goes with them, so
+        // rejoining later starts from the workspace's defaults, not old locks.
+        await client.query(
+          `DELETE FROM team_members tm USING teams t
+            WHERE t.id = tm.team_id AND t.workspace_id = $1 AND tm.user_id = $2`,
+          [req.params.id, req.params.userId],
+        );
+        await client.query(
+          `DELETE FROM access_entries e
+            WHERE e.user_id = $2
+              AND (e.folder_id IN (SELECT id FROM folders WHERE workspace_id = $1)
+                OR e.document_id IN (SELECT id FROM documents WHERE workspace_id = $1)
+                OR e.channel_id IN (SELECT id FROM channels WHERE workspace_id = $1))`,
+          [req.params.id, req.params.userId],
+        );
+      });
       membersChanged(req.params.id);
+      accessChanged(req.params.id);
       reply.status(204);
     },
   );

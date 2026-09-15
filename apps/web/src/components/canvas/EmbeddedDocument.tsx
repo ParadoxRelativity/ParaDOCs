@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { BlockNoteView } from '@blocknote/mantine';
 import { useCreateBlockNote } from '@blocknote/react';
+import { withCollaboration } from '@blocknote/core/yjs';
 import { keys, useDocument } from '../../api/hooks';
 import { useCollaboration } from '../../lib/collaboration';
 import { renderMarkdownPreview } from '../../lib/markdownPreview';
@@ -107,7 +108,9 @@ function LiveSurface({
   dark: boolean;
 }) {
   const editor = useCreateBlockNote(
-    { collaboration: { provider: session.provider, fragment: session.fragment, user } },
+    withCollaboration({
+      collaboration: { provider: { awareness: session.provider.awareness ?? undefined }, fragment: session.fragment, user },
+    }),
     [session],
   );
   return (

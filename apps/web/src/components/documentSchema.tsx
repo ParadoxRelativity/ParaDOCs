@@ -1,4 +1,5 @@
-import { BlockNoteSchema, defaultBlockSpecs, defaultInlineContentSpecs } from '@blocknote/core';
+import { BlockNoteSchema, createCodeBlockSpec, defaultBlockSpecs, defaultInlineContentSpecs } from '@blocknote/core';
+import { codeBlockOptions } from '@blocknote/code-block';
 import { createReactBlockSpec, createReactInlineContentSpec } from '@blocknote/react';
 import { SHEET_CELL_INLINE, SHEET_CHART_BLOCK } from '@paradocs/shared';
 import { SheetCellChip, SheetChartCard, SheetChartTable } from './sheet/SheetRefViews';
@@ -24,7 +25,13 @@ const sheetChart = createReactBlockSpec(SHEET_CHART_BLOCK, {
 });
 
 export const documentSchema = BlockNoteSchema.create({
-  blockSpecs: { ...defaultBlockSpecs, sheetChart },
+  blockSpecs: {
+    ...defaultBlockSpecs,
+    // The languages syntax highlighting knows; the highlighter itself is an
+    // editor extension, added where the editor is created.
+    codeBlock: createCodeBlockSpec(codeBlockOptions),
+    sheetChart: sheetChart(),
+  },
   inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell },
 });
 

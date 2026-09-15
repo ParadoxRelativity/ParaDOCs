@@ -8,6 +8,7 @@ import { query } from '../db/pool.js';
 import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { subscribeToChannel, subscribeToUser, subscribeToWorkspace } from './hub.js';
 import { appearsOffline, connectPresence } from './presence.js';
+import { onAccessChanged } from '../lib/accessEvents.js';
 
 export const CHAT_PATH = '/chat';
 
@@ -96,6 +97,8 @@ export function createChatServer(log: FastifyBaseLogger) {
       }
       const { access } = entry;
       if (closed || !access || (access.kind !== 'text' && access.kind !== 'direct')) return;
+      // Someone who may only read a channel has nothing to be typing there.
+      if (access.level < 2) return;
       // Someone typing is plainly around, so appearing offline hides it too —
       // stopping included, which would give them away just the same.
       if (appearsOffline(user.id)) return;
@@ -168,6 +171,30 @@ export function createChatServer(log: FastifyBaseLogger) {
       })().catch((err) => log.error({ err }, 'chat socket message failed'));
     });
 
+    /**
+     * Drops what this socket may no longer hear once who can see what has
+     * changed: a channel locked away from this person, or the workspace they
+     * were taken out of. Every subscription was checked when it was made, and
+     * that says nothing about now. The typing memory goes too, so someone cut
+     * down to reading stops being relayed.
+     */
+    async function recheck(workspaceId: string) {
+      typingAccess.clear();
+      for (const key of [...subscriptions.keys()]) {
+        const [kind, id] = key.split(':');
+        let allowed: boolean;
+        if (kind === 'channel') allowed = (await channelAccessFor(user.id, id)) !== null;
+        else if (id === workspaceId) allowed = (await workspaceRole(user.id, id)) !== null;
+        else continue;
+        if (allowed || closed) continue;
+        subscriptions.get(key)?.();
+        subscriptions.delete(key);
+      }
+    }
+    const stopAccess = onAccessChanged((workspaceId) => {
+      recheck(workspaceId).catch((err) => log.warn({ err }, 'could not recheck chat subscriptions'));
+    });
+
     // Close and error can both arrive for one socket.
     const release = () => {
       if (closed) return;
@@ -176,6 +203,7 @@ export function createChatServer(log: FastifyBaseLogger) {
       subscriptions.clear();
       typingAccess.clear();
       stopPersonal();
+      stopAccess();
       presence.close();
     };
     socket.on('close', release);

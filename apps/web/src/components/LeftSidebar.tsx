@@ -41,6 +41,8 @@ import { MODIFIER, asksForNewTab, openTab } from '../lib/tabs';
 import { useToast } from './Toast';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
+import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
+import SheetContextMenu, { type SheetMenuItem } from './sheet/SheetContextMenu';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
 export type SidebarSection = 'docs' | 'chat' | 'sheets';
@@ -55,6 +57,8 @@ interface Props {
   onSelectDocument: (id: string) => void;
   /** Whether this person may change anything; viewers get no destructive controls. */
   canEdit: boolean;
+  /** Owners and admins, who decide who can see each folder, document and channel. */
+  canManageAccess: boolean;
   /** A document was deleted from the tree, so anything showing it must move off. */
   onDocumentDeleted: (id: string) => void;
   onOpenJournal: () => void;
@@ -129,6 +133,7 @@ export default function LeftSidebar(props: Props) {
    */
   const [creatingIn, setCreatingIn] = useState<string | null | undefined>(undefined);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [securing, setSecuring] = useState<NamedAccessTarget | null>(null);
   const toast = useToast();
 
   const current = workspaces.find((w) => w.id === workspaceId);
@@ -270,6 +275,7 @@ export default function LeftSidebar(props: Props) {
           connectedChannelId={props.connectedChannelId}
           poppedOut={props.poppedOutChannelIds ?? []}
           onSelect={props.onSelectChannel}
+          onManageAccess={setSecuring}
         />
       ) : props.section === 'sheets' ? (
         <SheetList
@@ -308,9 +314,11 @@ export default function LeftSidebar(props: Props) {
           <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             Folders
           </span>
-          <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
-            <Icon name="folder-plus" />
-          </IconButton>
+          {props.canEdit && (
+            <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
+              <Icon name="folder-plus" />
+            </IconButton>
+          )}
         </div>
 
         {creatingIn === null && (
@@ -331,6 +339,8 @@ export default function LeftSidebar(props: Props) {
             workspaceId={workspaceId}
             activeDocumentId={props.documentId}
             canEdit={props.canEdit}
+            canManageAccess={props.canManageAccess}
+            onManageAccess={setSecuring}
             onSelectDocument={props.onSelectDocument}
             onDocumentDeleted={props.onDocumentDeleted}
             onAddDocument={addDocument}
@@ -426,6 +436,16 @@ export default function LeftSidebar(props: Props) {
           pending={createWorkspace.isPending}
           onCreate={addWorkspace}
           onClose={() => setWorkspaceDialogOpen(false)}
+        />
+      )}
+
+      {securing && (
+        <AccessDialog
+          // A fresh dialog per target, so one's draft never carries into the next.
+          key={`${securing.kind}:${securing.id}`}
+          workspaceId={workspaceId}
+          target={securing}
+          onClose={() => setSecuring(null)}
         />
       )}
     </div>
@@ -536,8 +556,96 @@ function SidebarAction({
 }
 
 /** Documents in this folder and every folder nested beneath it. */
-function countDocumentsDeep(folder: FolderNode): number {
-  return folder.documents.length + folder.children.reduce((sum, c) => sum + countDocumentsDeep(c), 0);
+function documentIdsDeep(folder: FolderNode): string[] {
+  return [...folder.documents.map((d) => d.id), ...folder.children.flatMap(documentIdsDeep)];
+}
+
+/**
+ * Deleting a folder always takes its subfolders with it. What becomes of the
+ * documents inside is asked each time: keeping them is the safe answer, and
+ * deleting them is the one that cannot be taken back, so keeping is selected.
+ */
+function DeleteFolderDialog({
+  folder,
+  onCancel,
+  onConfirm,
+}: {
+  folder: FolderNode;
+  onCancel: () => void;
+  onConfirm: (deleteDocuments: boolean) => void;
+}) {
+  const count = documentIdsDeep(folder).length;
+  const documents = `${count} ${count === 1 ? 'document' : 'documents'}`;
+  const [deleteDocuments, setDeleteDocuments] = useState(false);
+  const deleting = count > 0 && deleteDocuments;
+
+  const options = [
+    {
+      value: false,
+      label: 'Keep the documents',
+      hint: 'They move to All Documents, unfiled, and keep who can see them.',
+    },
+    {
+      value: true,
+      label: 'Delete the documents too',
+      hint: `Permanently removes ${documents}, with their comments and history. This cannot be undone.`,
+    },
+  ];
+
+  return (
+    <Modal
+      title={`Delete "${folder.name}"?`}
+      description={
+        count > 0
+          ? `The folder and any subfolders are deleted. They hold ${documents}.`
+          : 'The folder and any subfolders are deleted. There are no documents in it.'
+      }
+      onClose={onCancel}
+      footer={
+        <>
+          <Button variant="subtle" className="text-xs" onClick={onCancel}>
+            Cancel
+          </Button>
+          <button
+            autoFocus
+            onClick={() => onConfirm(deleting)}
+            className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500"
+          >
+            {deleting ? `Delete folder and ${documents}` : 'Delete folder'}
+          </button>
+        </>
+      }
+    >
+      {count > 0 && (
+        <div role="radiogroup" aria-label="The documents inside" className="space-y-2">
+          {options.map((option) => {
+            const selected = deleteDocuments === option.value;
+            return (
+              <button
+                key={option.label}
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setDeleteDocuments(option.value)}
+                className={cx(
+                  'block w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                  selected
+                    ? option.value
+                      ? 'border-red-500 bg-red-500/10'
+                      : 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+                    : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]',
+                )}
+              >
+                <span className={cx('block text-sm font-medium', selected && option.value && 'text-red-500')}>
+                  {option.label}
+                </span>
+                <span className="mt-0.5 block text-xs text-[var(--color-muted)]">{option.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 function FolderRow({
@@ -546,6 +654,8 @@ function FolderRow({
   workspaceId,
   activeDocumentId,
   canEdit,
+  canManageAccess,
+  onManageAccess,
   onSelectDocument,
   onDocumentDeleted,
   onAddDocument,
@@ -558,9 +668,11 @@ function FolderRow({
   workspaceId: string;
   activeDocumentId: string | null;
   canEdit: boolean;
+  canManageAccess: boolean;
+  onManageAccess: (target: NamedAccessTarget) => void;
   onSelectDocument: (id: string) => void;
   onDocumentDeleted: (id: string) => void;
-  onAddDocument: (folderId: string | null) => void;
+  onAddDocument: (folderId: string | null, mode?: DocumentMode) => void;
   creatingIn: string | null | undefined;
   /** Pass a parent id (or null for top level) to start naming; undefined cancels. */
   onStartCreate: (parentId: string | null | undefined) => void;
@@ -569,6 +681,8 @@ function FolderRow({
   const [open, setOpen] = useLocalStorage(`paradocs.folder.${folder.id}`, depth === 0);
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  /** Where the folder's menu is open, from its button or a right-click. */
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const updateFolder = useUpdateFolder(workspaceId);
   const remove = useDeleteFolder(workspaceId);
   const toast = useToast();
@@ -577,12 +691,56 @@ function FolderRow({
   // A subfolder being named here forces the parent open so the field is visible.
   const creatingHere = creatingIn === folder.id;
   const expanded = open || creatingHere;
+  // A lock can leave someone able to see a folder without changing what is in
+  // it, or shown it only as the way to something inside.
+  const canChange = canEdit && folder.permission === 'edit';
+  const pathOnly = folder.permission === 'none';
+
+  // Everything but the most common action lives in one menu, so a row stays
+  // readable however many things can be done to a folder.
+  const menuItems: SheetMenuItem[] = [];
+  if (canChange) {
+    menuItems.push(
+      { label: 'New document', icon: 'file-earmark-plus', onSelect: () => onAddDocument(folder.id) },
+      { label: 'New canvas', icon: 'easel', onSelect: () => onAddDocument(folder.id, 'canvas') },
+      {
+        label: 'New subfolder',
+        icon: 'folder-plus',
+        onSelect: () => {
+          setOpen(true);
+          onStartCreate(folder.id);
+        },
+      },
+      { label: 'Rename or change icon', icon: 'pencil', onSelect: () => setRenaming(true) },
+    );
+  }
+  if (canManageAccess) {
+    if (menuItems.length > 0) menuItems.push('divider');
+    menuItems.push({
+      label: 'Who can see this folder',
+      icon: 'shield-lock',
+      onSelect: () => onManageAccess({ kind: 'folder', id: folder.id, name: folder.name }),
+    });
+  }
+  if (canChange) {
+    menuItems.push('divider', {
+      label: 'Delete folder…',
+      icon: 'trash3',
+      danger: true,
+      onSelect: () => setConfirmingDelete(true),
+    });
+  }
 
   return (
     <div>
       <div
         className="group flex items-center gap-1 rounded-md pr-1 hover:bg-[var(--color-line)]/50"
         style={{ paddingLeft: depth * 12 }}
+        onContextMenu={(event) => {
+          if (menuItems.length === 0 || renaming) return;
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY });
+        }}
       >
         {renaming ? (
           <div className="flex min-w-0 flex-1 items-center gap-1 py-1 pl-2">
@@ -609,31 +767,38 @@ function FolderRow({
             </span>
             {/* Folder icons are optional; without one the name simply sits closer in. */}
             {folder.icon && <span className="shrink-0 text-xs">{folder.icon}</span>}
-            <span className="min-w-0 flex-1 truncate text-sm">{folder.name}</span>
+            <span
+              className={cx('min-w-0 flex-1 truncate text-sm', pathOnly && 'text-[var(--color-muted)]')}
+              title={pathOnly ? 'Shown because something inside it is shared with you' : undefined}
+            >
+              {folder.name}
+            </span>
+            <LockMark access={folder.access} />
             {!expanded && count > 0 && <span className="text-[10px] text-[var(--color-muted)]">{count}</span>}
           </button>
         )}
 
-        <div className={cx('items-center', renaming ? 'hidden' : 'hidden group-hover:flex')}>
-          <IconButton label="New document here" onClick={() => onAddDocument(folder.id)}>
-            <Icon name="file-earmark-plus" />
-          </IconButton>
-          <IconButton
-            label="New subfolder"
-            onClick={() => {
-              setOpen(true);
-              onStartCreate(folder.id);
-            }}
-          >
-            <Icon name="folder-plus" />
-          </IconButton>
-          <IconButton label="Rename folder or change its icon" onClick={() => setRenaming(true)}>
-            <Icon name="pencil" />
-          </IconButton>
-          <IconButton label="Delete folder" onClick={() => setConfirmingDelete(true)}>
-            <Icon name="trash3" />
-          </IconButton>
-        </div>
+        {menuItems.length > 0 && (
+          // Kept showing while the menu is open, so it stays anchored to something.
+          <div className={cx('items-center', renaming ? 'hidden' : menu ? 'flex' : 'hidden group-hover:flex')}>
+            {canChange && (
+              <IconButton label="New document here" onClick={() => onAddDocument(folder.id)}>
+                <Icon name="file-earmark-plus" />
+              </IconButton>
+            )}
+            <IconButton
+              label="Folder options"
+              aria-haspopup="menu"
+              aria-expanded={menu !== null}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenu({ x: rect.left, y: rect.bottom + 4 });
+              }}
+            >
+              <Icon name="list" />
+            </IconButton>
+          </div>
+        )}
       </div>
 
       {expanded && (
@@ -655,6 +820,8 @@ function FolderRow({
               workspaceId={workspaceId}
               activeDocumentId={activeDocumentId}
               canEdit={canEdit}
+              canManageAccess={canManageAccess}
+              onManageAccess={onManageAccess}
               onSelectDocument={onSelectDocument}
               onDocumentDeleted={onDocumentDeleted}
               onAddDocument={onAddDocument}
@@ -671,6 +838,8 @@ function FolderRow({
               active={doc.id === activeDocumentId}
               workspaceId={workspaceId}
               canEdit={canEdit}
+              canManageAccess={canManageAccess}
+              onManageAccess={onManageAccess}
               onSelect={onSelectDocument}
               onDeleted={onDocumentDeleted}
             />
@@ -686,24 +855,26 @@ function FolderRow({
         </>
       )}
 
+      {menu && <SheetContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+
       {confirmingDelete && (
-        <ConfirmDialog
-          title={`Delete "${folder.name}"?`}
-          // Documents survive: only the folder and its subfolders go away.
-          description={
-            countDocumentsDeep(folder) > 0
-              ? `The folder and any subfolders are deleted. ${countDocumentsDeep(folder)} document(s) inside are kept and become unfiled in All Documents.`
-              : 'The folder and any subfolders are deleted. No documents are affected.'
-          }
-          confirmLabel="Delete folder"
+        <DeleteFolderDialog
+          folder={folder}
           onCancel={() => setConfirmingDelete(false)}
-          onConfirm={() => {
+          onConfirm={(deleteDocuments) => {
             setConfirmingDelete(false);
-            remove.mutate(folder.id, {
-              onSuccess: () => toast(`Deleted "${folder.name}"`),
-              onError: (err) =>
-                toast(err instanceof Error ? err.message : 'Could not delete folder', 'error'),
-            });
+            const documentIds = documentIdsDeep(folder);
+            remove.mutate(
+              { id: folder.id, deleteDocuments },
+              {
+                onSuccess: () => {
+                  toast(deleteDocuments ? `Deleted "${folder.name}" and its documents` : `Deleted "${folder.name}"`);
+                  // Whatever was showing one of them has to move off it.
+                  if (deleteDocuments) for (const id of documentIds) onDocumentDeleted(id);
+                },
+                onError: (err) => toast(err instanceof Error ? err.message : 'Could not delete folder', 'error'),
+              },
+            );
           }}
         />
       )}
@@ -717,6 +888,8 @@ function DocumentRow({
   active,
   workspaceId,
   canEdit,
+  canManageAccess,
+  onManageAccess,
   onSelect,
   onDeleted,
 }: {
@@ -726,6 +899,8 @@ function DocumentRow({
   workspaceId: string;
   /** Viewers see no delete button rather than one the server would refuse. */
   canEdit: boolean;
+  canManageAccess: boolean;
+  onManageAccess: (target: NamedAccessTarget) => void;
   onSelect: (id: string) => void;
   /** So whatever is showing the document can move off it once it is gone. */
   onDeleted: (id: string) => void;
@@ -767,16 +942,27 @@ function DocumentRow({
           <DocumentIcon doc={doc} />
         </span>
         <span className="min-w-0 flex-1 truncate">{doc.title}</span>
+        <LockMark access={doc.access} />
         {doc.tags.slice(0, 2).map((tag) => (
           <span key={tag.id} className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tag.color }} />
         ))}
       </button>
 
-      {canEdit && (
+      {((canEdit && doc.permission === 'edit') || canManageAccess) && (
         <div className="hidden items-center group-hover:flex">
-          <IconButton label={`Delete ${doc.title}`} onClick={() => setConfirmingDelete(true)}>
-            <Icon name="trash3" />
-          </IconButton>
+          {canManageAccess && (
+            <IconButton
+              label={`Who can see ${doc.title}`}
+              onClick={() => onManageAccess({ kind: 'document', id: doc.id, name: doc.title })}
+            >
+              <Icon name="shield-lock" />
+            </IconButton>
+          )}
+          {canEdit && doc.permission === 'edit' && (
+            <IconButton label={`Delete ${doc.title}`} onClick={() => setConfirmingDelete(true)}>
+              <Icon name="trash3" />
+            </IconButton>
+          )}
         </div>
       )}
 

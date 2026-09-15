@@ -19,7 +19,7 @@ import { searchRoutes } from './routes/search.js';
 import { tagRoutes } from './routes/tags.js';
 import { commentRoutes } from './routes/comments.js';
 import { channelRoutes } from './routes/channels.js';
-import { voiceRoutes } from './routes/voice.js';
+import { voiceRoutes, voiceWebhookRoutes } from './routes/voice.js';
 import { eventRoutes } from './routes/events.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { inviteRoutes, memberRoutes } from './routes/members.js';
@@ -27,6 +27,7 @@ import { notificationRoutes } from './routes/notifications.js';
 import { oidcRoutes } from './routes/oidc.js';
 import { directRoutes } from './routes/direct.js';
 import { presenceRoutes } from './routes/presence.js';
+import { accessRoutes } from './routes/access.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -65,11 +66,11 @@ export async function buildApp() {
     // Pictures, audio, video and PDFs are shown in place; anything else is sent
     // as a download inside a sandbox, so an uploaded HTML or SVG file cannot
     // run script as the person who opens it.
-    setHeaders: (res, filePath) => {
-      res.setHeader('X-Content-Type-Options', 'nosniff');
+    setHeaders: (reply, filePath) => {
+      reply.header('X-Content-Type-Options', 'nosniff');
       if (!servesInline(filePath)) {
-        res.setHeader('Content-Disposition', 'attachment');
-        res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+        reply.header('Content-Disposition', 'attachment');
+        reply.header('Content-Security-Policy', "sandbox; default-src 'none'");
       }
     },
   });
@@ -105,9 +106,11 @@ export async function buildApp() {
     directRoutes,
     presenceRoutes,
     voiceRoutes,
+    voiceWebhookRoutes,
     eventRoutes,
     uploadRoutes,
     memberRoutes,
+    accessRoutes,
     inviteRoutes,
     notificationRoutes,
     oidcRoutes,

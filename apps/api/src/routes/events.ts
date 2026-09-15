@@ -3,6 +3,13 @@ import { createEventSchema, updateEventSchema } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
+import { documentAccess } from '../lib/access.js';
+
+/** An event can link a document in its workspace that the person linking it may see. */
+async function assertLinkable(userId: string, documentId: string, workspaceId: string): Promise<void> {
+  const access = await documentAccess(userId, documentId);
+  if (!access || access.workspaceId !== workspaceId) throw notFound('Linked document not found in this workspace');
+}
 
 const EVENT_COLUMNS = `
   e.id, e.workspace_id AS "workspaceId", e.document_id AS "documentId", e.title, e.description,
@@ -40,13 +47,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string } }>('/workspaces/:id/events', async (req, reply) => {
     await assertWorkspaceAccess(req, req.params.id, 'editor');
     const input = parse(createEventSchema, req.body);
-    if (input.documentId) {
-      const { rowCount } = await query('SELECT 1 FROM documents WHERE id = $1 AND workspace_id = $2', [
-        input.documentId,
-        req.params.id,
-      ]);
-      if (!rowCount) throw notFound('Linked document not found in this workspace');
-    }
+    if (input.documentId) await assertLinkable(req.user!.id, input.documentId, req.params.id);
     const { rows } = await query(
       `WITH inserted AS (
          INSERT INTO events (workspace_id, document_id, title, description, start_at, end_at, all_day, color)
@@ -75,6 +76,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
     if (!found[0]) throw notFound('Event not found');
     await assertWorkspaceAccess(req, found[0].workspace_id, 'editor');
     const input = parse(updateEventSchema, req.body);
+    if (input.documentId) await assertLinkable(req.user!.id, input.documentId, found[0].workspace_id);
     const { rows } = await query(
       `WITH updated AS (
          UPDATE events

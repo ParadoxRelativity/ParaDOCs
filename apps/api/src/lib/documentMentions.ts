@@ -1,5 +1,6 @@
 import { blockMentions, canvasMentions, type CanvasElement } from '@paradocs/shared';
 import { query } from '../db/pool.js';
+import { documentLevelSql } from './access.js';
 
 /**
  * Telling people they have been tagged.
@@ -44,6 +45,7 @@ export async function recordMentions(
        JOIN workspace_members m ON m.workspace_id = d.workspace_id
       WHERE d.id = $1
         AND m.user_id = ANY($2::uuid[])
+        AND ${documentLevelSql('m.user_id', 'm.role')} > 0
      ON CONFLICT (document_id, user_id) DO NOTHING`,
     [documentId, candidates, taggedBy],
   );

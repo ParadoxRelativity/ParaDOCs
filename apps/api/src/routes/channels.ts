@@ -17,11 +17,12 @@ import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js
 import { assertWorkspaceAccess, roleAtLeast, type Role } from '../plugins/session.js';
 import { resolveReferences } from '../lib/chatReferences.js';
 import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
+import { channelLevelSql, permissionSql } from '../lib/access.js';
 import { removeStoredFile, removeStoredFiles, storeUpload, uploadLimits, uploadUrlSql } from '../lib/storage.js';
 import { publishToWorkspace } from '../chat/hub.js';
 
 const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind,
-  c.position, c.created_at AS "createdAt"`;
+  c.position, c.created_at AS "createdAt", c.access`;
 
 const ATTACHMENT_COLUMNS = `a.id, a.filename, a.mime_type AS "mimeType", a.byte_size::float8 AS "byteSize",
   '/uploads/' || a.storage_key AS url, a.width, a.height`;
@@ -64,15 +65,21 @@ async function selectMessage(db: Queryable, id: string): Promise<Message> {
 }
 
 /**
- * Resolves a channel and checks the caller's role in its workspace — and, for
- * a direct conversation, that they are one of the people in it.
+ * Resolves a channel and checks the caller may see it: their role in its
+ * workspace, any lock on it, and for a direct conversation that they are one
+ * of the people in it. `post` also asks whether they may write in it.
  */
-async function channelAccess(req: FastifyRequest, channelId: string, minimum: Role = 'viewer'): Promise<ChannelAccess> {
+async function channelAccess(
+  req: FastifyRequest,
+  channelId: string,
+  { minimum = 'viewer', post = false }: { minimum?: Role; post?: boolean } = {},
+): Promise<ChannelAccess> {
   const access = await channelAccessFor(req.user!.id, channelId);
   if (!access) throw notFound('Channel not found');
   if (!roleAtLeast(access.role, minimum)) {
     throw forbidden(`This action requires the ${minimum} role or higher`);
   }
+  if (post && access.level < 2) throw forbidden('You can read this channel but not post in it');
   return access;
 }
 
@@ -97,10 +104,11 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   // --- channels ------------------------------------------------------------
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/channels', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
-    // Direct conversations are listed on their own, and only to the people in them.
+    const role = await assertWorkspaceAccess(req, req.params.id);
+    // Direct conversations are listed on their own, and only to the people in
+    // them. A channel locked away from someone is not listed to them at all.
     const { rows } = await query<Channel>(
-      `SELECT ${CHANNEL_COLUMNS},
+      `SELECT ${CHANNEL_COLUMNS}, ${permissionSql(channelLevelSql('$2', '$3'))} AS permission,
               (SELECT count(*)::int FROM messages m
                 WHERE m.channel_id = c.id
                   AND m.deleted_at IS NULL
@@ -116,9 +124,9 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
                   AND position('<@' || $2::text || '>' in lower(m.body)) > 0) AS mentions
          FROM channels c
          LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $2
-        WHERE c.workspace_id = $1 AND c.kind <> 'direct'
+        WHERE c.workspace_id = $1 AND c.kind <> 'direct' AND ${channelLevelSql('$2', '$3')} > 0
         ORDER BY c.kind, c.position, lower(c.name)`,
-      [req.params.id, req.user!.id],
+      [req.params.id, req.user!.id, role],
     );
     return rows;
   });
@@ -141,7 +149,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
                  COALESCE((SELECT max(position) + 1 FROM channels WHERE workspace_id = $1), 0))
          RETURNING *
        )
-       SELECT ${CHANNEL_COLUMNS} FROM inserted c`,
+       SELECT ${CHANNEL_COLUMNS}, 'edit' AS permission FROM inserted c`,
       [req.params.id, input.name, cleanTopic(input.topic), input.kind, req.user!.id],
     );
     channelsChanged(req.params.id);
@@ -150,7 +158,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch<{ Params: { id: string } }>('/channels/:id', async (req) => {
-    const { workspaceId, kind } = await channelAccess(req, req.params.id, 'admin');
+    const { workspaceId, kind } = await channelAccess(req, req.params.id, { minimum: 'admin' });
     if (kind === 'direct') throw badRequest('A direct conversation has no name or topic to change');
     const input = parse(updateChannelSchema, req.body);
 
@@ -171,7 +179,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
                 position = COALESCE($5, position)
           WHERE id = $1 RETURNING *
        )
-       SELECT ${CHANNEL_COLUMNS} FROM updated c`,
+       SELECT ${CHANNEL_COLUMNS}, 'edit' AS permission FROM updated c`,
       [
         req.params.id,
         input.name ?? null,
@@ -185,7 +193,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete<{ Params: { id: string } }>('/channels/:id', async (req, reply) => {
-    const { workspaceId, kind } = await channelAccess(req, req.params.id, 'admin');
+    const { workspaceId, kind } = await channelAccess(req, req.params.id, { minimum: 'admin' });
     if (kind === 'direct') throw badRequest('A direct conversation cannot be deleted');
     const { rows } = await query<{ count: number }>(
       `SELECT count(*)::int AS count FROM channels WHERE workspace_id = $1 AND kind <> 'direct'`,
@@ -235,6 +243,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
         references: await resolveReferences(
           messages.map((m) => m.body),
           workspaceId,
+          req.user!.id,
         ),
       };
     },
@@ -242,7 +251,8 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
   app.post<{ Params: { id: string } }>('/channels/:id/messages', async (req, reply) => {
     // Viewers are read-only for documents but may comment; chat follows that.
-    const access = await channelAccess(req, req.params.id);
+    // A lock can still make a channel read-only for someone.
+    const access = await channelAccess(req, req.params.id, { post: true });
     if (!carriesMessages(access.kind)) throw badRequest('That channel does not carry messages');
     const input = parse(createMessageSchema, req.body);
     const attachmentIds = input.attachmentIds ?? [];
@@ -275,7 +285,9 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
       return selectMessage(client, id);
     });
-    const references = await resolveReferences([message.body], access.workspaceId);
+    // Everyone in the channel is sent the same copy, so it names only what is
+    // open to all of them; each reader fills in the rest (GET references).
+    const references = await resolveReferences([message.body], access.workspaceId, null);
 
     // Posting is also reading: the author's own message must not come back as
     // unread the moment they send it.
@@ -294,7 +306,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/messages/:id', async (req) => {
     const found = await messageRow(req.params.id);
-    const access = await channelAccess(req, found.channel_id);
+    const access = await channelAccess(req, found.channel_id, { post: true });
     if (found.author_id !== req.user!.id) throw forbidden('You can only edit your own messages');
     if (found.deleted_at) throw badRequest('That message was deleted');
 
@@ -309,7 +321,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
     await query('UPDATE messages SET body = $2, edited_at = now() WHERE id = $1', [req.params.id, input.body]);
     const message = await selectMessage({ query }, req.params.id);
-    const references = await resolveReferences([message.body], access.workspaceId);
+    const references = await resolveReferences([message.body], access.workspaceId, null);
     await publishChannelEvent(found.channel_id, access.kind, {
       type: 'message.updated',
       workspaceId: access.workspaceId,
@@ -362,7 +374,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
    * it is sent with then claims it.
    */
   app.post<{ Params: { id: string } }>('/channels/:id/attachments', async (req, reply) => {
-    const { kind } = await channelAccess(req, req.params.id);
+    const { kind } = await channelAccess(req, req.params.id, { post: true });
     if (!carriesMessages(kind)) throw badRequest('That channel does not carry messages');
 
     const file = await req.file(uploadLimits());
@@ -417,7 +429,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   app.put<{ Params: { id: string; emoji: string } }>('/messages/:id/reactions/:emoji', async (req) => {
     const { emoji } = parse(reactionSchema, { emoji: req.params.emoji });
     const found = await messageRow(req.params.id);
-    const access = await channelAccess(req, found.channel_id);
+    const access = await channelAccess(req, found.channel_id, { post: true });
     if (found.deleted_at) throw badRequest('That message was deleted');
 
     const { rows } = await query<{ kinds: number; present: boolean }>(
@@ -441,7 +453,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   app.delete<{ Params: { id: string; emoji: string } }>('/messages/:id/reactions/:emoji', async (req) => {
     const { emoji } = parse(reactionSchema, { emoji: req.params.emoji });
     const found = await messageRow(req.params.id);
-    const access = await channelAccess(req, found.channel_id);
+    const access = await channelAccess(req, found.channel_id, { post: true });
 
     await query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [
       req.params.id,
@@ -449,6 +461,19 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
       emoji,
     ]);
     return publishReactions(found.channel_id, access, req.params.id);
+  });
+
+  /**
+   * What one message's links point at, as the reader may see them. A message
+   * pushed over the socket names only what is open to the whole workspace,
+   * since everyone in the channel receives the same copy; this fills in the
+   * rest for whoever is reading it.
+   */
+  app.get<{ Params: { id: string } }>('/messages/:id/references', async (req) => {
+    const found = await messageRow(req.params.id);
+    const access = await channelAccess(req, found.channel_id);
+    const { rows } = await query<{ body: string }>('SELECT body FROM messages WHERE id = $1', [req.params.id]);
+    return resolveReferences([rows[0]?.body ?? ''], access.workspaceId, req.user!.id);
   });
 
   // --- read state ----------------------------------------------------------

@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import type {
+  AccessSettings,
   ActivityDay,
   CalendarEvent,
   Channel,
@@ -20,6 +21,8 @@ import type {
   SheetSearchHit,
   SpreadsheetSummary,
   Tag,
+  Team,
+  UpdateAccessInput,
   UploadConfig,
   User,
   VoiceOccupant,
@@ -65,11 +68,14 @@ export const keys = {
   messages: (channelId: string) => ['messages', channelId] as const,
   directs: (ws: string) => ['directs', ws] as const,
   presence: (ws: string) => ['presence', ws] as const,
+  voiceParticipants: (ws: string) => ['voiceParticipants', ws] as const,
   presenceSettings: ['presenceSettings'] as const,
   notifications: ['notifications'] as const,
   uploadConfig: ['uploadConfig'] as const,
   spreadsheets: (ws: string) => ['spreadsheets', ws] as const,
   spreadsheet: (id: string) => ['spreadsheet', id] as const,
+  teams: (ws: string) => ['teams', ws] as const,
+  access: (kind: string, id: string) => ['access', kind, id] as const,
 };
 
 // --- session ---------------------------------------------------------------
@@ -217,8 +223,92 @@ export function useUpdateFolder(workspaceId: string) {
 export function useDeleteFolder(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.delete(`/folders/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.tree(workspaceId) }),
+    /** The documents inside are kept, unfiled, unless `deleteDocuments` says to delete them too. */
+    mutationFn: ({ id, deleteDocuments }: { id: string; deleteDocuments: boolean }) =>
+      api.delete(`/folders/${id}${deleteDocuments ? '?documents=delete' : ''}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
+      // Documents either became unfiled or are gone, which the flat listing and
+      // the workspace's document count both show.
+      qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
+      qc.invalidateQueries({ queryKey: keys.workspaces });
+    },
+  });
+}
+
+// --- teams and access ------------------------------------------------------
+
+/** Something that can be locked. */
+export interface AccessTarget {
+  kind: 'folder' | 'document' | 'channel';
+  id: string;
+}
+
+const ACCESS_PATHS = { folder: 'folders', document: 'documents', channel: 'channels' } as const;
+
+/**
+ * After who can see what changes, anything on screen may be showing too much
+ * or too little, so it is all asked for again. Loaded chat history is left
+ * alone: refetching it would drop older pages, and whether a channel is shown
+ * at all is the channel list's call.
+ */
+export function refetchAfterAccessChange(qc: QueryClient) {
+  return qc.invalidateQueries({ predicate: (query) => query.queryKey[0] !== 'messages' });
+}
+
+export function useTeams(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.teams(workspaceId ?? ''),
+    queryFn: () => api.get<Team[]>(`/workspaces/${workspaceId}/teams`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useCreateTeam(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; memberIds?: string[] }) =>
+      api.post<Team>(`/workspaces/${workspaceId}/teams`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.teams(workspaceId) }),
+  });
+}
+
+export function useUpdateTeam(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string; name?: string; memberIds?: string[] }) =>
+      api.patch<Team>(`/teams/${id}`, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.teams(workspaceId) }),
+  });
+}
+
+export function useDeleteTeam(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/teams/${id}`),
+    onSuccess: () => refetchAfterAccessChange(qc),
+  });
+}
+
+export function useAccessSettings(target: AccessTarget | null) {
+  return useQuery({
+    queryKey: keys.access(target?.kind ?? '', target?.id ?? ''),
+    queryFn: () => api.get<AccessSettings>(`/${ACCESS_PATHS[target!.kind]}/${target!.id}/access`),
+    enabled: Boolean(target),
+    // Opened to be changed, so it should show what is set now.
+    staleTime: 0,
+  });
+}
+
+export function useUpdateAccess(target: AccessTarget) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateAccessInput) =>
+      api.put<AccessSettings>(`/${ACCESS_PATHS[target.kind]}/${target.id}/access`, input),
+    onSuccess: (settings) => {
+      qc.setQueryData(keys.access(target.kind, target.id), settings);
+      void refetchAfterAccessChange(qc);
+    },
   });
 }
 
@@ -929,6 +1019,8 @@ export interface CallCredentials {
   token: string;
   room: string;
   channelName: string;
+  /** False where a lock lets this person listen but not speak. Absent from older servers. */
+  canSpeak?: boolean;
 }
 
 export function useVoiceConfig() {
@@ -944,12 +1036,11 @@ export function useVoiceConfig() {
 /** Who is in each voice channel, keyed by channel id. */
 export function useVoiceParticipants(workspaceId: string | undefined, enabled: boolean) {
   return useQuery({
-    queryKey: ['voiceParticipants', workspaceId],
+    queryKey: keys.voiceParticipants(workspaceId ?? ''),
     queryFn: () => api.get<Record<string, VoiceOccupant[]>>(`/workspaces/${workspaceId}/voice/participants`),
     enabled: Boolean(workspaceId) && enabled,
-    // Rooms fill and empty without telling us, so this is polled while the
-    // chat tab is open and not at all otherwise.
-    refetchInterval: 10_000,
+    // Not polled: the chat socket brings each change as LiveKit reports it
+    // (voice.changed), and a reconnect asks again for whatever was missed.
   });
 }
 

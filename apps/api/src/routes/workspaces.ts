@@ -1,10 +1,18 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { createFolderSchema, createWorkspaceSchema, updateFolderSchema, updateWorkspaceSchema } from '@paradocs/shared';
-import type { FolderNode } from '@paradocs/shared';
+import type { AccessMode, FolderNode } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
-import { badRequest, notFound, parse } from '../lib/http.js';
+import { badRequest, forbidden, parse } from '../lib/http.js';
 import { slugify } from '../lib/auth.js';
-import { DOCUMENT_SUMMARY_COLUMNS } from '../lib/documentColumns.js';
+import { documentSummaryColumns } from '../lib/documentColumns.js';
+import {
+  assertFolderAccess,
+  assertMoveKeepsAccess,
+  documentLevelSql,
+  folderLevelSql,
+  managesAccess,
+  permissionOf,
+} from '../lib/access.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
 import { removeStoredFile, removeStoredFiles, uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
@@ -21,7 +29,16 @@ interface FolderRow {
   icon: string | null;
   position: number;
   created_at: string;
+  access: AccessMode;
+  level: number;
 }
+
+/** A folder and every folder beneath it, as a CTE named `sub`. Takes the folder id as $1. */
+const SUBTREE = `WITH RECURSIVE sub AS (
+  SELECT id FROM folders WHERE id = $1
+  UNION ALL
+  SELECT f.id FROM folders f JOIN sub ON f.parent_id = sub.id
+)`;
 
 export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
@@ -31,7 +48,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       `SELECT w.id, w.name, w.slug, w.icon, ${uploadUrlSql('w.avatar_key')} AS "avatarUrl",
               w.created_at AS "createdAt", m.role,
               (SELECT count(*) FROM documents d
-                WHERE d.workspace_id = w.id AND d.archived_at IS NULL) AS "documentCount",
+                WHERE d.workspace_id = w.id AND d.archived_at IS NULL
+                  AND ${documentLevelSql('$1', 'm.role')} > 0) AS "documentCount",
               (SELECT count(*) FROM workspace_members wm
                 WHERE wm.workspace_id = w.id) AS "memberCount"
          FROM workspace_members m
@@ -139,22 +157,29 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
    * Folder tree plus the documents in each folder, for the left sidebar.
    * Unfiled documents are deliberately excluded: the sidebar shows organized
    * documents only, and everything else lives in the All Documents view.
+   *
+   * Only what the reader may see is included. The nearest setting wins, so a
+   * document can be open to someone inside a folder that is not; its folders
+   * are kept as the path to it, marked `none`, and a folder with nothing in it
+   * they may see is left out altogether.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/tree', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id);
 
     const [{ rows: folders }, { rows: documents }] = await Promise.all([
       query<FolderRow>(
-        `SELECT id, workspace_id, parent_id, name, icon, position, created_at
+        `SELECT id, workspace_id, parent_id, name, icon, position, created_at, access,
+                ${folderLevelSql('$2', '$3', 'id')} AS level
            FROM folders WHERE workspace_id = $1 ORDER BY position, name`,
-        [req.params.id],
+        [req.params.id, req.user!.id, role],
       ),
       query(
-        `SELECT ${DOCUMENT_SUMMARY_COLUMNS}
+        `SELECT ${documentSummaryColumns('$2', '$3')}
            FROM documents d
           WHERE d.workspace_id = $1 AND d.archived_at IS NULL AND d.folder_id IS NOT NULL
+            AND ${documentLevelSql('$2', '$3')} > 0
           ORDER BY d.title`,
-        [req.params.id],
+        [req.params.id, req.user!.id, role],
       ),
     ]);
 
@@ -168,6 +193,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         icon: f.icon,
         position: f.position,
         createdAt: f.created_at,
+        access: f.access,
+        permission: permissionOf(f.level),
         children: [],
         documents: [],
       });
@@ -185,19 +212,20 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       nodes.get(doc.folderId as string)?.documents.push(doc as never);
     }
 
-    return { folders: roots };
+    const visible = (node: FolderNode): boolean => {
+      node.children = node.children.filter(visible);
+      return node.permission !== 'none' || node.children.length > 0 || node.documents.length > 0;
+    };
+
+    return { folders: roots.filter(visible) };
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/folders', async (req, reply) => {
     await assertWorkspaceAccess(req, req.params.id, 'editor');
     const input = parse(createFolderSchema, req.body);
-    if (input.parentId) {
-      const { rowCount } = await query('SELECT 1 FROM folders WHERE id = $1 AND workspace_id = $2', [
-        input.parentId,
-        req.params.id,
-      ]);
-      if (!rowCount) throw notFound('Parent folder not found');
-    }
+    // A subfolder is something put in its parent, which takes being allowed to
+    // change what is in it.
+    if (input.parentId) await assertFolderAccess(req, input.parentId, 'edit', req.params.id);
     const { rows } = await query(
       `INSERT INTO folders (workspace_id, parent_id, name, icon, position)
        VALUES ($1, $2, $3, $4, COALESCE($5, (
@@ -213,25 +241,28 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/folders/:id', async (req) => {
     const input = parse(updateFolderSchema, req.body);
-    const { rows: found } = await query<{ workspace_id: string }>(
-      'SELECT workspace_id FROM folders WHERE id = $1',
-      [req.params.id],
-    );
-    if (!found[0]) throw notFound('Folder not found');
-    await assertWorkspaceAccess(req, found[0].workspace_id, 'editor');
+    const { workspaceId, role } = await assertFolderAccess(req, req.params.id, 'edit');
 
-    if (input.parentId) {
-      if (input.parentId === req.params.id) throw badRequest('A folder cannot be its own parent');
-      // Walk up from the proposed parent; if we meet this folder, the move would cycle.
-      const { rows: cycle } = await query<{ id: string }>(
-        `WITH RECURSIVE up AS (
-           SELECT id, parent_id FROM folders WHERE id = $1
-           UNION ALL
-           SELECT f.id, f.parent_id FROM folders f JOIN up ON f.id = up.parent_id
-         ) SELECT id FROM up WHERE id = $2`,
-        [input.parentId, req.params.id],
+    if (input.parentId !== undefined) {
+      if (input.parentId) {
+        if (input.parentId === req.params.id) throw badRequest('A folder cannot be its own parent');
+        await assertFolderAccess(req, input.parentId, 'edit', workspaceId);
+        // Walk up from the proposed parent; if we meet this folder, the move would cycle.
+        const { rows: cycle } = await query<{ id: string }>(
+          `WITH RECURSIVE up AS (
+             SELECT id, parent_id FROM folders WHERE id = $1
+             UNION ALL
+             SELECT f.id, f.parent_id FROM folders f JOIN up ON f.id = up.parent_id
+           ) SELECT id FROM up WHERE id = $2`,
+          [input.parentId, req.params.id],
+        );
+        if (cycle.length) throw badRequest('That move would nest a folder inside itself');
+      }
+      const { rows: current } = await query<{ access: string; parent_id: string | null }>(
+        'SELECT access, parent_id FROM folders WHERE id = $1',
+        [req.params.id],
       );
-      if (cycle.length) throw badRequest('That move would nest a folder inside itself');
+      await assertMoveKeepsAccess(role, { access: current[0].access, folderId: current[0].parent_id }, input.parentId ?? null);
     }
 
     const { rows } = await query(
@@ -257,14 +288,76 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     return rows[0];
   });
 
-  app.delete<{ Params: { id: string } }>('/folders/:id', async (req, reply) => {
-    const { rows } = await query<{ workspace_id: string }>('SELECT workspace_id FROM folders WHERE id = $1', [
-      req.params.id,
-    ]);
-    if (!rows[0]) throw notFound('Folder not found');
-    await assertWorkspaceAccess(req, rows[0].workspace_id, 'editor');
-    // Subfolders cascade; documents inside are kept and fall back to the root.
-    await query('DELETE FROM folders WHERE id = $1', [req.params.id]);
+  /**
+   * Deletes a folder and its subfolders. The documents inside are kept and
+   * become unfiled, or, with `?documents=delete`, are deleted along with it.
+   */
+  app.delete<{ Params: { id: string }; Querystring: { documents?: string } }>('/folders/:id', async (req, reply) => {
+    const { role } = await assertFolderAccess(req, req.params.id, 'edit');
+    const deleteDocuments = req.query.documents === 'delete';
+    if (!managesAccess(role)) {
+      // Subfolders go with it, so someone who could not change one of them
+      // cannot delete it by deleting its parent.
+      const { rows: locked } = await query(
+        `${SUBTREE} SELECT 1 FROM sub WHERE ${folderLevelSql('$2', '$3', 'sub.id')} < 2 LIMIT 1`,
+        [req.params.id, req.user!.id, role],
+      );
+      if (locked.length) throw forbidden('This folder holds folders you cannot change, so you cannot delete it');
+      // The same goes for documents, including ones locked away from them that
+      // they could not even see were there.
+      if (deleteDocuments) {
+        const { rows: protectedDocs } = await query(
+          `${SUBTREE}
+           SELECT 1 FROM documents d
+            WHERE d.folder_id IN (SELECT id FROM sub) AND ${documentLevelSql('$2', '$3')} < 2
+            LIMIT 1`,
+          [req.params.id, req.user!.id, role],
+        );
+        if (protectedDocs.length) {
+          throw forbidden('This folder holds documents you cannot change, so they cannot be deleted with it');
+        }
+      }
+    }
+
+    if (deleteDocuments) {
+      await transaction(async (client) => {
+        await client.query(`${SUBTREE} DELETE FROM documents WHERE folder_id IN (SELECT id FROM sub)`, [req.params.id]);
+        await client.query('DELETE FROM folders WHERE id = $1', [req.params.id]);
+      });
+      reply.status(204);
+      return;
+    }
+
+    await transaction(async (client) => {
+      // Subfolders cascade; documents inside are kept and fall back to the
+      // root. One that took its access from a folder takes that setting along,
+      // written onto itself, so deleting a folder never opens what was in it.
+      const { rows: carried } = await client.query<{ id: string; governor: string }>(
+        `${SUBTREE}
+         SELECT d.id, access_folder_governor(d.folder_id) AS governor
+           FROM documents d
+          WHERE d.folder_id IN (SELECT id FROM sub)
+            AND d.access = 'inherit'
+            AND access_folder_governor(d.folder_id) IS NOT NULL`,
+        [req.params.id],
+      );
+      const byGovernor = new Map<string, string[]>();
+      for (const row of carried) byGovernor.set(row.governor, [...(byGovernor.get(row.governor) ?? []), row.id]);
+      for (const [governor, ids] of byGovernor) {
+        await client.query(
+          'UPDATE documents SET access = (SELECT access FROM folders WHERE id = $1) WHERE id = ANY($2::uuid[])',
+          [governor, ids],
+        );
+        await client.query(
+          `INSERT INTO access_entries (document_id, team_id, user_id, level)
+           SELECT d.id, e.team_id, e.user_id, e.level
+             FROM access_entries e CROSS JOIN unnest($2::uuid[]) AS d(id)
+            WHERE e.folder_id = $1`,
+          [governor, ids],
+        );
+      }
+      await client.query('DELETE FROM folders WHERE id = $1', [req.params.id]);
+    });
     reply.status(204);
   });
 };

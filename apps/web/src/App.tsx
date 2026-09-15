@@ -536,6 +536,7 @@ function Workspace({
             documentId={documentId ?? null}
             onSelectDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
             canEdit={canEdit}
+            canManageAccess={canManageChannels}
             onDocumentDeleted={(id) => {
               // Deleting the document you are reading has to move you off it,
               // or the page sits on something the server no longer has.
@@ -647,7 +648,7 @@ function Workspace({
           {!chat && !sheets && !allDocuments && document.data && !document.data.isJournal && (
             <ModeSwitch
               mode={document.data.mode}
-              disabled={!canEdit}
+              disabled={!canEdit || document.data.permission !== 'edit'}
               onChange={(mode) => patch({ mode })}
             />
           )}
@@ -702,7 +703,8 @@ function Workspace({
                 channel={activeChannel}
                 channels={channelList}
                 selfId={userId}
-                canPost={Boolean(workspace)}
+                // A lock can leave a channel readable but not writable.
+                canPost={Boolean(workspace) && activeChannel.permission !== 'view'}
                 // No one moderates a conversation they are not part of.
                 canModerate={canManageChannels && !direct}
                 canEditChannel={canManageChannels && activeChannel.kind === 'text'}
@@ -793,7 +795,8 @@ function Workspace({
                 doc={document.data}
                 workspaceId={workspaceId}
                 dark={dark}
-                canEdit={canEdit}
+                // The workspace role, and then any lock on this document.
+                canEdit={canEdit && document.data.permission === 'edit'}
                 self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
                 onPatch={patch}
                 onBlocksChange={setLiveBlocks}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   attachmentSummary,
+  collectReferences,
   mentions,
   messagePreview,
   type CallEvent,
@@ -10,8 +11,10 @@ import {
   type ChatMessageEvent,
   type MessageReferences,
   type PresenceStatus,
+  type VoiceOccupant,
 } from '@paradocs/shared';
-import { keys, type MessagePage } from '../api/hooks';
+import { api } from '../api/client';
+import { keys, refetchAfterAccessChange, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
 import { setTyping } from './typing';
 
@@ -120,6 +123,26 @@ export function useChatEvents({
         return { ...current, references, messages };
       });
 
+      // A message pushed to a whole channel names only what is open to all of
+      // it. Anything else it links — a team's document in a team's channel —
+      // is asked for as this reader, who may well be allowed to see it.
+      if (qc.getQueryData(keys.messages(channelId))) {
+        const linked = collectReferences([event.message.body]);
+        const unnamed =
+          linked.documentIds.some((id) => !event.references.documents.some((d) => d.id === id)) ||
+          linked.channelIds.some((id) => !event.references.channels.some((c) => c.id === id));
+        if (unnamed) {
+          void api
+            .get<MessageReferences>(`/messages/${event.message.id}/references`)
+            .then((resolved) =>
+              qc.setQueryData<MessagePage>(keys.messages(channelId), (current) =>
+                current ? { ...current, references: mergeReferences(current.references, resolved) } : current,
+              ),
+            )
+            .catch(() => {});
+        }
+      }
+
       if (event.type !== 'message.created') return;
       const author = event.message.author;
       // What they were typing has arrived.
@@ -179,6 +202,19 @@ export function useChatEvents({
           void qc.invalidateQueries({ queryKey: keys.presence(event.workspaceId) });
           void qc.invalidateQueries({ queryKey: keys.workspaces });
           return;
+        case 'access.changed':
+          void refetchAfterAccessChange(qc);
+          return;
+        case 'voice.changed':
+          qc.setQueryData<Record<string, VoiceOccupant[]>>(keys.voiceParticipants(event.workspaceId), (current) => {
+            if (!current) return current;
+            const next = { ...current };
+            // The server leaves an empty room out, so the cache does too.
+            if (event.occupants.length > 0) next[event.channelId] = event.occupants;
+            else delete next[event.channelId];
+            return next;
+          });
+          return;
         case 'call.ringing':
         case 'call.ended':
           callHandler.current(event);
@@ -202,11 +238,13 @@ export function useChatEvents({
     [send],
   );
 
-  // Whatever changed while the socket was down went unheard. Who is around and
-  // the direct conversation list are cheap to ask for again.
+  // Whatever changed while the socket was down went unheard. Who is around, who
+  // is in which voice channel and the direct conversation list are cheap to ask
+  // for again.
   useEffect(() => {
     if (status !== 'connected' || !workspaceId) return;
     void qc.invalidateQueries({ queryKey: keys.presence(workspaceId) });
+    void qc.invalidateQueries({ queryKey: keys.voiceParticipants(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
   }, [status, workspaceId, qc]);
 

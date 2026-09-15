@@ -147,6 +147,49 @@ export type SearchQuery = z.infer<typeof searchQuerySchema>;
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
 export type CreateEventInput = z.infer<typeof createEventSchema>;
 
+// --- access ------------------------------------------------------------------
+
+export const accessModeSchema = z.enum(['inherit', 'open', 'allow', 'deny']);
+export const permissionSchema = z.enum(['none', 'view', 'edit']);
+
+const accessEntryInputSchema = z
+  .object({ teamId: uuid.optional(), userId: uuid.optional(), permission: permissionSchema })
+  .refine((entry) => Boolean(entry.teamId) !== Boolean(entry.userId), 'Each entry names one team or one person');
+
+/**
+ * A folder's, document's or channel's access. Entries only mean anything on an
+ * allow or deny list, and are dropped otherwise, so switching a lock off and on
+ * again in the dialog does not have to clear what was listed.
+ */
+export const updateAccessSchema = z
+  .object({ access: accessModeSchema, entries: z.array(accessEntryInputSchema).max(500).default([]) })
+  .superRefine((value, ctx) => {
+    if (value.access !== 'allow' && value.access !== 'deny') return;
+    const seen = new Set<string>();
+    value.entries.forEach((entry, index) => {
+      const subject = entry.teamId ?? entry.userId ?? '';
+      const issue = (message: string) =>
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['entries', index], message });
+      if (seen.has(subject)) issue('The same team or person is listed twice');
+      seen.add(subject);
+      if (value.access === 'allow' && entry.permission === 'none') issue('An allow list gives view or edit access');
+      if (value.access === 'deny' && entry.permission === 'edit') issue('A deny list can only take access away');
+    });
+  });
+
+export const createTeamSchema = z.object({
+  name: z.string().trim().min(1, 'Name the team').max(60),
+  memberIds: z.array(uuid).max(1000).default([]),
+});
+
+export const updateTeamSchema = z.object({
+  name: z.string().trim().min(1, 'Name the team').max(60).optional(),
+  /** The whole membership, replacing what was there. */
+  memberIds: z.array(uuid).max(1000).optional(),
+});
+
+export type UpdateAccessInput = z.infer<typeof updateAccessSchema>;
+
 // --- spreadsheets ------------------------------------------------------------
 
 export const createSpreadsheetSchema = z.object({

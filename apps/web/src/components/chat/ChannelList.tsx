@@ -12,6 +12,7 @@ import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { cx } from '../../lib/util';
 import { ChannelSettingsDialog } from './ChannelSettingsDialog';
 import { DirectMessageDialog } from './DirectMessageDialog';
+import { LockMark, type NamedAccessTarget } from '../AccessDialog';
 
 /**
  * The channel list, shown in place of the folder tree while the chat tab is
@@ -32,6 +33,7 @@ export function ChannelList({
   connectedChannelId,
   poppedOut,
   onSelect,
+  onManageAccess,
 }: {
   workspaceId: string;
   channels: Channel[];
@@ -50,6 +52,8 @@ export function ChannelList({
   /** Conversations open in windows of their own, in the desktop app. */
   poppedOut: string[];
   onSelect: (id: string) => void;
+  /** Opens who can see a channel. Offered wherever `canManage` is. */
+  onManageAccess: (target: NamedAccessTarget) => void;
 }) {
   const createChannel = useCreateChannel(workspaceId);
   const deleteChannel = useDeleteChannel(workspaceId);
@@ -106,6 +110,14 @@ export function ChannelList({
   const text = channels.filter((c) => c.kind === 'text');
   const voice = channels.filter((c) => c.kind === 'voice');
 
+  const secure = (channel: Channel) =>
+    onManageAccess({
+      kind: 'channel',
+      id: channel.id,
+      name: channel.kind === 'voice' ? channel.name : `#${channel.name}`,
+      channelKind: channel.kind === 'voice' ? 'voice' : 'text',
+    });
+
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2">
       <Group
@@ -127,6 +139,7 @@ export function ChannelList({
             poppedOut={poppedOut.includes(channel.id)}
             onSelect={onSelect}
             onEdit={setEditing}
+            onSecure={secure}
             onDelete={remove}
           />
         ))}
@@ -156,6 +169,7 @@ export function ChannelList({
               people={occupancy[channel.id] ?? []}
               onSelect={onSelect}
               onEdit={setEditing}
+              onSecure={secure}
               onDelete={remove}
             />
           ))}
@@ -287,6 +301,7 @@ function TextRow({
   poppedOut,
   onSelect,
   onEdit,
+  onSecure,
   onDelete,
 }: {
   channel: Channel;
@@ -296,6 +311,7 @@ function TextRow({
   poppedOut: boolean;
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
+  onSecure: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
 }) {
   const unread = channel.unread ?? 0;
@@ -308,6 +324,7 @@ function TextRow({
       workspaceId={workspaceId}
       onSelect={onSelect}
       onEdit={onEdit}
+      onSecure={onSecure}
       onDelete={onDelete}
     >
       <span className="text-[var(--color-muted)]">#</span>
@@ -320,6 +337,7 @@ function TextRow({
       >
         {channel.name}
       </span>
+      <LockMark access={channel.access} />
       {poppedOut && <ElsewhereMark name={`#${channel.name}`} />}
       {/* A mention count replaces the unread count rather than sitting beside
           it: two numbers on one row is a puzzle, and the one that names you is
@@ -353,6 +371,7 @@ function VoiceRow({
   people,
   onSelect,
   onEdit,
+  onSecure,
   onDelete,
 }: {
   channel: Channel;
@@ -364,6 +383,7 @@ function VoiceRow({
   people: VoiceOccupant[];
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
+  onSecure: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
 }) {
   return (
@@ -375,12 +395,14 @@ function VoiceRow({
         workspaceId={workspaceId}
         onSelect={onSelect}
         onEdit={onEdit}
+        onSecure={onSecure}
         onDelete={onDelete}
       >
         <Icon name="volume-up" className="text-[var(--color-muted)]" />
         <span title={channel.topic ?? undefined} className="min-w-0 flex-1 truncate">
           {channel.name}
         </span>
+        <LockMark access={channel.access} />
         {poppedOut && <ElsewhereMark name={channel.name} />}
         {/* Which room you are actually in, as distinct from which one you are
             looking at — they are often not the same once a call outlives the
@@ -479,6 +501,7 @@ function Row({
   workspaceId,
   onSelect,
   onEdit,
+  onSecure,
   onDelete,
   children,
 }: {
@@ -488,6 +511,7 @@ function Row({
   workspaceId: string;
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
+  onSecure: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
   children: React.ReactNode;
 }) {
@@ -509,6 +533,9 @@ function Row({
         <span className="absolute right-1 top-1/2 flex -translate-y-1/2 rounded-md bg-[var(--color-surface)] opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           <IconButton label={`Edit ${channel.name}`} onClick={() => onEdit(channel)}>
             <Icon name="pencil" />
+          </IconButton>
+          <IconButton label={`Who can see ${channel.name}`} onClick={() => onSecure(channel)}>
+            <Icon name="shield-lock" />
           </IconButton>
           <IconButton label={`Delete ${channel.name}`} onClick={() => onDelete(channel)}>
             <Icon name="trash3" />

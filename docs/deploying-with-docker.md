@@ -227,6 +227,12 @@ call fails with "Could not reach the voice service at …". While it is set,
 and `LIVEKIT_API_SECRET` can stay: when set, they are used instead of generated
 keys. Then replace `docker-compose.yml` as described in section 9.
 
+LiveKit tells the app when people join and leave a voice channel, through a
+webhook set up in `docker-compose.yml`. With a `docker-compose.yml` from before
+that was added, the Chat sidebar only updates who is in a voice channel when the
+page loads or reconnects, or when you join or leave one yourself. Replace it as
+described in section 9.
+
 All call media uses the single UDP port 7882, however many people are in calls.
 The port numbers are what browsers are told, so they are best left as they are.
 

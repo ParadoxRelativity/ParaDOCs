@@ -7,6 +7,7 @@ import {
   type SpreadsheetReference,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
+import { channelLevelSql, documentLevelSql, roleSql } from './access.js';
 
 export type {
   ChannelReference,
@@ -24,10 +25,16 @@ export type {
  * trip. Everything is constrained to the workspace the channel belongs to: a
  * message body is user input, and an id pasted from elsewhere must not be able
  * to read back a title from a workspace the reader cannot see.
+ *
+ * Documents and channels are also constrained to what the reader may see, so a
+ * link to something locked does not give away its title. With no reader — a
+ * message pushed to everyone in a channel at once — only what is open to the
+ * whole workspace is named, and each reader asks for the rest themselves.
  */
 export async function resolveReferences(
   bodies: string[],
   workspaceId: string,
+  viewerId: string | null,
 ): Promise<MessageReferences> {
   const { documentIds, spreadsheetIds, channelIds, userIds } = collectReferences(bodies);
   const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [] };
@@ -40,11 +47,16 @@ export async function resolveReferences(
     return empty;
   }
 
+  const viewerRole = roleSql('$3', '$2');
+  const viewer = viewerId ? [viewerId] : [];
+
   const [documents, spreadsheets, channels, members] = await Promise.all([
     documentIds.length
       ? query<DocumentReference>(
-          `SELECT id, title, icon, mode FROM documents WHERE id = ANY($1::uuid[]) AND workspace_id = $2`,
-          [documentIds, workspaceId],
+          `SELECT d.id, d.title, d.icon, d.mode FROM documents d
+            WHERE d.id = ANY($1::uuid[]) AND d.workspace_id = $2
+              AND ${viewerId ? `${documentLevelSql('$3', viewerRole)} > 0` : 'document_is_open(d.access, d.folder_id)'}`,
+          [documentIds, workspaceId, ...viewer],
         ).then((r) => r.rows)
       : Promise.resolve([]),
     spreadsheetIds.length
@@ -59,8 +71,10 @@ export async function resolveReferences(
     channelIds.length
       ? query<ChannelReference>(
           // A direct conversation has no name, and its existence is its own business.
-          `SELECT id, name, kind FROM channels WHERE id = ANY($1::uuid[]) AND workspace_id = $2 AND kind <> 'direct'`,
-          [channelIds, workspaceId],
+          `SELECT c.id, c.name, c.kind FROM channels c
+            WHERE c.id = ANY($1::uuid[]) AND c.workspace_id = $2 AND c.kind <> 'direct'
+              AND ${viewerId ? `${channelLevelSql('$3', viewerRole)} > 0` : `c.access = 'open'`}`,
+          [channelIds, workspaceId, ...viewer],
         ).then((r) => r.rows)
       : Promise.resolve([]),
     userIds.length

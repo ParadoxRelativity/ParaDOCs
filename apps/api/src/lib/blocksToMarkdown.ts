@@ -26,6 +26,9 @@ interface Block {
 function renderInline(content: StyledText[] | string | undefined): string {
   if (!content) return '';
   if (typeof content === 'string') return content;
+  // A table's content is an object of rows rather than inline content; the
+  // table case renders its cells itself.
+  if (!Array.isArray(content)) return '';
   return content
     .map((node) => {
       if (node.type === 'link') {
@@ -83,9 +86,14 @@ function renderBlock(block: Block, depth: number): string[] {
       break;
     }
     case 'table': {
-      const rows = (block.content as unknown as { rows?: { cells: StyledText[][] }[] } | undefined)?.rows ?? [];
+      // A cell is its inline content, or, as the editor now saves it, a
+      // tableCell object holding that content.
+      type Cell = StyledText[] | string | { content?: StyledText[] | string };
+      const rows = (block.content as unknown as { rows?: { cells: Cell[] }[] } | undefined)?.rows ?? [];
       rows.forEach((row, index) => {
-        const cells = row.cells.map((cell) => renderInline(cell).replace(/\|/g, '\\|'));
+        const cells = row.cells.map((cell) =>
+          renderInline(Array.isArray(cell) || typeof cell === 'string' ? cell : cell?.content).replace(/\|/g, '\\|'),
+        );
         lines.push(`| ${cells.join(' | ')} |`);
         if (index === 0) lines.push(`| ${cells.map(() => '---').join(' | ')} |`);
       });

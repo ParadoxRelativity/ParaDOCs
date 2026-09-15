@@ -182,6 +182,14 @@ configs:
       # Written by the app, which shares the same keys.
       key_file: /keys/keys.yaml
 
+      # Tells the app as people join and leave, so everyone's channel list shows
+      # who is in a voice channel straight away. Signed with the shared key:
+      # the one set in .env, or the generated one, which is named paradocs.
+      webhook:
+        api_key: ${LIVEKIT_API_KEY:-paradocs}
+        urls:
+          - http://app:4000/api/voice/webhook
+
       rtc:
         # Media over TCP, for networks that block UDP. Networks that allow only
         # web traffic need TURN over TLS instead, which is not enabled here; see

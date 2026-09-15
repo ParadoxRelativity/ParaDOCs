@@ -1,7 +1,7 @@
 appId: com.paradocs.desktop
 # Stated explicitly: electron lives in the workspace root's node_modules, where
 # electron-builder's own lookup does not find it.
-electronVersion: 33.4.11
+electronVersion: 44.4.0
 productName: ParaDOCs
 copyright: Copyright © ParaDOCs contributors
 
@@ -49,6 +49,10 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
+  # Electron 39 and later require this for desktopCapturer, which the screen
+  # share picker uses, even though system audio is only captured on Windows.
+  extendInfo:
+    NSAudioCaptureUsageDescription: ParaDOCs shares your screen in calls when you choose to.
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { searchQuerySchema } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { parse } from '../lib/http.js';
+import { documentLevelSql } from '../lib/access.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
 /**
@@ -82,7 +83,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: Record<string, string | string[]> }>(
     '/workspaces/:id/search',
     async (req) => {
-      await assertWorkspaceAccess(req, req.params.id);
+      const role = await assertWorkspaceAccess(req, req.params.id);
       const raw = req.query;
       const input = parse(searchQuerySchema, {
         ...raw,
@@ -129,6 +130,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         // Inclusive of the end day.
         where.push(`d.updated_at < ($${params.length}::date + interval '1 day')`);
       }
+
+      // Nothing locked away from the reader turns up, however well it matches.
+      params.push(req.user!.id, role);
+      where.push(`${documentLevelSql(`$${params.length - 1}`, `$${params.length}`)} > 0`);
 
       const rankExpr = tsquery ? `ts_rank(d.search, to_tsquery('english', $2))` : '0';
       const snippetExpr = tsquery

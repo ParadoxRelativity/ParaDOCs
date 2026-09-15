@@ -24,13 +24,9 @@ import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions } from '..
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
 import { setLiveDocumentLookup } from '../lib/liveDocuments.js';
 import { documentSchema } from './documentSchema.js';
-import {
-  SESSION_COOKIE,
-  documentAccessForUser,
-  resolveSession,
-  roleAtLeast,
-  type SessionUser,
-} from '../plugins/session.js';
+import { SESSION_COOKIE, documentAccessForUser, resolveSession, type SessionUser } from '../plugins/session.js';
+import { UUID } from '../lib/access.js';
+import { onAccessChanged } from '../lib/accessEvents.js';
 
 export const COLLAB_PATH = '/collab';
 
@@ -84,8 +80,9 @@ export function createCollabServer(log: FastifyBaseLogger) {
         // Rejects the connection rather than silently serving an empty document.
         throw new Error('No access to this document');
       }
-      // Viewers may follow along and see cursors, but their edits are refused.
-      connection.readOnly = !roleAtLeast(access.role, 'editor');
+      // Viewers, and anyone a lock allows only to view, may follow along and
+      // see cursors, but their edits are refused.
+      connection.readOnly = !access.canEdit;
     },
 
     /**
@@ -249,6 +246,24 @@ export function createCollabServer(log: FastifyBaseLogger) {
   // not from the save a couple of seconds behind it.
   setLiveDocumentLookup((name) => hocuspocus.documents.get(name));
 
+  // Access checked when someone opened a document says nothing about access
+  // now. When it changes in a workspace, that workspace's open documents drop
+  // their connections. Every client reconnects straight away, and reconnecting
+  // goes through onConnect again: someone locked out is refused, and someone
+  // cut down to viewing comes back read-only.
+  const stopAccess = onAccessChanged((workspaceId) => {
+    const open = [...hocuspocus.documents.keys()].filter((name) => UUID.test(name));
+    if (open.length === 0) return;
+    query<{ id: string }>('SELECT id FROM documents WHERE workspace_id = $1 AND id = ANY($2::uuid[])', [
+      workspaceId,
+      open,
+    ])
+      .then(({ rows }) => {
+        for (const row of rows) hocuspocus.closeConnections(row.id);
+      })
+      .catch((err) => log.warn({ err, workspaceId }, 'could not recheck access to open documents'));
+  });
+
   const wss = new WebSocketServer({ noServer: true });
 
   /**
@@ -281,6 +296,7 @@ export function createCollabServer(log: FastifyBaseLogger) {
   }
 
   async function close() {
+    stopAccess();
     await hocuspocus.destroy();
     wss.close();
   }

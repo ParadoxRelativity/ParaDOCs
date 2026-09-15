@@ -13,6 +13,7 @@ import {
 import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
+import { channelLevelSql, documentLevelSql } from '../lib/access.js';
 import { uploadUrlSql } from '../lib/storage.js';
 
 const PREVIEW_LENGTH = 200;
@@ -75,12 +76,15 @@ const WORKSPACE_SELECT = `w.id AS workspace_id, w.name AS workspace_name, w.icon
   ${uploadUrlSql('w.avatar_key')} AS workspace_avatar_url`;
 
 /**
- * The channels a person can read messages in: every text channel of their
- * workspaces, and the direct conversations they are part of. Expects the
- * channel as `c` and the person's id as $1.
+ * The channels a person can read messages in: the text channels of their
+ * workspaces not locked away from them, and the direct conversations they are
+ * part of. Expects the channel as `c` and the person's id as $1; `role` is SQL
+ * for their role in the channel's workspace.
  */
-const READABLE_CHANNEL = `(c.kind = 'text' OR (c.kind = 'direct' AND EXISTS (
+function readableChannel(role: string): string {
+  return `((c.kind = 'text' AND ${channelLevelSql('$1', role)} > 0) OR (c.kind = 'direct' AND EXISTS (
   SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = $1)))`;
+}
 
 function workspaceOf(row: WorkspaceColumns): NotificationWorkspace {
   return {
@@ -138,7 +142,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
                 ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
            FROM workspace_members wm
            JOIN workspaces w ON w.id = wm.workspace_id
-           JOIN channels c ON c.workspace_id = w.id AND ${READABLE_CHANNEL}
+           JOIN channels c ON c.workspace_id = w.id AND ${readableChannel('wm.role')}
            LEFT JOIN LATERAL (
              SELECT u.name
                FROM channel_members other
@@ -175,9 +179,9 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           LIMIT ${MAX_CHANNELS}`,
         [user.id],
       ),
-      // Documents and canvases someone has tagged this person in. Membership is
-      // rechecked here rather than trusted from when the tag was written: being
-      // taken out of a workspace has to take its tags with it.
+      // Documents and canvases someone has tagged this person in. Membership and
+      // locks are rechecked here rather than trusted from when the tag was
+      // written: losing access to a document has to take its tags with it.
       query<MentionRow>(
         `SELECT dm.document_id, dm.created_at, d.title, d.mode,
                 ${WORKSPACE_SELECT},
@@ -192,6 +196,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
             AND dm.read_at IS NULL
             -- An archived document is off the shelf; a tag in one is not news.
             AND d.archived_at IS NULL
+            AND ${documentLevelSql('$1', 'wm.role')} > 0
           ORDER BY dm.created_at DESC
           LIMIT ${MAX_MENTIONS}`,
         [user.id],
@@ -202,7 +207,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       channelRows.map(async (row) => {
         // References are resolved within the message's own workspace, as the
         // chat view does, so a pasted id cannot read a title from elsewhere.
-        const references = await resolveReferences([row.body], row.workspace_id);
+        const references = await resolveReferences([row.body], row.workspace_id, user.id);
         return {
           channelId: row.channel_id,
           channelName: row.channel_name,
@@ -257,7 +262,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
        SELECT c.id, $1, now()
          FROM channels c
          JOIN workspace_members m ON m.workspace_id = c.workspace_id AND m.user_id = $1
-        WHERE ${READABLE_CHANNEL} AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
+        WHERE ${readableChannel('m.role')} AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
        ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`,
       [req.user!.id, input.channelIds ?? null],
     );

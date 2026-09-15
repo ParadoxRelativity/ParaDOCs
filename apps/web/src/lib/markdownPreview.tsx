@@ -88,6 +88,13 @@ export function renderMarkdownPreview(markdown: string): ReactNode {
     }
 
     flushList();
+    // A captioned image or video is written as an HTML figure; show its caption
+    // the way a link label is shown, rather than the markup.
+    if (line.startsWith('<figure')) {
+      const caption = /<figcaption>(.*?)<\/figcaption>/.exec(line)?.[1];
+      if (caption) blocks.push(<p key={index} className="my-1 leading-snug text-[var(--color-accent)]">{caption}</p>);
+      return;
+    }
     if (line.trim()) blocks.push(<p key={index} className="my-1 leading-snug">{inline(line)}</p>);
   });
 

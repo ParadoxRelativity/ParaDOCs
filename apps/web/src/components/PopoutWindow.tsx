@@ -173,7 +173,7 @@ export default function PopoutWindow({ user }: { user: User }) {
         channel={channel}
         channels={channelList}
         selfId={user.id}
-        canPost={Boolean(workspace)}
+        canPost={Boolean(workspace) && channel.permission !== 'view'}
         canModerate={Boolean(canManage) && !direct}
         canEditChannel={Boolean(canManage) && channel.kind === 'text'}
         title={
