@@ -28,6 +28,8 @@ jobs:
   verify:
     name: Typecheck and version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,14 +49,17 @@ jobs:
       # release would be named v0.1.2 while latest.yml advertised 0.1.1 and no
       # client would ever see an update.
       - name: Tag matches apps/desktop/package.json
-        if: startsWith(github.ref, 'refs/tags/v')
+        id: version
         shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./apps/desktop/package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::Tag $TAG does not match apps/desktop/package.json ($PKG)."
-            exit 1
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$PKG" ]; then
+              echo "::error::Tag $TAG does not match apps/desktop/package.json ($PKG)."
+              exit 1
+            fi
           fi
           echo "Releasing $PKG"
 
@@ -62,8 +67,8 @@ jobs:
     name: Build ${{ matrix.platform }}
     needs: verify
     strategy:
-      # One platform failing should not discard the other's artifacts; the draft
-      # can be completed by re-running the failed job.
+      # One platform failing should not discard the other's artifacts; re-running
+      # the failed job keeps them and goes on to upload both.
       fail-fast: false
       matrix:
         include:
@@ -131,11 +136,69 @@ jobs:
             echo "Notarisation credentials incomplete; skipping notarisation."
           fi
 
-      - name: Build installers and upload to draft release
+      # Build only; publishing happens once, in the release job. When each
+      # platform published itself, both jobs asked GitHub "is there a draft for
+      # this tag?" at about the same moment, both heard no, and each created its
+      # own draft — splitting macOS and Windows across two releases.
+      # electron-builder still writes latest*.yml without publishing, because
+      # the publish block in electron-builder.yml is what produces them.
+      - name: Build installers
         working-directory: apps/desktop
-        run: npx electron-builder ${{ matrix.flag }} --publish always
+        run: npx electron-builder ${{ matrix.flag }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+
+  release:
+    name: Upload to draft release
+    # Waits for every platform, so a draft never holds half a release. If one
+    # platform fails, re-running it re-runs this job too.
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: release
+          merge-multiple: true
+
+      # An update manifest missing from the release is the other quiet failure:
+      # that platform's installed clients would simply never update.
+      - name: Check update manifests
+        shell: bash
+        run: |
+          ls -la release
+          for f in latest.yml latest-mac.yml; do
+            [ -f "release/$f" ] || { echo "::error::release/$f is missing."; exit 1; }
+          done
+
+      # The only step that creates a release, so there is exactly one per tag.
+      # A draft left by an earlier run of the same version is reused, and
+      # --clobber replaces its files, so re-running is safe.
+      - name: Create or reuse draft and upload
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.verify.outputs.version }}
+        run: |
+          count="$(gh api --paginate "repos/$GH_REPO/releases" --jq "[.[] | select(.tag_name == \"$TAG\")] | length" | awk '{s+=$1} END {print s+0}')"
+          if [ "$count" -gt 1 ]; then
+            echo "::error::$count releases already exist for $TAG. Delete the extras and re-run."
+            exit 1
+          fi
+          if [ "$count" -eq 0 ]; then
+            gh release create "$TAG" --draft --title "$TAG" --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" release/* --clobber
 
   image:
     name: Server image
