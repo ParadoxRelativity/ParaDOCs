@@ -62,6 +62,8 @@ interface Props {
   editRequestId: string | null;
   /** Files pasted or dropped onto the board, with the drop point in canvas units. */
   onFiles: (files: File[], point: { x: number; y: number }) => void;
+  /** The pointer's position in canvas units as it moves, and null when it leaves the board. */
+  onPointer?: (point: { x: number; y: number } | null) => void;
 }
 
 const MIN_SCALE = 0.1;
@@ -654,8 +656,12 @@ export default function CanvasSurface(props: Props) {
         if (!rect) return;
         lastPointer.current = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
         if (props.placing) setGhost(lastPointer.current);
+        props.onPointer?.(lastPointer.current);
       }}
-      onPointerLeave={() => setGhost(null)}
+      onPointerLeave={() => {
+        setGhost(null);
+        props.onPointer?.(null);
+      }}
       onDragOver={(e) => {
         if (!editable || !e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();

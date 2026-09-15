@@ -4,10 +4,12 @@ import { useCreateTeam, useDeleteTeam, useMembers, useTeams, useUpdateTeam } fro
 import { cx } from '../lib/util';
 import Avatar from './Avatar';
 import Icon from './Icon';
-import { ConfirmDialog } from './Modal';
+import { ConfirmDialog, Modal } from './Modal';
 import { FIELD } from './SettingsParts';
 import { useToast } from './Toast';
 import { Button, Spinner } from './ui';
+
+type MemberSummary = { userId: string; name: string; email: string; avatarUrl: string | null };
 
 /**
  * Teams: named groups of members, so a folder, document or channel can be
@@ -22,6 +24,9 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
   const toast = useToast();
   const [name, setName] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
+  const [managingId, setManagingId] = useState<string | null>(null);
+  // Read fresh from the list, so the dialog follows each change as it lands.
+  const managing = (teams.data ?? []).find((t) => t.id === managingId);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -30,7 +35,8 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
       const team = await createTeam.mutateAsync({ name: name.trim() });
       setName('');
       setOpenId(team.id);
-      toast(`Team ${team.name} created. Add its members below.`);
+      setManagingId(team.id);
+      toast(`Team ${team.name} created. Choose who is on it.`);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not create the team', 'error');
     }
@@ -76,9 +82,19 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
               canManage={canManage}
               open={openId === team.id}
               onToggle={() => setOpenId(openId === team.id ? null : team.id)}
+              onManage={() => setManagingId(team.id)}
             />
           ))}
         </ul>
+      )}
+
+      {canManage && managing && (
+        <ManageTeamDialog
+          workspaceId={workspaceId}
+          team={managing}
+          members={members.data ?? []}
+          onClose={() => setManagingId(null)}
+        />
       )}
     </div>
   );
@@ -91,26 +107,23 @@ function TeamRow({
   canManage,
   open,
   onToggle,
+  onManage,
 }: {
   workspaceId: string;
   team: Team;
-  members: { userId: string; name: string; email: string; avatarUrl: string | null }[];
+  members: MemberSummary[];
   canManage: boolean;
   open: boolean;
   onToggle: () => void;
+  onManage: () => void;
 }) {
   const updateTeam = useUpdateTeam(workspaceId);
   const deleteTeam = useDeleteTeam(workspaceId);
   const toast = useToast();
   const [name, setName] = useState(team.name);
   const [confirming, setConfirming] = useState(false);
-  const [search, setSearch] = useState('');
 
   const onTeam = members.filter((m) => team.memberIds.includes(m.userId));
-  const needle = search.trim().toLowerCase();
-  const listed = (canManage ? members : onTeam).filter(
-    (m) => !needle || m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle),
-  );
   const failed = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
 
   function rename() {
@@ -120,11 +133,6 @@ function TeamRow({
       return;
     }
     updateTeam.mutate({ id: team.id, name: trimmed }, { onError: failed('Could not rename the team') });
-  }
-
-  function toggleMember(userId: string, on: boolean) {
-    const memberIds = on ? [...team.memberIds, userId] : team.memberIds.filter((id) => id !== userId);
-    updateTeam.mutate({ id: team.id, memberIds }, { onError: failed('Could not change who is on the team') });
   }
 
   return (
@@ -140,6 +148,11 @@ function TeamRow({
             {team.memberIds.length} {team.memberIds.length === 1 ? 'member' : 'members'}
           </span>
         </button>
+        {canManage && (
+          <Button variant="subtle" className="text-xs" onClick={onManage}>
+            Manage team
+          </Button>
+        )}
         {canManage && (
           <Button variant="danger" className="text-xs" onClick={() => setConfirming(true)}>
             Delete
@@ -164,42 +177,11 @@ function TeamRow({
               />
             </label>
           )}
-          {canManage && (
-            <input
-              type="search"
-              className={FIELD}
-              placeholder="Find a member by name or email"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              aria-label={`Find a member to add to ${team.name}`}
-            />
+          {onTeam.length === 0 ? (
+            <p className="text-xs text-[var(--color-muted)]">Nobody yet.</p>
+          ) : (
+            <MemberLines members={onTeam} />
           )}
-          {needle && listed.length === 0 && (
-            <p className="text-xs text-[var(--color-muted)]">Nobody matches “{search.trim()}”.</p>
-          )}
-          <ul className="space-y-1">
-            {listed.map((member) => {
-              const checked = team.memberIds.includes(member.userId);
-              return (
-                <li key={member.userId}>
-                  <label className={cx('flex items-center gap-2 text-sm', canManage && 'cursor-pointer')}>
-                    {canManage && (
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={updateTeam.isPending}
-                        onChange={(e) => toggleMember(member.userId, e.target.checked)}
-                      />
-                    )}
-                    <Avatar name={member.name} url={member.avatarUrl} seed={member.userId} size="sm" />
-                    <span className="min-w-0 flex-1 truncate">{member.name}</span>
-                    <span className="truncate text-xs text-[var(--color-muted)]">{member.email}</span>
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
-          {!canManage && onTeam.length === 0 && <p className="text-xs text-[var(--color-muted)]">Nobody yet.</p>}
         </div>
       )}
 
@@ -219,5 +201,101 @@ function TeamRow({
         />
       )}
     </li>
+  );
+}
+
+/** Everyone in the workspace, found by name or email, each one ticked on or off the team. */
+function ManageTeamDialog({
+  workspaceId,
+  team,
+  members,
+  onClose,
+}: {
+  workspaceId: string;
+  team: Team;
+  members: MemberSummary[];
+  onClose: () => void;
+}) {
+  const updateTeam = useUpdateTeam(workspaceId);
+  const toast = useToast();
+  const [search, setSearch] = useState('');
+
+  const needle = search.trim().toLowerCase();
+  const listed = members.filter(
+    (m) => !needle || m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle),
+  );
+
+  function toggleMember(userId: string, on: boolean) {
+    const memberIds = on ? [...team.memberIds, userId] : team.memberIds.filter((id) => id !== userId);
+    updateTeam.mutate(
+      { id: team.id, memberIds },
+      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change who is on the team', 'error') },
+    );
+  }
+
+  return (
+    <Modal
+      title={`Manage ${team.name}`}
+      description={`${team.memberIds.length} ${team.memberIds.length === 1 ? 'member' : 'members'}. Tick everyone who should be on the team.`}
+      onClose={onClose}
+      wide
+      footer={
+        <Button variant="primary" className="text-xs" onClick={onClose}>
+          Done
+        </Button>
+      }
+    >
+      <div className="space-y-2">
+        <input
+          type="search"
+          autoFocus
+          className={FIELD}
+          placeholder="Find a member by name or email"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          aria-label={`Find a member to add to ${team.name}`}
+        />
+        {needle && listed.length === 0 && (
+          <p className="text-xs text-[var(--color-muted)]">Nobody matches “{search.trim()}”.</p>
+        )}
+        <ul className="scroll-thin max-h-80 space-y-1 overflow-y-auto">
+          {listed.map((member) => (
+            <li key={member.userId}>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={team.memberIds.includes(member.userId)}
+                  disabled={updateTeam.isPending}
+                  onChange={(e) => toggleMember(member.userId, e.target.checked)}
+                />
+                <MemberLine member={member} />
+              </label>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
+function MemberLines({ members }: { members: MemberSummary[] }) {
+  return (
+    <ul className="space-y-1">
+      {members.map((member) => (
+        <li key={member.userId} className="flex items-center gap-2 text-sm">
+          <MemberLine member={member} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MemberLine({ member }: { member: MemberSummary }) {
+  return (
+    <>
+      <Avatar name={member.name} url={member.avatarUrl} seed={member.userId} size="sm" />
+      <span className="min-w-0 flex-1 truncate">{member.name}</span>
+      <span className="truncate text-xs text-[var(--color-muted)]">{member.email}</span>
+    </>
   );
 }

@@ -22,12 +22,14 @@ import {
 } from '@paradocs/shared';
 import type { CollabSession, Peer } from '../../lib/collaboration';
 import { boundsOf, useCanvasElements } from '../../lib/canvasStore';
+import { peerPointer, usePublishPointer } from '../../lib/canvasPresence';
 import { cx, useAutosave } from '../../lib/util';
 import { claimNewDocument } from '../../lib/newDocuments';
 import { useAllDocuments, useCreateDocument, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
 import { useToast } from '../Toast';
 import CanvasSurface, { type Viewport } from './CanvasSurface';
 import PresentMode from './PresentMode';
+import PeerCursors from './PeerCursors';
 import { Modal } from '../Modal';
 import { Button, Tooltip } from '../ui';
 import Avatar from '../Avatar';
@@ -95,6 +97,7 @@ export default function CanvasEditor({
   const members = useMembers(workspaceId);
   const toast = useToast();
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
+  const publishPointer = usePublishPointer(session);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // The connector tool is a mode, not a one-shot action: it stays on so several
   // connections can be drawn in a row.
@@ -321,6 +324,18 @@ export default function CanvasEditor({
     setSelectedIds(new Set([id]));
   }
 
+  /** Centres the board on where a collaborator's pointer is, or last was, at the current zoom. */
+  function jumpToPeer(clientId: number) {
+    const point = peerPointer(session, clientId);
+    const rect = document.getElementById('paradocs-canvas')?.getBoundingClientRect();
+    if (!point || !rect) return;
+    setViewport((current) => ({
+      ...current,
+      x: rect.width / 2 - point.x * current.scale,
+      y: rect.height / 2 - point.y * current.scale,
+    }));
+  }
+
   function zoomToFit() {
     const bounds = boundsOf(elements);
     const rect = document.getElementById('paradocs-canvas')?.getBoundingClientRect();
@@ -541,14 +556,20 @@ export default function CanvasEditor({
           {peers.length > 0 && (
             <div className="mr-1 flex -space-x-1.5">
               {peers.slice(0, 4).map((peer) => (
-                <Avatar
-                  key={peer.clientId}
-                  name={peer.name}
-                  url={peer.avatarUrl}
-                  title={peer.name}
-                  className="border-2 border-[var(--color-canvas)]"
-                  style={{ background: peer.color }}
-                />
+                <Tooltip key={peer.clientId} label={`Go to ${peer.name}`}>
+                  <button
+                    aria-label={`Go to where ${peer.name} is on the board`}
+                    onClick={() => jumpToPeer(peer.clientId)}
+                    className="rounded-full"
+                  >
+                    <Avatar
+                      name={peer.name}
+                      url={peer.avatarUrl}
+                      className="border-2 border-[var(--color-canvas)]"
+                      style={{ background: peer.color, boxShadow: `0 0 0 1.5px ${peer.color}` }}
+                    />
+                  </button>
+                </Tooltip>
               ))}
             </div>
           )}
@@ -681,6 +702,7 @@ export default function CanvasEditor({
           dark={dark}
           onDeleteSelection={deleteSelection}
           onFiles={handleFiles}
+          onPointer={publishPointer}
           onAddChild={addChild}
           editRequestId={editRequestId}
           onCreateNoteAt={(point) => {
@@ -695,6 +717,8 @@ export default function CanvasEditor({
             setEditRequestId(id);
           }}
         />
+
+        <PeerCursors session={session} viewport={viewport} />
 
         {elements.length === 0 && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
