@@ -7,6 +7,7 @@ export default defineConfig(({ mode }) => {
   // .env lives at the repo root, shared with the API.
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
   const apiUrl = env.VITE_API_URL || 'http://localhost:4000';
+  const adminUrl = env.VITE_ADMIN_API_URL || `http://localhost:${env.ADMIN_PORT || 4001}`;
 
   return {
     plugins: [react(), tailwind()],
@@ -16,9 +17,22 @@ export default defineConfig(({ mode }) => {
     },
     // The shared package is TypeScript source, not a build artifact.
     optimizeDeps: { exclude: ['@paradocs/shared'] },
+    build: {
+      // The server admin page is a second page in the same build. The API serves
+      // it only on the admin port.
+      rolldownOptions: {
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          admin: path.resolve(__dirname, 'admin.html'),
+        },
+      },
+    },
     server: {
       port: 5173,
       proxy: {
+        // The server admin API, on its own port. Listed before /api, which
+        // would otherwise match it first.
+        '/api/admin': { target: adminUrl, changeOrigin: true },
         // Same-origin in dev so the session cookie behaves exactly as in production.
         '/api': { target: apiUrl, changeOrigin: true },
         '/uploads': { target: apiUrl, changeOrigin: true },

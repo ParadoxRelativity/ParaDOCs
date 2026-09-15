@@ -37,6 +37,7 @@ Ports, depending on which parts you run:
 | 80, 443 | TCP | Caddy, in the HTTPS setup | Yes |
 | 7881 | TCP | Voice media, fallback when UDP is blocked | Yes, unless voice is off |
 | 7882 | UDP | Voice media | Yes, unless voice is off |
+| 4001 | TCP | Server admin page, published on `127.0.0.1` only | No. Reach it over SSH (section 5). |
 
 ## 2. Get the compose file
 
@@ -84,7 +85,10 @@ Settings Compose reads from `.env`:
 | `PORT` | `4000` | Host port the app is published on |
 | `BIND_ADDR` | `0.0.0.0` | Interface the app is published on. Use `127.0.0.1` behind HTTPS. |
 | `SECURE_COOKIES` | `false` | `true` in the HTTPS setup. Must stay `false` over plain HTTP. |
-| `ALLOW_REGISTRATION` | `true` | Set `false` to stop new sign-ups (section 5) |
+| `ALLOW_REGISTRATION` | `true` | Whether sign-ups start open, until changed on the admin page (section 5) |
+| `ADMIN_ENABLED` | `true` | Set `false` to not serve the server admin page |
+| `ADMIN_PORT` | `4001` | Host port the server admin page is published on |
+| `ADMIN_BIND_ADDR` | `127.0.0.1` | Interface the admin page is published on. Keep it `127.0.0.1`. |
 | `MAX_UPLOAD_MB` | `25` | Largest file people can upload, in megabytes, to chat, documents and canvases |
 | `LOG_LEVEL` | `info` | App log detail: `error`, `warn`, `info` or `debug` |
 | `DOMAIN` | — | HTTPS setup: the hostname Caddy gets a certificate for |
@@ -147,20 +151,45 @@ and renews it automatically.
 Open the site and register. The first account can always be created, and
 starts with a workspace called Personal.
 
-To stop strangers signing up, set this in `.env` and apply it:
+### The server admin page
+
+Settings for the whole server, and every account on it, are managed from a
+separate admin page. It has its own port, 4001, which Compose publishes on
+`127.0.0.1` only, so it is never reachable from the internet. From your own
+computer, open an SSH tunnel to the server:
 
 ```bash
-ALLOW_REGISTRATION=false
+ssh -L 4001:127.0.0.1:4001 you@203.0.113.10
 ```
 
-```bash
-docker compose up -d
-```
+and, while it is open, visit `http://localhost:4001`.
+
+Nobody administers a new server until someone claims it. On that first visit,
+either sign in with the account you just registered, which makes it the
+administrator, or create a new administrator account on the spot. After that
+only administrators can sign in there, and they can make other accounts
+administrators. Signing in to the admin page is separate from signing in to
+the app.
+
+From the admin page you can:
+
+- **Open or close registration.** Closed, nobody can sign up on their own;
+  create accounts for people from **Accounts** instead. `ALLOW_REGISTRATION`
+  in `.env` only sets where registration starts, until it is changed here.
+- **Set a message retention maximum.** Messages in text channels older than the
+  limit, and files shared in them, are permanently deleted, checked hourly.
+  Direct messages are kept.
+- **Manage accounts:** create them, rename them, set their passwords, sign them
+  out everywhere, disable or delete them, and grant or remove administrator
+  access.
 
 Closing registration also stops invited people from creating an account: they
-need one before they can accept an invitation. Invite people from
-**Settings → Members** while registration is still open, and close it once
-everyone has registered. Reopen it the same way when you need to add someone.
+need one before they can accept an invitation. Create their accounts from the
+admin page, or reopen registration while they sign up.
+
+Until someone claims it, anyone who can reach port 4001 can become the
+administrator. Claim it as soon as the server is up, and leave
+`ADMIN_BIND_ADDR` at `127.0.0.1`.
 
 ## 6. Voice and video
 
@@ -367,6 +396,8 @@ and file**. Only use it to wipe a server on purpose.
 - Use the HTTPS setup for anything reachable from the internet, with
   `BIND_ADDR=127.0.0.1` so the app is only reachable through Caddy.
 - Keep `.env` private (`chmod 600`) and backed up somewhere safe.
+- Claim the server admin page (section 5) as soon as the server is up, and keep
+  it published on `127.0.0.1` only.
 - Close registration once everyone who needs an account has one.
 - Open only the ports your setup uses (section 1). Postgres is never published.
 - Uploaded files, including files shared in chat, and profile pictures are

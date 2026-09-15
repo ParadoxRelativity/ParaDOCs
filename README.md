@@ -817,6 +817,12 @@ npm run dev                   # API on :4000, web on :5173
 Open <http://localhost:5173>. Vite proxies `/api` to the API, so the session cookie
 is same-origin in development exactly as it is in production.
 
+The server admin page — server-wide settings and account management — is at
+<http://localhost:5173/admin.html> in development, proxied to the admin port. In
+production it is served only on its own port (`ADMIN_PORT`, 4001 by default),
+listening on loopback. The first account to sign in there, or to be created
+there, becomes the server's administrator.
+
 ## Configuration
 
 All settings come from `.env` at the repo root, read by both the API and Vite.
@@ -829,7 +835,11 @@ All settings come from `.env` at the repo root, read by both the API and Vite.
 | `CORS_ORIGIN`        | `http://localhost:5173` | Comma-separated origins allowed to send credentials          |
 | `SECURE_COOKIES`     | `false`                 | Set `true` when serving over HTTPS                           |
 | `UPLOAD_DIR`         | `./data/uploads`        | Where attachments are written                                |
-| `ALLOW_REGISTRATION` | `true`                  | Set `false` to close signups; the first account is always allowed |
+| `ALLOW_REGISTRATION` | `true`                  | Whether signups start open, until changed on the server admin page; the first account is always allowed |
+| `ADMIN_ENABLED`      | `true`                  | Set `false` to not serve the server admin page               |
+| `ADMIN_PORT`         | `4001`                  | Port for the server admin page: server-wide settings and accounts |
+| `ADMIN_HOST`         | `127.0.0.1`             | Interface the admin page listens on; keep it internal        |
+| `ADMIN_SECURE_COOKIES` | `false`               | Set `true` only if the admin page itself is served over HTTPS |
 | `MAX_UPLOAD_MB`      | `25`                    | Largest file, in megabytes, for chat, documents and canvases; not adjustable per workspace |
 | `VOICE_ENABLED`      | `true`                  | Set `false` to turn off voice channels and calls             |
 | `LIVEKIT_URL`        | —                       | Outside Docker: a LiveKit server browsers can reach          |

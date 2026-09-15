@@ -55,7 +55,7 @@ export async function resolveSession(token: string): Promise<SessionUser | null>
     `SELECT u.id, u.email, u.name, ${uploadUrlSql('u.avatar_key')} AS "avatarUrl"
        FROM sessions s
        JOIN users u ON u.id = s.user_id
-      WHERE s.token = $1 AND s.expires_at > now()`,
+      WHERE s.token = $1 AND s.expires_at > now() AND u.disabled_at IS NULL`,
     [token],
   );
   return rows[0] ?? null;

@@ -1,0 +1,74 @@
+import { z } from 'zod';
+
+/**
+ * Server administration, served on its own port. These are settings for the
+ * whole server, set by whoever runs it, as opposed to anything a workspace
+ * owner controls.
+ */
+
+/** The longest retention ceiling on offer: ten years. */
+export const MAX_RETENTION_DAYS = 3650;
+
+export interface ServerSettings {
+  /** Whether anyone may create an account. The first account always can. */
+  allowRegistration: boolean;
+  /**
+   * The oldest a message in a text channel may be, in days, before it is
+   * permanently deleted. Null keeps messages for as long as their channel
+   * exists. Direct messages are not affected.
+   */
+  messageRetentionMaxDays: number | null;
+}
+
+export const updateServerSettingsSchema = z
+  .object({
+    allowRegistration: z.boolean().optional(),
+    messageRetentionMaxDays: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable().optional(),
+  })
+  .refine((v) => Object.values(v).some((value) => value !== undefined), { message: 'Nothing to update' });
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  isServerAdmin: boolean;
+  disabled: boolean;
+  createdAt: string;
+  /** When they last signed in to the app, if their session is still around. */
+  lastSignInAt: string | null;
+  workspaceCount: number;
+}
+
+export interface AdminStatus {
+  /** The administrator signed in on this port, if any. */
+  user: { id: string; email: string; name: string } | null;
+  /**
+   * No administrator exists yet. The first person to sign in with an existing
+   * account, or to create one here, becomes one.
+   */
+  setupRequired: boolean;
+}
+
+export const adminCreateUserSchema = z.object({
+  email: z.string().email().max(254),
+  name: z.string().min(1).max(80),
+  password: z.string().min(10, 'password must be at least 10 characters').max(200),
+  isServerAdmin: z.boolean().optional(),
+});
+
+export const adminUpdateUserSchema = z
+  .object({
+    name: z.string().min(1).max(80).optional(),
+    email: z.string().email().max(254).optional(),
+    isServerAdmin: z.boolean().optional(),
+    disabled: z.boolean().optional(),
+  })
+  .refine((v) => Object.values(v).some((value) => value !== undefined), { message: 'Nothing to update' });
+
+export const adminSetPasswordSchema = z.object({
+  password: z.string().min(10, 'password must be at least 10 characters').max(200),
+});
+
+export type AdminCreateUserInput = z.infer<typeof adminCreateUserSchema>;
+export type AdminUpdateUserInput = z.infer<typeof adminUpdateUserSchema>;
+export type UpdateServerSettingsInput = z.infer<typeof updateServerSettingsSchema>;

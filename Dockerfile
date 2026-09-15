@@ -47,7 +47,13 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     API_PORT=4000 \
-    UPLOAD_DIR=/data/uploads
+    UPLOAD_DIR=/data/uploads \
+    ADMIN_PORT=4001 \
+    ADMIN_HOST=0.0.0.0
+
+# The server admin page listens on every interface inside the container so the
+# port can be published at all. What keeps it internal is where Compose
+# publishes it: 127.0.0.1 on the host, unless told otherwise.
 
 # tini reaps zombies and forwards signals, so the graceful shutdown that
 # flushes pending collaborative document saves actually runs on `docker stop`.
@@ -69,7 +75,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data/uploads /data/voice && chown -R node:node /data /app
 USER node
 
-EXPOSE 4000
+EXPOSE 4000 4001
 
 # Uses the app's own health route, so the check exercises the real stack.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \

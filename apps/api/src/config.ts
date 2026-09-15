@@ -57,6 +57,24 @@ function livekitSettings() {
   };
 }
 
+/**
+ * The server admin page: settings for the whole server and every account on
+ * it. It listens on a port of its own so it can be kept internal, and by
+ * default only this machine can reach it.
+ */
+function adminSettings() {
+  const port = Number(process.env.ADMIN_PORT?.trim() || 4001);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('ADMIN_PORT must be a port number, such as 4001.');
+  }
+  return {
+    enabled: process.env.ADMIN_ENABLED?.trim().toLowerCase() !== 'false',
+    port,
+    host: process.env.ADMIN_HOST?.trim() || '127.0.0.1',
+    secureCookies: process.env.ADMIN_SECURE_COOKIES === 'true',
+  };
+}
+
 function megabytes(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback * 1024 * 1024;
@@ -83,9 +101,14 @@ export const config = {
    * workspace. Profile pictures keep their own, smaller cap.
    */
   maxUploadBytes: megabytes('MAX_UPLOAD_MB', 25),
+  /**
+   * Whether open registration starts on. The admin page can change it, after
+   * which this is no longer consulted; see lib/serverSettings.ts.
+   */
   allowRegistration: process.env.ALLOW_REGISTRATION !== 'false',
   sessionTtlDays: 30,
   livekit: livekitSettings(),
+  admin: adminSettings(),
 
   // OIDC is stubbed in Phase 1; these are read so deployments can be configured
   // ahead of the implementation landing. See routes/oidc.ts.

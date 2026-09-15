@@ -9,6 +9,7 @@ import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../li
 import { subscribeToChannel, subscribeToUser, subscribeToWorkspace } from './hub.js';
 import { appearsOffline, connectPresence } from './presence.js';
 import { onAccessChanged } from '../lib/accessEvents.js';
+import { onSignedOut } from '../lib/accountEvents.js';
 
 export const CHAT_PATH = '/chat';
 
@@ -81,6 +82,11 @@ export function createChatServer(log: FastifyBaseLogger) {
     // Having a socket open is what makes someone present; closing the last one
     // is what takes them away again.
     const presence = connectPresence(user.id, chosen, (err) => log.warn({ err }, 'could not announce presence'));
+    // The session that let this socket in has been ended by an administrator.
+    // Reconnecting finds no session, so this is where the socket stops.
+    const stopSignedOut = onSignedOut((userId) => {
+      if (userId === user.id) socket.close(4401, 'Signed out');
+    });
 
     /**
      * Passes on that this person is typing, or has stopped, to everyone who can
@@ -204,6 +210,7 @@ export function createChatServer(log: FastifyBaseLogger) {
       typingAccess.clear();
       stopPersonal();
       stopAccess();
+      stopSignedOut();
       presence.close();
     };
     socket.on('close', release);

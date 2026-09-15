@@ -27,6 +27,7 @@ import { documentSchema } from './documentSchema.js';
 import { SESSION_COOKIE, documentAccessForUser, resolveSession, type SessionUser } from '../plugins/session.js';
 import { UUID } from '../lib/access.js';
 import { onAccessChanged } from '../lib/accessEvents.js';
+import { onSignedOut } from '../lib/accountEvents.js';
 
 export const COLLAB_PATH = '/collab';
 
@@ -264,6 +265,16 @@ export function createCollabServer(log: FastifyBaseLogger) {
       .catch((err) => log.warn({ err, workspaceId }, 'could not recheck access to open documents'));
   });
 
+  // Someone an administrator has signed out, disabled or reset loses the
+  // documents they have open. Their editor reconnects and finds no session.
+  const stopSignedOut = onSignedOut((userId) => {
+    for (const document of hocuspocus.documents.values()) {
+      for (const connection of document.getConnections()) {
+        if ((connection.context as CollabContext | undefined)?.user?.id === userId) connection.close();
+      }
+    }
+  });
+
   const wss = new WebSocketServer({ noServer: true });
 
   /**
@@ -297,6 +308,7 @@ export function createCollabServer(log: FastifyBaseLogger) {
 
   async function close() {
     stopAccess();
+    stopSignedOut();
     await hocuspocus.destroy();
     wss.close();
   }

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { HttpError, registerErrorHandler } from './lib/http.js';
+import { registerErrorHandler, registerJsonBodyParser } from './lib/http.js';
 import { servesInline } from './lib/storage.js';
 import { voiceProxyRoutes } from './lib/voiceProxy.js';
 import { sessionPlugin } from './plugins/session.js';
@@ -36,19 +36,7 @@ export async function buildApp() {
   });
 
   registerErrorHandler(app);
-
-  // Several endpoints take no body but are still POSTed with a JSON content-type
-  // (logout, invite accept). Fastify rejects an empty body outright, so treat it
-  // as an empty object rather than a 400.
-  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
-    const text = (body as string).trim();
-    if (!text) return done(null, {});
-    try {
-      done(null, JSON.parse(text));
-    } catch {
-      done(new HttpError(400, 'Body is not valid JSON', 'bad_request'), undefined);
-    }
-  });
+  registerJsonBodyParser(app);
 
   await app.register(cors, {
     origin: config.corsOrigins,
@@ -82,7 +70,14 @@ export async function buildApp() {
   // the frontend instead.
   const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist');
   if (fs.existsSync(path.join(webDist, 'index.html'))) {
-    await app.register(fastifyStatic, { root: webDist, prefix: '/', decorateReply: false });
+    await app.register(fastifyStatic, {
+      root: webDist,
+      prefix: '/',
+      decorateReply: false,
+      // The server admin page is in the same build but is only served on the
+      // admin port. See admin/app.ts.
+      allowedPath: (pathName) => pathName !== '/admin.html',
+    });
     app.setNotFoundHandler((req, reply) => {
       // API misses stay JSON; everything else falls through to the SPA router.
       if (req.url.startsWith('/api/') || req.url.startsWith('/uploads/')) {

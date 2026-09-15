@@ -1,3 +1,4 @@
+export * from './admin.js';
 export * from './blocks.js';
 export * from './canvas.js';
 export * from './chart.js';

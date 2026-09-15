@@ -1,14 +1,15 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { changePasswordSchema, loginSchema, registerSchema, updateProfileSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
-import { hashPassword, newSessionToken, slugify, verifyPassword } from '../lib/auth.js';
+import { hashPassword, newSessionToken, verifyPassword } from '../lib/auth.js';
 import { badRequest, conflict, forbidden, parse, unauthorized } from '../lib/http.js';
 import { SESSION_COOKIE, sessionCookieOptions } from '../plugins/session.js';
 import { config } from '../config.js';
 import { oidcStatus } from './oidc.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
 import { uploadUrlSql } from '../lib/storage.js';
-import { addDefaultVoiceChannel } from './voice.js';
+import { createAccount } from '../lib/accounts.js';
+import { getServerSettings } from '../lib/serverSettings.js';
 
 /** The account as the client sees it. */
 const USER_COLUMNS = `id, email, name, ${uploadUrlSql('avatar_key')} AS "avatarUrl"`;
@@ -26,57 +27,24 @@ async function createSession(userId: string): Promise<string> {
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.get('/auth/me', async (req) => ({
     user: req.user,
-    allowRegistration: config.allowRegistration,
+    allowRegistration: (await getServerSettings()).allowRegistration,
     oidc: oidcStatus(),
   }));
 
   app.post('/auth/register', async (req, reply) => {
     const input = parse(registerSchema, req.body);
 
-    // Registration can be closed by env, but the very first account is always
-    // allowed so a fresh install is never locked out of itself.
+    // Registration can be closed from the admin page, but the very first account
+    // is always allowed so a fresh install is never locked out of itself.
     const { rows: existing } = await query<{ count: number }>('SELECT count(*)::int AS count FROM users');
-    if (!config.allowRegistration && existing[0].count > 0) {
+    if (!(await getServerSettings()).allowRegistration && existing[0].count > 0) {
       throw forbidden('Registration is closed on this server');
     }
 
     const passwordHash = await hashPassword(input.password);
-    const user = await transaction(async (client) => {
-      const dup = await client.query('SELECT 1 FROM users WHERE lower(email) = lower($1)', [input.email]);
-      if (dup.rowCount) throw conflict('An account with that email already exists');
-
-      const { rows } = await client.query<{ id: string; email: string; name: string }>(
-        `INSERT INTO users (email, password_hash, name)
-         VALUES ($1, $2, $3) RETURNING id, email, name`,
-        [input.email, passwordHash, input.name],
-      );
-      const created = rows[0];
-
-      // Every account starts with a usable workspace rather than an empty shell.
-      const { rows: wsRows } = await client.query<{ id: string }>(
-        `INSERT INTO workspaces (owner_id, name, slug, icon)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
-        [created.id, 'Personal', slugify('Personal'), '🏠'],
-      );
-      // Access is membership, not ownership: without this row the new account
-      // is not a member of the workspace it just got and every request for it
-      // answers 404.
-      await client.query(
-        `INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
-        [wsRows[0].id, created.id],
-      );
-      await client.query(
-        `INSERT INTO folders (workspace_id, name, position) VALUES ($1, 'Journal', 0), ($1, 'Notes', 1)`,
-        [wsRows[0].id],
-      );
-      // Somewhere to talk, so the chat tab is never an empty room.
-      await client.query(
-        `INSERT INTO channels (workspace_id, name, topic, created_by) VALUES ($1, 'general', $2, $3)`,
-        [wsRows[0].id, 'Everything else', created.id],
-      );
-      await addDefaultVoiceChannel(client, wsRows[0].id, created.id);
-      return created;
-    });
+    const user = await transaction((client) =>
+      createAccount(client, { email: input.email, name: input.name, passwordHash }),
+    );
 
     const token = await createSession(user.id);
     reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
@@ -91,11 +59,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       name: string;
       avatarUrl: string | null;
       password_hash: string;
-    }>(`SELECT ${USER_COLUMNS}, password_hash FROM users WHERE lower(email) = lower($1)`, [input.email]);
+      disabled: boolean;
+    }>(
+      `SELECT ${USER_COLUMNS}, password_hash, disabled_at IS NOT NULL AS disabled
+         FROM users WHERE lower(email) = lower($1)`,
+      [input.email],
+    );
     const row = rows[0];
     // Hash even when the user is missing, so timing does not reveal which emails exist.
     const ok = await verifyPassword(input.password, row?.password_hash ?? 'scrypt$00$00');
     if (!row || !ok) throw unauthorized('Incorrect email or password');
+    // Said only to someone who knows the password, so it reveals nothing to a guesser.
+    if (row.disabled) throw forbidden('This account has been disabled. Contact the server administrator.');
 
     const token = await createSession(row.id);
     reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());

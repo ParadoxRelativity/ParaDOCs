@@ -1,4 +1,4 @@
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, type ZodSchema } from 'zod';
 
 /** An error carrying the HTTP status the client should see. */
@@ -29,6 +29,23 @@ export function parse<T>(schema: ZodSchema<T>, value: unknown): T {
     }
     throw err;
   }
+}
+
+/**
+ * Several endpoints take no body but are still POSTed with a JSON content-type
+ * (logout, invite accept). Fastify rejects an empty body outright, so treat it
+ * as an empty object rather than a 400.
+ */
+export function registerJsonBodyParser(app: FastifyInstance): void {
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    const text = (body as string).trim();
+    if (!text) return done(null, {});
+    try {
+      done(null, JSON.parse(text));
+    } catch {
+      done(new HttpError(400, 'Body is not valid JSON', 'bad_request'), undefined);
+    }
+  });
 }
 
 export function registerErrorHandler(app: {

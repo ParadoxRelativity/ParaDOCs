@@ -69,8 +69,15 @@ services:
       # Largest file anyone can upload, in megabytes: chat, documents and
       # canvases alike. Set for the whole server; workspaces cannot change it.
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+      # Whether registration starts open. Once changed on the server admin page,
+      # the admin page's setting is used instead.
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The server admin page: server-wide settings and every account. It has
+      # its own port, published below on loopback only.
+      ADMIN_ENABLED: ${ADMIN_ENABLED:-true}
+      ADMIN_PORT: 4001
+      ADMIN_HOST: 0.0.0.0
       # Voice and video. On first start the app writes the key pair LiveKit
       # uses into a volume both containers share, and it relays LiveKit's
       # signalling under /rtc on its own address, so browsers reach voice
@@ -89,8 +96,13 @@ services:
       - voice-keys:/data/voice
     # Bound to every interface by default so a fresh install is reachable.
     # With the https profile, set BIND_ADDR=127.0.0.1 so only Caddy reaches it.
+    #
+    # The server admin page is published on 127.0.0.1 only, so it is never on
+    # the internet. Reach it from elsewhere through an SSH tunnel:
+    #   ssh -L 4001:127.0.0.1:4001 you@server   then open http://localhost:4001
     ports:
       - '${BIND_ADDR:-0.0.0.0}:${PORT:-4000}:4000'
+      - '${ADMIN_BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-4001}:4001'
     # Reap orphaned processes; tini in the image handles signals.
     init: true
 
