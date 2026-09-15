@@ -24,6 +24,7 @@ import {
   type SheetInfo,
   type SheetMeta,
 } from '@paradocs/shared';
+import { randomId } from './util';
 
 /**
  * React's view of a spreadsheet's Y.Doc: every sheet in it, and one of them
@@ -161,7 +162,7 @@ export function useSheet(ydoc: Y.Doc, requestedSheetId: string) {
 
   /** Adds a sheet after the last one and returns its id. */
   const addSheet = useCallback((): string => {
-    const id = crypto.randomUUID();
+    const id = randomId();
     ydoc.transact(() => {
       ensureListed();
       const existing = readSheets(ydoc);
@@ -390,7 +391,7 @@ export function useSheet(ydoc: Y.Doc, requestedSheetId: string) {
   /** Adds a chart and returns its id. */
   const addChart = useCallback(
     (chart: Omit<SheetChart, 'id'>): string => {
-      const id = crypto.randomUUID();
+      const id = randomId();
       ydoc.transact(() => chartMap.set(id, { ...chart, id }));
       return id;
     },

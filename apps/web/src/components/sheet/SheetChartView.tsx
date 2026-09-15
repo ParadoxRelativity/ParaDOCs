@@ -5,7 +5,11 @@ import {
   MIN_CHART_HEIGHT,
   MIN_CHART_WIDTH,
   chartData,
-  parseChartRange,
+  chartLines,
+  chartRangeText,
+  columnName,
+  parseChartRanges,
+  type CellRange,
   type CellValue,
   type ChartData,
   type ChartKind,
@@ -13,8 +17,162 @@ import {
 } from '@paradocs/shared';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
+import { Popover } from '../Popover';
 
 const KIND_LABEL: Record<ChartKind, string> = { bar: 'Bar', line: 'Line', pie: 'Pie', scatter: 'Scatter' };
+
+/** More rows than anyone ticks through by hand; past this, edit the range instead. */
+const MAX_LISTED_ROWS = 500;
+
+function display(value: CellValue): string {
+  if (value === null) return '';
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  return String(value);
+}
+
+/**
+ * Which of a chart's rows and series it draws. Every row between its first and
+ * last is listed, so a row left out can be put back; unticking one rewrites the
+ * range with a gap where that row was, which keeps the chart following its data
+ * as rows are inserted and deleted around it.
+ */
+function ChartDataPanel({
+  chart,
+  ranges,
+  valueAt,
+  onChange,
+}: {
+  chart: SheetChart;
+  ranges: CellRange[] | null;
+  valueAt: (row: number, column: number) => CellValue;
+  onChange: (patch: Partial<SheetChart>) => void;
+}) {
+  const [text, setText] = useState(chart.range);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    setText(chart.range);
+    setProblem(null);
+  }, [chart.range]);
+
+  const { rows, columns } = chartLines(ranges ?? []);
+  const rowSet = new Set(rows);
+  const columnSet = new Set(columns);
+  const headerRow = chart.headers && rows.length > 1 ? rows[0] : null;
+  const categoryColumn = chart.headers && columns.length > 1 ? columns[0] : null;
+
+  const candidateRows: number[] = [];
+  if (rows.length > 0) {
+    const first = headerRow !== null ? headerRow + 1 : rows[0];
+    for (let row = first; row <= rows[rows.length - 1] && candidateRows.length < MAX_LISTED_ROWS; row++) candidateRows.push(row);
+  }
+  const candidateColumns: number[] = [];
+  if (columns.length > 0) {
+    const first = categoryColumn !== null ? categoryColumn + 1 : columns[0];
+    for (let column = first; column <= columns[columns.length - 1]; column++) candidateColumns.push(column);
+  }
+  const dataRowCount = rows.length - (headerRow !== null ? 1 : 0);
+  const seriesCount = columns.length - (categoryColumn !== null ? 1 : 0);
+
+  const commitText = () => {
+    const cleaned = text.split(',').map((part) => part.trim()).filter(Boolean).join(',').toUpperCase();
+    if (cleaned === chart.range) return;
+    if (!parseChartRanges(cleaned)) {
+      setProblem('Use ranges on this sheet, like A1:B10 or A1:A10,C1:C10');
+      return;
+    }
+    setProblem(null);
+    onChange({ range: cleaned });
+  };
+
+  const toggleRow = (row: number) => {
+    const next = rowSet.has(row) ? rows.filter((entry) => entry !== row) : [...rows, row];
+    onChange({ range: chartRangeText(next, columns) });
+  };
+  const toggleColumn = (column: number) => {
+    const next = columnSet.has(column) ? columns.filter((entry) => entry !== column) : [...columns, column];
+    onChange({ range: chartRangeText(rows, next) });
+  };
+
+  return (
+    <div className="flex max-h-[26rem] flex-col text-xs" onPointerDown={(event) => event.stopPropagation()}>
+      <div className="border-b border-[var(--color-line)] p-3">
+        <label className="mb-1 block text-[11px] font-medium text-[var(--color-muted)]" htmlFor={`chart-range-${chart.id}`}>
+          Data range
+        </label>
+        <input
+          id={`chart-range-${chart.id}`}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onBlur={commitText}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitText();
+            }
+          }}
+          spellCheck={false}
+          className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 font-mono text-xs outline-none focus:border-[var(--color-accent)]"
+        />
+        {problem && <p className="mt-1 text-[11px] text-red-500">{problem}</p>}
+      </div>
+
+      {ranges && (
+        <div className="min-h-0 overflow-y-auto p-3">
+          {candidateColumns.length > 1 && (
+            <>
+              <div className="mb-1 text-[11px] font-medium text-[var(--color-muted)]">Series</div>
+              <ul className="mb-3 flex flex-col">
+                {candidateColumns.map((column) => {
+                  const included = columnSet.has(column);
+                  const name = headerRow !== null ? display(valueAt(headerRow, column)) : '';
+                  return (
+                    <li key={column}>
+                      <label className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[var(--color-surface)]">
+                        <input
+                          type="checkbox"
+                          checked={included}
+                          disabled={included && seriesCount <= 1}
+                          onChange={() => toggleColumn(column)}
+                        />
+                        <span className="w-6 shrink-0 text-[var(--color-muted)]">{columnName(column)}</span>
+                        <span className="truncate">{name}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+
+          <div className="mb-1 text-[11px] font-medium text-[var(--color-muted)]">Rows</div>
+          <ul className="flex flex-col">
+            {candidateRows.map((row) => {
+              const included = rowSet.has(row);
+              const name = display(valueAt(row, categoryColumn ?? columns[0]));
+              return (
+                <li key={row}>
+                  <label className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[var(--color-surface)]">
+                    <input
+                      type="checkbox"
+                      checked={included}
+                      disabled={included && dataRowCount <= 1}
+                      onChange={() => toggleRow(row)}
+                    />
+                    <span className="w-8 shrink-0 tabular-nums text-[var(--color-muted)]">{row + 1}</span>
+                    <span className={cx('truncate', !included && 'text-[var(--color-muted)] line-through')}>{name || '—'}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          {candidateRows.length >= MAX_LISTED_ROWS && (
+            <p className="mt-2 text-[11px] text-[var(--color-muted)]">Showing the first {MAX_LISTED_ROWS} rows. Edit the range for the rest.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * One chart floating over the grid.
@@ -43,9 +201,13 @@ export default function SheetChartView({
 }) {
   // Keyed on the range's text: parsing makes a new object every time, which
   // would otherwise recompute the series on every render of the editor.
-  const range = useMemo(() => parseChartRange(chart.range), [chart.range]);
+  const range = useMemo(() => parseChartRanges(chart.range), [chart.range]);
   const data = useMemo(() => (range ? chartData(range, chart.headers, valueAt) : null), [range, chart.headers, valueAt]);
   const [draft, setDraft] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [dataAnchor, setDataAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!selected) setDataAnchor(null);
+  }, [selected]);
   const gesture = useRef<{ kind: 'move' | 'resize'; startX: number; startY: number; origin: SheetChart } | null>(null);
   // Read from the window listeners below, which are set up once rather than on
   // every render; a parent passing a fresh callback each time must not tear
@@ -91,11 +253,23 @@ export default function SheetChartView({
     };
   }, []);
 
+  /**
+   * Selecting a chart gives the grid the keyboard, so Delete and Escape reach
+   * the chart — unless the press was on one of its own controls, which keep it.
+   */
+  const select = (event: React.PointerEvent) => {
+    const target = event.target as HTMLElement;
+    if (!target.closest('input, select, button, label')) {
+      (event.currentTarget.closest('[role="grid"]') as HTMLElement | null)?.focus({ preventScroll: true });
+    }
+    onSelect();
+  };
+
   const start = (kind: 'move' | 'resize') => (event: React.PointerEvent) => {
     if (!editable || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    onSelect();
+    select(event);
     gesture.current = { kind, startX: event.clientX, startY: event.clientY, origin: chart };
   };
 
@@ -104,11 +278,12 @@ export default function SheetChartView({
       data-chart={chart.id}
       onPointerDown={(event) => {
         event.stopPropagation();
-        onSelect();
+        select(event);
       }}
       // The grid underneath opens a cell on double-click; a double-click on a
-      // chart is not aimed at the cell hidden behind it.
+      // chart is not aimed at the cell hidden behind it. Nor is a right-click.
       onDoubleClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.stopPropagation()}
       className={cx(
         'absolute z-20 flex flex-col overflow-hidden rounded-lg border bg-[var(--color-raised)] shadow-lg',
         selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30' : 'border-[var(--color-line)]',
@@ -157,6 +332,24 @@ export default function SheetChartView({
               <input type="checkbox" checked={chart.headers} onChange={(event) => onChange({ headers: event.target.checked })} />
               Headers
             </label>
+            <button
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => setDataAnchor(dataAnchor ? null : event.currentTarget)}
+              aria-label="Choose the data"
+              aria-expanded={dataAnchor !== null}
+              title="Choose the rows and series to chart"
+              className={cx(
+                'grid h-6 w-6 place-items-center rounded hover:bg-[var(--color-surface)]',
+                dataAnchor ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
+              )}
+            >
+              <Icon name="sliders" />
+            </button>
+            {dataAnchor && (
+              <Popover anchor={dataAnchor} placement="below" onClose={() => setDataAnchor(null)} className="w-72">
+                <ChartDataPanel chart={chart} ranges={range} valueAt={valueAt} onChange={onChange} />
+              </Popover>
+            )}
             <button
               onPointerDown={(event) => event.stopPropagation()}
               onClick={onDelete}

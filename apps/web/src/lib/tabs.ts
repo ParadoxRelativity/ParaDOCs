@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { randomId } from './util';
 
 /**
  * Tabs.
@@ -121,7 +122,7 @@ function makeTab(path: string, label: string, emoji?: string): Tab | null {
   const described = describePath(path);
   if (!described) return null;
   return {
-    id: crypto.randomUUID(),
+    id: randomId(),
     path,
     workspaceId: described.workspaceId,
     kind: described.kind,

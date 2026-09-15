@@ -9,7 +9,7 @@ import {
   formatValue,
   isError,
   parseCellKey,
-  parseChartRange,
+  parseChartRanges,
   sheetCollabName,
   sheetMapName,
   type CellStyle,
@@ -127,7 +127,7 @@ export function resolveInWorkbook(workbook: Workbook, ref: SheetRef): ResolvedSh
 
   const chart = sheet.charts.find((entry) => entry.id === ref.chartId);
   if (!chart) return { kind: 'chart', status: 'missing', problem: 'chart' };
-  const range = parseChartRange(chart.range);
+  const range = parseChartRanges(chart.range);
   return {
     kind: 'chart',
     status: 'ok',

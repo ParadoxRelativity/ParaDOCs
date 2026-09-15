@@ -5,6 +5,7 @@ export * from './chat.js';
 export * from './mentions.js';
 export * from './formula.js';
 export * from './formulaEval.js';
+export * from './formulaHelp.js';
 export * from './presence.js';
 export * from './schemas.js';
 export * from './sheet.js';

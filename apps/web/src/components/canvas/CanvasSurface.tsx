@@ -38,6 +38,12 @@ interface Props {
   /** When set, dragging on the board draws a shape of this kind. */
   shapeTool: ShapeKind | null;
   onDrawShape: (rect: { x: number; y: number; width: number; height: number }) => void;
+  /**
+   * The size of an element waiting to be placed. While set, an outline of it
+   * follows the pointer and the next click on the board places it there.
+   */
+  placing: { width: number; height: number } | null;
+  onPlace: (point: { x: number; y: number }) => void;
   onConnect: (
     from: { id: string; side: AnchorSide },
     to: { id: string; side: AnchorSide },
@@ -123,6 +129,10 @@ export default function CanvasSurface(props: Props) {
   );
   // Paste has no coordinates, so files land where the pointer last was.
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  // Where an element being placed would land, drawn as an outline under the pointer.
+  const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
+  // A double-click whose first press placed something is not also asking for a note.
+  const placedAt = useRef(0);
 
   const byId = useMemo(() => new Map(elements.map((el) => [el.id, el])), [elements]);
   const connectors = useMemo(
@@ -563,6 +573,8 @@ export default function CanvasSurface(props: Props) {
     if (spaceHeld) return; // space always pans, whatever is under the cursor
     // Let the press through to the board so a shape can be drawn over anything.
     if (props.shapeTool && props.editable) return;
+    // Likewise an element being placed can go on top of another.
+    if (props.placing && props.editable) return;
     // With the connector tool on, pressing an element's body starts a
     // connection from its facing side rather than moving it.
     if (props.connectorTool && props.editable) {
@@ -608,6 +620,16 @@ export default function CanvasSurface(props: Props) {
 
   function startBackgroundGesture(e: React.PointerEvent) {
     setEditingId(null);
+    // Panning with the middle button, Alt or Space still works while placing.
+    if (props.placing && editable && e.button === 0 && !spaceHeld && !e.altKey) {
+      const rect = surface.current?.getBoundingClientRect();
+      if (rect) {
+        placedAt.current = Date.now();
+        setGhost(null);
+        props.onPlace(toCanvasPoint(viewport, e.clientX, e.clientY, rect));
+      }
+      return;
+    }
     if (props.shapeTool && editable && e.button === 0 && !spaceHeld && !e.altKey) {
       gesture.current = { kind: 'draw', startX: e.clientX, startY: e.clientY };
       return;
@@ -629,8 +651,11 @@ export default function CanvasSurface(props: Props) {
       ref={surface}
       onPointerMove={(e) => {
         const rect = surface.current?.getBoundingClientRect();
-        if (rect) lastPointer.current = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
+        if (!rect) return;
+        lastPointer.current = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
+        if (props.placing) setGhost(lastPointer.current);
       }}
+      onPointerLeave={() => setGhost(null)}
       onDragOver={(e) => {
         if (!editable || !e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();
@@ -655,12 +680,13 @@ export default function CanvasSurface(props: Props) {
         if (!editable) return;
         const rect = surface.current?.getBoundingClientRect();
         if (!rect || e.target !== surface.current) return;
+        if (props.placing || Date.now() - placedAt.current < 500) return;
         // Double-clicking empty space drops a note there, as on other boards.
         props.onCreateNoteAt(toCanvasPoint(viewport, e.clientX, e.clientY, rect));
       }}
       className={cx(
         'relative h-full w-full touch-none overflow-hidden bg-[var(--color-canvas)]',
-        props.connectorTool || props.shapeTool
+        props.connectorTool || props.shapeTool || (props.placing && editable)
           ? 'cursor-crosshair'
           : spaceHeld
             ? 'cursor-grab'
@@ -826,6 +852,18 @@ export default function CanvasSurface(props: Props) {
             onSelectionChange(additive ? new Set(selectedIds).add(id) : new Set([id]))
           }
         />
+
+        {props.placing && editable && ghost && (
+          <div
+            className="pointer-events-none absolute rounded-lg border-2 border-dashed border-[var(--color-accent)] bg-[var(--color-accent)]/10"
+            style={{
+              left: ghost.x - props.placing.width / 2,
+              top: ghost.y - props.placing.height / 2,
+              width: props.placing.width,
+              height: props.placing.height,
+            }}
+          />
+        )}
       </div>
 
       {drawBox && (

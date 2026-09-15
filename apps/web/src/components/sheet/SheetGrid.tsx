@@ -17,6 +17,7 @@ import {
 } from '@paradocs/shared';
 import type { SheetStore } from '../../lib/sheetStore';
 import { cx } from '../../lib/util';
+import { useFormulaAssist } from './FormulaAssist';
 
 /**
  * The grid.
@@ -31,17 +32,40 @@ import { cx } from '../../lib/util';
 export interface Selection {
   anchor: CellRef;
   focus: CellRef;
+  /**
+   * Ranges picked earlier with ⌘ or Ctrl held, so rows or columns that are not
+   * side by side can be selected together. The anchor and focus are always the
+   * range being made now.
+   */
+  extra?: CellRange[];
 }
+
+/** Every range a selection covers, the one being made last. */
+export function selectionRanges(selection: Selection): CellRange[] {
+  return [...(selection.extra ?? []), normalizeRange(selection.anchor, selection.focus)];
+}
+
+export type GridMenuTarget = 'cell' | 'row' | 'column';
 
 interface Props {
   sheet: SheetStore;
   selection: Selection;
   onSelectionChange: (selection: Selection) => void;
+  /**
+   * Whether the cell selection is drawn. It is not while a chart is selected:
+   * the chart is what keys and commands act on then, and a highlighted cell
+   * would say otherwise.
+   */
+  selectionVisible?: boolean;
   editable: boolean;
   /** The cell being typed into, if any, and what is in the editor. */
   editing: { ref: CellRef; value: string } | null;
   onEditingChange: (editing: { ref: CellRef; value: string } | null) => void;
   onCommit: (ref: CellRef, value: string, move: 'down' | 'right' | 'none') => void;
+  /** Sees keys pressed on the grid before it does; returning true keeps them from the grid. */
+  interceptKey?: (event: React.KeyboardEvent) => boolean;
+  /** A right-click on the grid, after the selection has been moved under the pointer. */
+  onOpenMenu?: (menu: { x: number; y: number; target: GridMenuTarget }) => void;
   /**
    * Drawn in the grid's own coordinates, above the cells, so anything placed
    * here — charts — scrolls with the data it sits beside.
@@ -56,17 +80,28 @@ export default function SheetGrid({
   sheet,
   selection,
   onSelectionChange,
+  selectionVisible = true,
   editable,
   editing,
   onEditingChange,
   onCommit,
+  interceptKey,
+  onOpenMenu,
   overlay,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLInputElement>(null);
   const [viewport, setViewport] = useState({ top: 0, left: 0, width: 800, height: 600 });
   const [dragging, setDragging] = useState(false);
+  const [lineDrag, setLineDrag] = useState<'row' | 'column' | null>(null);
   const [resizing, setResizing] = useState<{ column: number; startX: number; startWidth: number } | null>(null);
+  // Set by a click on a row or column header, whose selection runs off the
+  // screen; following its focus there would throw away where you were looking.
+  const holdScroll = useRef(false);
+
+  const assist = useFormulaAssist(editor, editing ? editing.value : null, (value) => {
+    if (editing) onEditingChange({ ref: editing.ref, value });
+  });
 
   const { shape } = sheet;
   const widths = shape.columnWidths ?? {};
@@ -99,7 +134,10 @@ export default function SheetGrid({
     return () => observer.disconnect();
   }, []);
 
-  const range = normalizeRange(selection.anchor, selection.focus);
+  const ranges = selectionVisible ? selectionRanges(selection) : [];
+  const inSelection = (ref: CellRef) => ranges.some((range) => rangeContains(range, ref));
+  const columnSelected = (column: number) => ranges.some((range) => column >= range.left && column <= range.right);
+  const rowSelected = (row: number) => ranges.some((range) => row >= range.top && row <= range.bottom);
 
   // Which cells are worth drawing.
   const firstRow = Math.max(0, Math.floor(viewport.top / ROW_HEIGHT) - OVERSCAN);
@@ -112,6 +150,10 @@ export default function SheetGrid({
 
   /** Keeps the focused cell in view as the arrows move it. */
   useEffect(() => {
+    if (holdScroll.current) {
+      holdScroll.current = false;
+      return;
+    }
     const element = scroller.current;
     if (!element) return;
     const { row, column } = selection.focus;
@@ -149,6 +191,14 @@ export default function SheetGrid({
     };
   }, [resizing, sheet]);
 
+  // A drag across the headers ends wherever the pointer is let go.
+  useEffect(() => {
+    if (!lineDrag) return;
+    const onUp = () => setLineDrag(null);
+    window.addEventListener('pointerup', onUp);
+    return () => window.removeEventListener('pointerup', onUp);
+  }, [lineDrag]);
+
   function refAt(clientX: number, clientY: number): CellRef | null {
     const element = scroller.current;
     if (!element) return null;
@@ -159,6 +209,53 @@ export default function SheetGrid({
     const column = columnAt(offsets.current, x);
     if (row < 0 || row >= shape.rows || column < 0 || column >= shape.columns) return null;
     return { row, column };
+  }
+
+  /**
+   * Selects a whole row or column from its header: on its own, stretched from
+   * the last one with Shift, or alongside what is already selected with ⌘/Ctrl.
+   * The focus goes to its first cell, and the view stays where it is.
+   */
+  function selectLine(
+    axis: 'row' | 'column',
+    index: number,
+    modifiers: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  ) {
+    holdScroll.current = true;
+    const lastRowIndex = shape.rows - 1;
+    const lastColumnIndex = shape.columns - 1;
+    if (modifiers.shiftKey && selectionVisible) {
+      onSelectionChange({
+        ...selection,
+        anchor: axis === 'column' ? { row: lastRowIndex, column: selection.anchor.column } : { row: selection.anchor.row, column: lastColumnIndex },
+        focus: axis === 'column' ? { row: 0, column: index } : { row: index, column: 0 },
+      });
+      return;
+    }
+    const additive = (modifiers.metaKey || modifiers.ctrlKey) && selectionVisible;
+    onSelectionChange({
+      anchor: axis === 'column' ? { row: lastRowIndex, column: index } : { row: index, column: lastColumnIndex },
+      focus: axis === 'column' ? { row: 0, column: index } : { row: index, column: 0 },
+      extra: additive ? selectionRanges(selection) : undefined,
+    });
+  }
+
+  /** Moves the selection under a right-click unless it is already there. */
+  function openMenu(event: React.MouseEvent, target: GridMenuTarget, ref: CellRef) {
+    if (!onOpenMenu) return;
+    event.preventDefault();
+    scroller.current?.focus({ preventScroll: true });
+    const full =
+      target === 'column'
+        ? ranges.some((range) => range.top === 0 && range.bottom === shape.rows - 1 && ref.column >= range.left && ref.column <= range.right)
+        : target === 'row'
+          ? ranges.some((range) => range.left === 0 && range.right === shape.columns - 1 && ref.row >= range.top && ref.row <= range.bottom)
+          : inSelection(ref);
+    if (!full) {
+      if (target === 'cell') onSelectionChange({ anchor: ref, focus: ref });
+      else selectLine(target, target === 'row' ? ref.row : ref.column, { shiftKey: false, metaKey: false, ctrlKey: false });
+    }
+    onOpenMenu({ x: event.clientX, y: event.clientY, target });
   }
 
   return (
@@ -176,14 +273,18 @@ export default function SheetGrid({
                 key={column}
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
-                  onSelectionChange({
-                    anchor: { row: 0, column },
-                    focus: { row: shape.rows - 1, column },
-                  });
+                  selectLine('column', column, event);
+                  setLineDrag('column');
                 }}
+                onPointerEnter={() => {
+                  if (lineDrag !== 'column') return;
+                  holdScroll.current = true;
+                  onSelectionChange({ ...selection, focus: { row: 0, column } });
+                }}
+                onContextMenu={(event) => openMenu(event, 'column', { row: 0, column })}
                 className={cx(
-                  'absolute top-0 flex h-full items-center justify-center border-r border-[var(--color-line)] text-[11px] font-medium',
-                  column >= range.left && column <= range.right
+                  'absolute top-0 flex h-full select-none items-center justify-center border-r border-[var(--color-line)] text-[11px] font-medium',
+                  columnSelected(column)
                     ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
                     : 'text-[var(--color-muted)]',
                 )}
@@ -217,14 +318,18 @@ export default function SheetGrid({
                 key={row}
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
-                  onSelectionChange({
-                    anchor: { row, column: 0 },
-                    focus: { row, column: shape.columns - 1 },
-                  });
+                  selectLine('row', row, event);
+                  setLineDrag('row');
                 }}
+                onPointerEnter={() => {
+                  if (lineDrag !== 'row') return;
+                  holdScroll.current = true;
+                  onSelectionChange({ ...selection, focus: { row, column: 0 } });
+                }}
+                onContextMenu={(event) => openMenu(event, 'row', { row, column: 0 })}
                 className={cx(
-                  'absolute flex items-center justify-center border-b border-[var(--color-line)] text-[11px]',
-                  row >= range.top && row <= range.bottom
+                  'absolute flex select-none items-center justify-center border-b border-[var(--color-line)] text-[11px]',
+                  rowSelected(row)
                     ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
                     : 'text-[var(--color-muted)]',
                 )}
@@ -241,29 +346,43 @@ export default function SheetGrid({
           tabIndex={0}
           role="grid"
           aria-label="Spreadsheet"
+          aria-multiselectable
           onScroll={(event) => {
             const element = event.currentTarget;
             setViewport((current) => ({ ...current, top: element.scrollTop, left: element.scrollLeft }));
           }}
-          onKeyDown={(event) => onGridKey(event, sheet, selection, onSelectionChange, onEditingChange, editable)}
+          onKeyDown={(event) => {
+            // Keys typed into something on top of the grid — a chart's title,
+            // its settings — bubble up through it, and are not the grid's.
+            if (event.target !== event.currentTarget) return;
+            if (interceptKey?.(event)) return;
+            onGridKey(event, sheet, selection, onSelectionChange, onEditingChange, editable);
+          }}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             const ref = refAt(event.clientX, event.clientY);
             if (!ref) return;
             scroller.current?.focus();
             if (editing) onEditingChange(null);
-            if (event.shiftKey) onSelectionChange({ anchor: selection.anchor, focus: ref });
+            if (event.shiftKey && selectionVisible) onSelectionChange({ ...selection, focus: ref });
             else {
-              onSelectionChange({ anchor: ref, focus: ref });
+              const additive = (event.metaKey || event.ctrlKey) && selectionVisible;
+              onSelectionChange({ anchor: ref, focus: ref, extra: additive ? selectionRanges(selection) : undefined });
               setDragging(true);
             }
           }}
           onPointerMove={(event) => {
             if (!dragging) return;
             const ref = refAt(event.clientX, event.clientY);
-            if (ref) onSelectionChange({ anchor: selection.anchor, focus: ref });
+            if (ref && (ref.row !== selection.focus.row || ref.column !== selection.focus.column)) {
+              onSelectionChange({ ...selection, focus: ref });
+            }
           }}
           onPointerUp={() => setDragging(false)}
+          onContextMenu={(event) => {
+            const ref = refAt(event.clientX, event.clientY);
+            if (ref) openMenu(event, 'cell', ref);
+          }}
           onDoubleClick={(event) => {
             if (!editable) return;
             const ref = refAt(event.clientX, event.clientY);
@@ -275,8 +394,9 @@ export default function SheetGrid({
             {overlay}
             {rowsIn(firstRow, lastRow).map((row) =>
               columnsIn(firstColumn, lastColumn).map((column) => {
-                const inRange = rangeContains(range, { row, column });
-                const isFocus = selection.focus.row === row && selection.focus.column === column;
+                const inRange = inSelection({ row, column });
+                const isFocus =
+                  selectionVisible && selection.focus.row === row && selection.focus.column === column;
                 const value = sheet.value(row, column);
                 const style = sheet.style(row, column);
                 const beingEdited =
@@ -308,8 +428,10 @@ export default function SheetGrid({
                         ref={editor}
                         value={editing.value}
                         onChange={(event) => onEditingChange({ ref: editing.ref, value: event.target.value })}
+                        onSelect={assist.onSelect}
                         onBlur={() => onCommit(editing.ref, editing.value, 'none')}
                         onKeyDown={(event) => {
+                          if (assist.onKeyDown(event)) return;
                           if (event.key === 'Enter') {
                             event.preventDefault();
                             onCommit(editing.ref, editing.value, 'down');
@@ -335,6 +457,9 @@ export default function SheetGrid({
           </div>
         </div>
       </div>
+
+      {/* Outside the scroller, so a click on a hint is not a click on a cell. */}
+      {assist.popup}
     </div>
   );
 }
@@ -391,7 +516,8 @@ function onGridKey(
   const move = (rowStep: number, columnStep: number) => {
     event.preventDefault();
     const next = clampRef({ row: focus.row + rowStep, column: focus.column + columnStep });
-    onSelectionChange(event.shiftKey ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
+    // Shift stretches the range being made and keeps the others; a plain move starts over.
+    onSelectionChange(event.shiftKey ? { ...selection, focus: next } : { anchor: next, focus: next });
   };
 
   const meta = event.metaKey || event.ctrlKey;
@@ -425,11 +551,16 @@ function onGridKey(
       if (!editable) return;
       event.preventDefault();
       return onEditingChange({ ref: focus, value: sheet.text(focus.row, focus.column) });
+    case 'Escape':
+      if (!selection.extra?.length) return;
+      event.preventDefault();
+      return onSelectionChange({ anchor: selection.anchor, focus: selection.focus });
     case 'Delete':
     case 'Backspace':
       if (!editable) return;
       event.preventDefault();
-      return sheet.clearRange(normalizeRange(selection.anchor, selection.focus));
+      for (const range of selectionRanges(selection)) sheet.clearRange(range);
+      return;
     default:
       break;
   }

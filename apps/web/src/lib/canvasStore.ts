@@ -7,6 +7,7 @@ import {
   type CanvasElement,
   type CanvasElementType,
 } from '@paradocs/shared';
+import { randomId } from './util';
 
 /**
  * React view over the canvas elements stored in a document's Y.Doc.
@@ -42,7 +43,7 @@ export function useCanvasElements(ydoc: Y.Doc) {
 
   const create = useCallback(
     (type: CanvasElementType, props: Partial<CanvasElement> & { x: number; y: number }) => {
-      const id = crypto.randomUUID();
+      const id = randomId();
       const size = DEFAULT_SIZE[type];
       const highest = Math.max(0, ...[...map.values()].map((v) => Number(v.get('z') ?? 0)));
       const element = new Y.Map<unknown>();

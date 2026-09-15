@@ -5,6 +5,7 @@ import {
   renameSheetReferences,
   sheetMapName,
 } from '@paradocs/shared';
+import { randomId } from './util';
 import type { ImportedSheet, ImportedWorkbook } from './xlsx';
 
 /**
@@ -41,7 +42,7 @@ export function applyImport(ydoc: Y.Doc, sheets: ImportedSheet[]): void {
   ydoc.transact(() => {
     const info = ydoc.getMap<unknown>(SHEET_INFO);
     sheets.forEach((sheet, index) => {
-      const id = index === 0 ? MAIN_SHEET_ID : crypto.randomUUID();
+      const id = index === 0 ? MAIN_SHEET_ID : randomId();
 
       const entry = new Y.Map<unknown>();
       entry.set('name', sheet.name);

@@ -49,6 +49,20 @@ interface Props {
 type Inserting = { type: 'embed' | 'image' | 'audio' | 'video' | 'link' } | null;
 
 /**
+ * A tool that has been picked and is waiting for a click on the board to say
+ * where its element goes. Nothing is created until then, so picking a tool and
+ * changing your mind leaves the board — and the workspace — as it was.
+ */
+interface Placing {
+  /** Which toolbar button armed it, so that button shows as on. */
+  tool: string;
+  type: CanvasElement['type'];
+  /** What is being placed, for the hint: "sticky note", "image". */
+  label: string;
+  place: (point: { x: number; y: number }) => void;
+}
+
+/**
  * The elements whose text is the point of them. Adding one is almost always
  * the first half of writing something, so it is opened for typing straight
  * away rather than waiting to be double-clicked — and a tool used to draw it
@@ -87,6 +101,7 @@ export default function CanvasEditor({
   const [connectorTool, setConnectorTool] = useState(false);
   // The shape tool is a mode too: pick a kind, then drag out its bounds.
   const [shapeTool, setShapeTool] = useState<ShapeKind | null>(null);
+  const [placing, setPlacing] = useState<Placing | null>(null);
   // Set briefly so a node created by the + button opens for typing.
   const [editRequestId, setEditRequestId] = useState<string | null>(null);
   const [inserting, setInserting] = useState<Inserting>(null);
@@ -141,44 +156,60 @@ export default function CanvasEditor({
     [elements],
   );
 
-  /** Drops new elements into the middle of what the user is currently looking at. */
-  const viewCentre = useCallback(() => {
-    const el = document.getElementById('paradocs-canvas');
-    const rect = el?.getBoundingClientRect();
-    const width = rect?.width ?? 1200;
-    const height = rect?.height ?? 800;
-    return {
-      x: (width / 2 - viewport.x) / viewport.scale,
-      y: (height / 2 - viewport.y) / viewport.scale,
-    };
-  }, [viewport]);
-
+  /** Creates an element centred on the point the board was clicked at. */
   const addElement = useCallback(
-    (type: CanvasElement['type'], extra: Partial<CanvasElement> = {}) => {
-      const centre = viewCentre();
+    (type: CanvasElement['type'], point: { x: number; y: number }, extra: Partial<CanvasElement> = {}) => {
       const size = DEFAULT_SIZE[type];
-      // Cascade successive drops so a second element never lands exactly on the
-      // first and hides it.
-      const step = (elements.length % 8) * 28;
       const id = create(type, {
-        x: centre.x - size.width / 2 + step,
-        y: centre.y - size.height / 2 + step,
+        x: point.x - size.width / 2,
+        y: point.y - size.height / 2,
         ...extra,
       } as never);
       setSelectedIds(new Set([id]));
       if (TEXT_ELEMENTS.has(type)) setEditRequestId(id);
       return id;
     },
-    [create, viewCentre, elements.length],
+    [create],
   );
 
+  /** Arms a tool so the next click on the board places its element. */
+  function startPlacing(next: Placing) {
+    setShapeTool(null);
+    setConnectorTool(false);
+    setPlacing(next);
+  }
+
+  /** A toolbar button that places an element directly: press to arm, press again to put it away. */
+  function placeTool(tool: string, type: CanvasElement['type'], label: string, extra: () => Partial<CanvasElement> = () => ({})) {
+    if (placing?.tool === tool) {
+      setPlacing(null);
+      return;
+    }
+    startPlacing({ tool, type, label, place: (point) => addElement(type, point, extra()) });
+  }
+
+  /** A toolbar button whose element needs choosing first: the dialog opens, then the click places it. */
+  function openInsert(type: NonNullable<Inserting>['type']) {
+    if (placing?.tool === type) {
+      setPlacing(null);
+      return;
+    }
+    setPlacing(null);
+    setInserting({ type });
+  }
+
   /**
-   * Creates a real document in the workspace and drops a card for it, so a board
-   * can spawn the documents it references without leaving the canvas.
+   * Creates a real document in the workspace and places a card for it, so a
+   * board can spawn the documents it references without leaving the canvas.
+   * The document is only made once the card has somewhere to go.
    */
-  async function createDocumentCard() {
-    const doc = await createDocument.mutateAsync({ title: 'Untitled', folderId: null });
-    addElement('link', { documentId: doc.id, title: doc.title } as Partial<CanvasElement>);
+  async function createDocumentCard(point: { x: number; y: number }) {
+    try {
+      const doc = await createDocument.mutateAsync({ title: 'Untitled', folderId: null });
+      addElement('link', point, { documentId: doc.id, title: doc.title } as Partial<CanvasElement>);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not create the document', 'error');
+    }
   }
 
   /** Maps a file's type to the element that should hold it. */
@@ -227,6 +258,7 @@ export default function CanvasEditor({
       if (e.key === 'Escape') {
         setShapeTool(null);
         setConnectorTool(false);
+        setPlacing(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -353,39 +385,64 @@ export default function CanvasEditor({
         {canEdit && (
           <>
             <Divider />
-            <ToolButton label="Sticky note — or double-click the board" onClick={() => addElement('note', { text: '', color: NOTE_COLORS[0] })}>
+            <ToolButton
+              label="Sticky note — click the board to place it, or double-click the board"
+              active={placing?.tool === 'note'}
+              onClick={() => placeTool('note', 'note', 'sticky note', () => ({ text: '', color: NOTE_COLORS[0] }) as Partial<CanvasElement>)}
+            >
               <Icon name="sticky" />
             </ToolButton>
-            <ToolButton label="Text label" onClick={() => addElement('text', { text: '' })}>
+            <ToolButton
+              label="Text label — click the board to place it"
+              active={placing?.tool === 'text'}
+              onClick={() => placeTool('text', 'text', 'text label', () => ({ text: '' }) as Partial<CanvasElement>)}
+            >
               <Icon name="fonts" />
             </ToolButton>
-            <ToolButton label="Create a document and place it here" onClick={createDocumentCard}>
+            <ToolButton
+              label="Create a document — click the board to place its card"
+              active={placing?.tool === 'newDocument'}
+              onClick={() =>
+                placing?.tool === 'newDocument'
+                  ? setPlacing(null)
+                  : startPlacing({ tool: 'newDocument', type: 'link', label: 'new document', place: (point) => void createDocumentCard(point) })
+              }
+            >
               <Icon name="file-earmark-plus" />
             </ToolButton>
-            <ToolButton label="Place an existing document on the board" onClick={() => setInserting({ type: 'link' })}>
+            <ToolButton label="Place an existing document on the board" active={placing?.tool === 'link'} onClick={() => openInsert('link')}>
               <Icon name="file-earmark-text" />
             </ToolButton>
-            <ToolButton label="Embed a webpage or video by URL" onClick={() => setInserting({ type: 'embed' })}>
+            <ToolButton label="Embed a webpage or video by URL" active={placing?.tool === 'embed'} onClick={() => openInsert('embed')}>
               <Icon name="play-btn" />
             </ToolButton>
-            <ToolButton label="Image — by URL, upload, paste or drop" onClick={() => setInserting({ type: 'image' })}>
+            <ToolButton label="Image — by URL, upload, paste or drop" active={placing?.tool === 'image'} onClick={() => openInsert('image')}>
               <Icon name="image" />
             </ToolButton>
-            <ToolButton label="Audio — by URL or upload" onClick={() => setInserting({ type: 'audio' })}>
+            <ToolButton label="Audio — by URL or upload" active={placing?.tool === 'audio'} onClick={() => openInsert('audio')}>
               <Icon name="music-note-beamed" />
             </ToolButton>
-            <ToolButton label="Video — by URL or upload" onClick={() => setInserting({ type: 'video' })}>
+            <ToolButton label="Video — by URL or upload" active={placing?.tool === 'video'} onClick={() => openInsert('video')}>
               <Icon name="film" />
             </ToolButton>
-            <ToolButton label="Spreadsheet cell — shows its current value" onClick={() => setSheetInserting('cell')}>
+            <ToolButton
+              label="Spreadsheet cell — shows its current value"
+              active={placing?.tool === 'sheetCell'}
+              onClick={() => (placing?.tool === 'sheetCell' ? setPlacing(null) : (setPlacing(null), setSheetInserting('cell')))}
+            >
               <Icon name="table" />
             </ToolButton>
-            <ToolButton label="Spreadsheet chart — drawn from the spreadsheet's current data" onClick={() => setSheetInserting('chart')}>
+            <ToolButton
+              label="Spreadsheet chart — drawn from the spreadsheet's current data"
+              active={placing?.tool === 'sheetChart'}
+              onClick={() => (placing?.tool === 'sheetChart' ? setPlacing(null) : (setPlacing(null), setSheetInserting('chart')))}
+            >
               <Icon name="bar-chart" />
             </ToolButton>
             <ToolButton
-              label="Mind map — drops a root node you can branch from"
-              onClick={() => addElement('node', { text: '', color: NODE_COLORS[0] } as Partial<CanvasElement>)}
+              label="Mind map — click the board to place a root node you can branch from"
+              active={placing?.tool === 'node'}
+              onClick={() => placeTool('node', 'node', 'mind map', () => ({ text: '', color: NODE_COLORS[0] }) as Partial<CanvasElement>)}
             >
               <Icon name="diagram-3" />
             </ToolButton>
@@ -399,13 +456,17 @@ export default function CanvasEditor({
               onClick={() => {
                 setShapeTool(shapeTool ? null : 'rectangle');
                 setConnectorTool(false);
+                setPlacing(null);
               }}
             >
               <Icon name="square" />
             </ToolButton>
             <ToolButton
-              label="Frame (presentation slide)"
-              onClick={() => addElement('frame', { name: `Frame ${frames.length + 1}`, order: frames.length })}
+              label="Frame (presentation slide) — click the board to place it"
+              active={placing?.tool === 'frame'}
+              onClick={() =>
+                placeTool('frame', 'frame', 'frame', () => ({ name: `Frame ${frames.length + 1}`, order: frames.length }) as Partial<CanvasElement>)
+              }
             >
               <Icon name="aspect-ratio" />
             </ToolButton>
@@ -420,6 +481,7 @@ export default function CanvasEditor({
               onClick={() => {
                 setConnectorTool((on) => !on);
                 setShapeTool(null);
+                setPlacing(null);
               }}
             >
               <Icon name="arrow-left-right" />
@@ -528,6 +590,19 @@ export default function CanvasEditor({
         </div>
       )}
 
+      {placing && canEdit && (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--color-line)] px-3 py-1.5 text-xs">
+          <Icon name="cursor" className="text-[var(--color-accent)]" />
+          <span>
+            Click on the board where the {placing.label} should go.
+          </span>
+          <span className="text-[var(--color-muted)]">Esc to cancel.</span>
+          <Button variant="subtle" className="ml-auto text-xs" onClick={() => setPlacing(null)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
       {selectedShape && canEdit && (
         <ShapeBar
           shape={selectedShape}
@@ -574,6 +649,13 @@ export default function CanvasEditor({
           members={members.data ?? []}
           connectorTool={connectorTool}
           shapeTool={shapeTool}
+          placing={placing ? DEFAULT_SIZE[placing.type] : null}
+          onPlace={(point) => {
+            const current = placing;
+            // One element per pick: the tool puts itself away once used.
+            setPlacing(null);
+            current?.place(point);
+          }}
           onDrawShape={(rect) => {
             const id = create('shape', {
               ...rect,
@@ -619,7 +701,7 @@ export default function CanvasEditor({
             <div className="text-center text-sm text-[var(--color-muted)]">
               <p className="font-medium">Empty canvas</p>
               <p className="mt-1 text-xs">
-                Double-click anywhere to drop a note, or use the toolbar. Drag to pan, ⌘-scroll to
+                Double-click anywhere to drop a note, or pick a tool and click where it goes. Drag to pan, ⌘-scroll to
                 zoom, shift-drag to select, space-drag to pan over elements.
               </p>
             </div>
@@ -633,12 +715,24 @@ export default function CanvasEditor({
           workspaceId={workspaceId}
           onCancel={() => setInserting(null)}
           onInsert={(payload) => {
+            const type = inserting.type;
             setInserting(null);
-            addElement(inserting.type, payload as Partial<CanvasElement>);
+            startPlacing({
+              tool: type,
+              type,
+              label: INSERT_LABELS[type],
+              place: (point) => addElement(type, point, payload as Partial<CanvasElement>),
+            });
           }}
-          onUpload={async (file) => {
+          onUpload={(file) => {
+            const type = inserting.type;
             setInserting(null);
-            await handleFiles([file], viewCentre());
+            startPlacing({
+              tool: type,
+              type: elementTypeFor(file) ?? type,
+              label: INSERT_LABELS[type],
+              place: (point) => void handleFiles([file], point),
+            });
           }}
         />
       )}
@@ -652,19 +746,31 @@ export default function CanvasEditor({
           onInsert={(ref) => {
             setSheetInserting(null);
             if (ref.kind === 'cell') {
-              addElement('sheetCell', {
+              const extra = {
                 spreadsheetId: ref.spreadsheetId,
                 sheetId: ref.sheetId,
                 cell: ref.cell,
                 label: ref.label,
-              } as Partial<CanvasElement>);
+              } as Partial<CanvasElement>;
+              startPlacing({
+                tool: 'sheetCell',
+                type: 'sheetCell',
+                label: 'spreadsheet cell',
+                place: (point) => addElement('sheetCell', point, extra),
+              });
             } else {
-              addElement('sheetChart', {
+              const extra = {
                 spreadsheetId: ref.spreadsheetId,
                 sheetId: ref.sheetId,
                 chartId: ref.chartId,
                 label: ref.label,
-              } as Partial<CanvasElement>);
+              } as Partial<CanvasElement>;
+              startPlacing({
+                tool: 'sheetChart',
+                type: 'sheetChart',
+                label: 'chart',
+                place: (point) => addElement('sheetChart', point, extra),
+              });
             }
           }}
         />
@@ -940,6 +1046,14 @@ function ToolButton({
     </Tooltip>
   );
 }
+
+const INSERT_LABELS: Record<NonNullable<Inserting>['type'], string> = {
+  link: 'document card',
+  embed: 'embed',
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+};
 
 const ACCEPT: Record<string, string> = {
   image: 'image/*',

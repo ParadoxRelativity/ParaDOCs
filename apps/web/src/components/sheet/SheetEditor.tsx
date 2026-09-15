@@ -3,12 +3,16 @@ import {
   DEFAULT_COLUMN_WIDTH,
   MAIN_SHEET_ID,
   ROW_HEIGHT,
+  cellKey,
+  chartLines,
   columnName,
   formatValue,
   isError,
   normalizeRange,
+  parseCellKey,
   rangeName,
   type CellFormat,
+  type CellRange,
   type CellRef,
   type CellStyle,
   type SpreadsheetSummary,
@@ -20,9 +24,11 @@ import { claimNewDocument } from '../../lib/newDocuments';
 import { useToast } from '../Toast';
 import { Tooltip } from '../ui';
 import Icon, { type IconName } from '../Icon';
-import SheetGrid, { type Selection } from './SheetGrid';
+import SheetGrid, { selectionRanges, type GridMenuTarget, type Selection } from './SheetGrid';
 import SheetTabs from './SheetTabs';
 import SheetChartView from './SheetChartView';
+import SheetContextMenu, { type SheetMenuItem } from './SheetContextMenu';
+import { useFormulaAssist } from './FormulaAssist';
 import { applyImport, claimImport } from '../../lib/sheetImport';
 import { downloadBlob, exportXlsx } from '../../lib/xlsx';
 
@@ -69,7 +75,10 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
   });
   const [editing, setEditing] = useState<{ ref: CellRef; value: string } | null>(null);
   const [formulaDraft, setFormulaDraft] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; target: GridMenuTarget } | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const formulaInput = useRef<HTMLInputElement>(null);
+  const formulaAssist = useFormulaAssist(formulaInput, formulaDraft, setFormulaDraft);
 
   useEffect(() => setTitle(record.title), [record.id, record.title]);
 
@@ -108,27 +117,65 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
     setEditing(null);
     setFormulaDraft(null);
     setSelectedChartId(null);
+    setMenu(null);
   }, [sheet.sheetId]);
+
+  /** The range being made now; toolbar commands that need one place act on it. */
+  const range = normalizeRange(selection.anchor, selection.focus);
+  /** Every range selected, including ones picked earlier with ⌘/Ctrl. */
+  const ranges = useMemo(() => selectionRanges(selection), [selection]);
+  const focus = selection.focus;
+  const focusText = sheet.text(focus.row, focus.column);
+  const focusValue = sheet.value(focus.row, focus.column);
+  const focusStyle = sheet.style(focus.row, focus.column);
+  const selectedChart = sheet.charts.find((chart) => chart.id === selectedChartId) ?? null;
+
+  /**
+   * What to chart from the selection. A whole column selected reads down to
+   * its last filled row rather than the foot of the sheet, and a whole row
+   * across to its last filled column, so the chart is not mostly blanks.
+   */
+  function chartSource(): CellRange[] {
+    const { rows, columns } = chartLines(ranges);
+    const rowSet = new Set(rows);
+    const columnSet = new Set(columns);
+    let lastRow = -1;
+    let lastColumn = -1;
+    for (const key of sheet.raw.keys()) {
+      const ref = parseCellKey(key);
+      if (!ref) continue;
+      if (columnSet.has(ref.column)) lastRow = Math.max(lastRow, ref.row);
+      if (rowSet.has(ref.row)) lastColumn = Math.max(lastColumn, ref.column);
+    }
+    return ranges.map((entry) => ({
+      ...entry,
+      bottom: entry.bottom === sheet.shape.rows - 1 && lastRow >= entry.top ? Math.min(entry.bottom, lastRow) : entry.bottom,
+      right: entry.right === sheet.shape.columns - 1 && lastColumn >= entry.left ? Math.min(entry.right, lastColumn) : entry.right,
+    }));
+  }
 
   /**
    * Charts the selected range, placed just to the right of it so the chart and
    * its data can be read side by side, which is where people look for it.
    */
   function insertChart() {
-    if (range.top === range.bottom && range.left === range.right) {
+    const source = chartSource();
+    const { rows, columns } = chartLines(source);
+    if (rows.length * columns.length <= 1) {
       toast('Select the data to chart first — a column of numbers, or a table with headers.', 'error');
       return;
     }
     const widths = sheet.shape.columnWidths ?? {};
+    const right = columns[columns.length - 1];
     let x = 0;
-    for (let column = 0; column <= range.right; column++) x += widths[column] ?? DEFAULT_COLUMN_WIDTH;
+    for (let column = 0; column <= right; column++) x += widths[column] ?? DEFAULT_COLUMN_WIDTH;
     const id = sheet.addChart({
       kind: 'bar',
       title: '',
-      range: rangeName(range),
+      range: source.map(rangeName).join(','),
       headers: true,
       x: x + 16,
-      y: range.top * ROW_HEIGHT,
+      y: rows[0] * ROW_HEIGHT,
       width: 440,
       height: 290,
     });
@@ -156,12 +203,6 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
     }
   }
 
-  const range = normalizeRange(selection.anchor, selection.focus);
-  const focus = selection.focus;
-  const focusText = sheet.text(focus.row, focus.column);
-  const focusValue = sheet.value(focus.row, focus.column);
-  const focusStyle = sheet.style(focus.row, focus.column);
-
   const commit = useCallback(
     (ref: CellRef, value: string, move: 'down' | 'right' | 'none') => {
       if (canEdit) sheet.setCell(ref.row, ref.column, value);
@@ -185,40 +226,60 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
   const summary = useMemo(() => {
     const numbers: number[] = [];
     let filled = 0;
-    for (let row = range.top; row <= range.bottom; row++) {
-      for (let column = range.left; column <= range.right; column++) {
-        const value = sheet.value(row, column);
-        if (value === null || value === '') continue;
-        filled++;
-        if (typeof value === 'number') numbers.push(value);
+    // Ranges picked separately can overlap; a cell in two of them counts once.
+    const seen = ranges.length > 1 ? new Set<string>() : null;
+    for (const entry of ranges) {
+      for (let row = entry.top; row <= entry.bottom; row++) {
+        for (let column = entry.left; column <= entry.right; column++) {
+          if (seen) {
+            const key = cellKey(row, column);
+            if (seen.has(key)) continue;
+            seen.add(key);
+          }
+          const value = sheet.value(row, column);
+          if (value === null || value === '') continue;
+          filled++;
+          if (typeof value === 'number') numbers.push(value);
+        }
       }
     }
     if (numbers.length === 0) return filled > 0 ? `Count ${filled}` : null;
     const total = numbers.reduce((a, b) => a + b, 0);
     return `Sum ${trim(total)} · Average ${trim(total / numbers.length)} · Count ${numbers.length}`;
-  }, [range, sheet]);
+  }, [ranges, sheet]);
 
   // --- clipboard -------------------------------------------------------------
   // Tab-separated, which is what Excel and Sheets put on the clipboard, so a
   // range copied here pastes into them and back.
   useEffect(() => {
+    /**
+     * Ranges picked apart copy as one block when they line up — whole columns
+     * over the same rows, or rows over the same columns — closed up the way
+     * Excel does. Ranges that do not line up copy the one made last.
+     */
+    const copied = () => {
+      const alignedRows = ranges.every((entry) => entry.top === ranges[0].top && entry.bottom === ranges[0].bottom);
+      const alignedColumns = ranges.every((entry) => entry.left === ranges[0].left && entry.right === ranges[0].right);
+      return chartLines(alignedRows || alignedColumns ? ranges : [range]);
+    };
+
     const onCopy = (event: ClipboardEvent) => {
-      if (editing || !isGridFocused()) return;
-      const lines: string[] = [];
-      for (let row = range.top; row <= range.bottom; row++) {
-        const line: string[] = [];
-        for (let column = range.left; column <= range.right; column++) {
-          const value = sheet.value(row, column);
-          line.push(isError(value) ? value : formatValue(value, sheet.style(row, column)));
-        }
-        lines.push(line.join('\t'));
-      }
+      if (editing || selectedChartId || !isGridFocused()) return;
+      const { rows, columns } = copied();
+      const lines = rows.map((row) =>
+        columns
+          .map((column) => {
+            const value = sheet.value(row, column);
+            return isError(value) ? value : formatValue(value, sheet.style(row, column));
+          })
+          .join('\t'),
+      );
       event.clipboardData?.setData('text/plain', lines.join('\n'));
       event.preventDefault();
     };
 
     const onPaste = (event: ClipboardEvent) => {
-      if (!canEdit || editing || !isGridFocused()) return;
+      if (!canEdit || editing || selectedChartId || !isGridFocused()) return;
       const text = event.clipboardData?.getData('text/plain');
       if (!text) return;
       event.preventDefault();
@@ -243,9 +304,12 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
     };
 
     const onCut = (event: ClipboardEvent) => {
-      if (!canEdit || editing || !isGridFocused()) return;
+      if (!canEdit || editing || selectedChartId || !isGridFocused()) return;
       onCopy(event);
-      sheet.clearRange(range);
+      const { rows, columns } = copied();
+      session.ydoc.transact(() => {
+        for (const row of rows) for (const column of columns) sheet.setCell(row, column, '');
+      });
     };
 
     document.addEventListener('copy', onCopy);
@@ -256,11 +320,13 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
       document.removeEventListener('paste', onPaste);
       document.removeEventListener('cut', onCut);
     };
-  }, [canEdit, editing, range, sheet]);
+  }, [canEdit, editing, range, ranges, selectedChartId, session.ydoc, sheet]);
 
   const styleSelection = (patch: CellStyle) => {
     if (!canEdit) return;
-    sheet.styleRange(range, patch);
+    session.ydoc.transact(() => {
+      for (const entry of ranges) sheet.styleRange(entry, patch);
+    });
   };
 
   const sort = (direction: 'asc' | 'desc') => {
@@ -271,6 +337,126 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
     }
     sheet.sortRange(range, range.left, direction);
     toast(`Sorted ${rangeName(range)} by column ${columnName(range.left)}`);
+  };
+
+  // --- rows and columns ------------------------------------------------------
+
+  /**
+   * How many lines an insert adds: as many as are selected, the way Excel does
+   * it — except when the selection runs the whole way along that axis (a whole
+   * column selected, then "insert row"), where it is one.
+   */
+  const insertCount = (axis: 'row' | 'column') => {
+    if (axis === 'row') {
+      const whole = range.top === 0 && range.bottom === sheet.shape.rows - 1;
+      return whole ? 1 : range.bottom - range.top + 1;
+    }
+    const whole = range.left === 0 && range.right === sheet.shape.columns - 1;
+    return whole ? 1 : range.right - range.left + 1;
+  };
+
+  const insertLines = (axis: 'row' | 'column', side: 'before' | 'after') => {
+    if (!canEdit) return;
+    const count = insertCount(axis);
+    const at =
+      axis === 'row'
+        ? side === 'before' ? range.top : range.bottom + 1
+        : side === 'before' ? range.left : range.right + 1;
+    sheet.spliceLine(axis, at, count);
+  };
+
+  /** Every row (or column) any selected range touches, in order. */
+  const selectedLines = (axis: 'row' | 'column') => {
+    const { rows, columns } = chartLines(ranges);
+    return axis === 'row' ? rows : columns;
+  };
+
+  /**
+   * Deletes every selected row or column, including ones picked apart. The
+   * last run goes first, so the indices of the runs before it still hold.
+   */
+  const deleteLines = (axis: 'row' | 'column') => {
+    if (!canEdit) return;
+    const lines = selectedLines(axis);
+    const runs: [number, number][] = [];
+    for (const index of lines) {
+      const last = runs.at(-1);
+      if (last && index === last[1] + 1) last[1] = index;
+      else runs.push([index, index]);
+    }
+    session.ydoc.transact(() => {
+      for (const [first, last] of runs.reverse()) sheet.spliceLine(axis, first, -(last - first + 1));
+    });
+    const start = { row: range.top, column: range.left };
+    setSelection({ anchor: start, focus: start });
+  };
+
+  const clearSelection = () => {
+    if (!canEdit) return;
+    session.ydoc.transact(() => {
+      for (const entry of ranges) sheet.clearRange(entry);
+    });
+  };
+
+  /** Keys on the grid while a chart is selected are the chart's. */
+  const interceptGridKey = (event: React.KeyboardEvent): boolean => {
+    if (!selectedChartId) return false;
+    if (event.key === 'Escape' || event.key.startsWith('Arrow')) {
+      event.preventDefault();
+      setSelectedChartId(null);
+    } else if ((event.key === 'Delete' || event.key === 'Backspace') && canEdit) {
+      event.preventDefault();
+      sheet.deleteChart(selectedChartId);
+      setSelectedChartId(null);
+    }
+    return true;
+  };
+
+  const menuItems = (target: GridMenuTarget): SheetMenuItem[] => {
+    const rowCount = insertCount('row');
+    const columnCount = insertCount('column');
+    const rowWord = rowCount === 1 ? 'row' : `${rowCount} rows`;
+    const columnWord = columnCount === 1 ? 'column' : `${columnCount} columns`;
+    const deleteRows = selectedLines('row').length;
+    const deleteColumns = selectedLines('column').length;
+    const items: SheetMenuItem[] = [];
+
+    if (target !== 'column') {
+      items.push(
+        { label: `Insert ${rowWord} above`, icon: 'arrow-bar-up', onSelect: () => insertLines('row', 'before') },
+        { label: `Insert ${rowWord} below`, icon: 'arrow-bar-down', onSelect: () => insertLines('row', 'after') },
+      );
+    }
+    if (target !== 'row') {
+      items.push(
+        { label: `Insert ${columnWord} left`, icon: 'arrow-bar-left', onSelect: () => insertLines('column', 'before') },
+        { label: `Insert ${columnWord} right`, icon: 'arrow-bar-right', onSelect: () => insertLines('column', 'after') },
+      );
+    }
+    items.push('divider');
+    // Deleting every row of the sheet because a whole column was selected is never what was meant.
+    if (target !== 'column' && deleteRows < sheet.shape.rows) {
+      items.push({
+        label: deleteRows === 1 ? 'Delete row' : `Delete ${deleteRows} rows`,
+        icon: 'trash3',
+        danger: true,
+        onSelect: () => deleteLines('row'),
+      });
+    }
+    if (target !== 'row' && deleteColumns < sheet.shape.columns) {
+      items.push({
+        label: deleteColumns === 1 ? 'Delete column' : `Delete ${deleteColumns} columns`,
+        icon: 'x-square',
+        danger: true,
+        onSelect: () => deleteLines('column'),
+      });
+    }
+    items.push(
+      { label: 'Clear contents', icon: 'eraser', onSelect: clearSelection },
+      'divider',
+      { label: 'Chart the selection', icon: 'bar-chart', onSelect: insertChart },
+    );
+    return items;
   };
 
   return (
@@ -341,18 +527,12 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
             <Tool label="Chart the selection" icon="bar-chart" onClick={insertChart} />
 
             <Divider />
-            <Tool label="Insert a row above" icon="arrow-bar-up" onClick={() => sheet.spliceLine('row', range.top, 1)} />
-            <Tool label="Insert a column to the left" icon="arrow-bar-left" onClick={() => sheet.spliceLine('column', range.left, 1)} />
-            <Tool
-              label="Delete the selected rows"
-              icon="trash3"
-              onClick={() => sheet.spliceLine('row', range.top, -(range.bottom - range.top + 1))}
-            />
-            <Tool
-              label="Delete the selected columns"
-              icon="x-square"
-              onClick={() => sheet.spliceLine('column', range.left, -(range.right - range.left + 1))}
-            />
+            <Tool label="Insert a row above" icon="arrow-bar-up" onClick={() => insertLines('row', 'before')} />
+            <Tool label="Insert a row below" icon="arrow-bar-down" onClick={() => insertLines('row', 'after')} />
+            <Tool label="Insert a column to the left" icon="arrow-bar-left" onClick={() => insertLines('column', 'before')} />
+            <Tool label="Insert a column to the right" icon="arrow-bar-right" onClick={() => insertLines('column', 'after')} />
+            <Tool label="Delete the selected rows" icon="trash3" onClick={() => deleteLines('row')} />
+            <Tool label="Delete the selected columns" icon="x-square" onClick={() => deleteLines('column')} />
           </>
         )}
 
@@ -367,23 +547,29 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
 
       {/* --- name box and formula bar --- */}
       <div className="flex shrink-0 items-stretch border-b border-[var(--color-line)]">
-        <div className="flex w-28 shrink-0 items-center justify-center border-r border-[var(--color-line)] px-2 text-xs font-medium">
-          {rangeName(range)}
+        <div
+          className="flex w-28 shrink-0 items-center justify-center border-r border-[var(--color-line)] px-2 text-xs font-medium"
+          title={selectedChart ? selectedChart.range : ranges.map(rangeName).join(', ')}
+        >
+          <span className="truncate">{selectedChart ? 'Chart' : ranges.map(rangeName).join(',')}</span>
         </div>
         <div className="flex w-7 shrink-0 items-center justify-center border-r border-[var(--color-line)] text-[11px] text-[var(--color-muted)]">
           <Icon name="braces-asterisk" />
         </div>
         <input
+          ref={formulaInput}
           value={formulaDraft ?? (editing ? editing.value : focusText)}
           readOnly={!canEdit}
           placeholder={canEdit ? 'Enter a value, or = to start a formula' : ''}
           onChange={(event) => setFormulaDraft(event.target.value)}
+          onSelect={formulaAssist.onSelect}
           onFocus={() => setFormulaDraft(focusText)}
           onBlur={() => {
             if (formulaDraft !== null && formulaDraft !== focusText) commit(focus, formulaDraft, 'none');
             setFormulaDraft(null);
           }}
           onKeyDown={(event) => {
+            if (formulaAssist.onKeyDown(event)) return;
             if (event.key === 'Enter') {
               event.preventDefault();
               commit(focus, formulaDraft ?? focusText, 'down');
@@ -396,16 +582,27 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
           }}
           className="min-w-0 flex-1 bg-transparent px-2 text-xs outline-none"
         />
+        {canEdit && formulaAssist.popup}
       </div>
 
       <SheetGrid
         sheet={sheet}
         selection={selection}
+        selectionVisible={selectedChartId === null}
         onSelectionChange={(next) => {
           setSelection(next);
           setFormulaDraft(null);
           setSelectedChartId(null);
         }}
+        interceptKey={interceptGridKey}
+        onOpenMenu={
+          canEdit
+            ? (next) => {
+                setSelectedChartId(null);
+                setMenu(next);
+              }
+            : undefined
+        }
         overlay={sheet.charts.map((chart) => (
           <SheetChartView
             key={chart.id}
@@ -426,6 +623,8 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
         onEditingChange={setEditing}
         onCommit={commit}
       />
+
+      {menu && <SheetContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={() => setMenu(null)} />}
 
       <SheetTabs
         sheets={sheet.sheets}
