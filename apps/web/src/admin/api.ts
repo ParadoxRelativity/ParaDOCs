@@ -4,6 +4,7 @@ import type {
   AdminStatus,
   AdminUpdateUserInput,
   AdminUser,
+  AdminVersionStatus,
   ServerSettings,
   UpdateServerSettingsInput,
 } from '@paradocs/shared';
@@ -50,6 +51,7 @@ export const adminKeys = {
   status: ['admin', 'status'] as const,
   settings: ['admin', 'settings'] as const,
   users: ['admin', 'users'] as const,
+  version: ['admin', 'version'] as const,
 };
 
 // --- session -----------------------------------------------------------------
@@ -104,6 +106,25 @@ export function useUpdateServerSettings() {
   return useMutation({
     mutationFn: (input: UpdateServerSettingsInput) => request<ServerSettings>('PATCH', '/settings', input),
     onSuccess: (settings) => qc.setQueryData(adminKeys.settings, settings),
+  });
+}
+
+// --- version -----------------------------------------------------------------
+
+export function useVersionStatus() {
+  return useQuery({
+    queryKey: adminKeys.version,
+    queryFn: () => request<AdminVersionStatus>('GET', '/version'),
+    // The server checks on its own schedule; this only picks up what it found.
+    refetchInterval: 10 * 60_000,
+  });
+}
+
+export function useCheckForUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => request<AdminVersionStatus>('POST', '/version/check'),
+    onSuccess: (status) => qc.setQueryData(adminKeys.version, status),
   });
 }
 

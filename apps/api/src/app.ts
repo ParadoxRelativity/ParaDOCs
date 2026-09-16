@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { registerErrorHandler, registerJsonBodyParser } from './lib/http.js';
+import { serverVersion } from './lib/releases.js';
 import { servesInline } from './lib/storage.js';
 import { voiceProxyRoutes } from './lib/voiceProxy.js';
 import { sessionPlugin } from './plugins/session.js';
@@ -63,7 +64,12 @@ export async function buildApp() {
     },
   });
 
-  app.get('/api/health', async () => ({ ok: true, version: '0.1.0' }));
+  // The version lets an open browser tab notice the server has been upgraded
+  // underneath it.
+  app.get('/api/health', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return { ok: true, version: serverVersion };
+  });
 
   // In production the API also serves the built SPA, so self-hosting is one
   // process plus Postgres. In dev this directory does not exist and Vite serves

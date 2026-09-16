@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
+import fs from 'node:fs';
 import path from 'node:path';
 
 export default defineConfig(({ mode }) => {
@@ -9,8 +10,16 @@ export default defineConfig(({ mode }) => {
   const apiUrl = env.VITE_API_URL || 'http://localhost:4000';
   const adminUrl = env.VITE_ADMIN_API_URL || `http://localhost:${env.ADMIN_PORT || 4001}`;
 
+  // The release version, which the release workflow keeps in the desktop
+  // manifest. An open tab compares it with the server's, to notice an upgrade.
+  const version =
+    env.PARADOCS_VERSION ||
+    JSON.parse(fs.readFileSync(path.resolve(__dirname, '../desktop/package.json'), 'utf8')).version ||
+    null;
+
   return {
     plugins: [react(), tailwind()],
+    define: { __PARADOCS_VERSION__: JSON.stringify(version) },
     envDir: path.resolve(__dirname, '../..'),
     resolve: {
       alias: { '@': path.resolve(__dirname, 'src') },

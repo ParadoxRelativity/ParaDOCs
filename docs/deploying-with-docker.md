@@ -90,6 +90,7 @@ Settings Compose reads from `.env`:
 | `ADMIN_PORT` | `4001` | Host port the server admin page is published on |
 | `ADMIN_BIND_ADDR` | `127.0.0.1` | Interface the admin page is published on. Keep it `127.0.0.1`. |
 | `MAX_UPLOAD_MB` | `25` | Largest file people can upload, in megabytes, to chat, documents and canvases |
+| `UPDATE_CHECK` | `true` | Whether the server checks GitHub for new releases (section 9). Set `false` to never contact GitHub. |
 | `LOG_LEVEL` | `info` | App log detail: `error`, `warn`, `info` or `debug` |
 | `DOMAIN` | — | HTTPS setup: the hostname Caddy gets a certificate for |
 | `VOICE_ENABLED` | `true` | Set `false` to turn voice and video off (section 6) |
@@ -331,6 +332,13 @@ so a backup from an older version restores into a newer one. Try a restore on a
 spare machine now and then, so you know your backups work before you need them.
 
 ## 9. Upgrading
+
+The server checks GitHub for a new release shortly after it starts and every six
+hours after that. When one is out, server administrators see it in their
+notifications in the app and at the top of **Server settings** on the admin page,
+with a link to the release notes. Nobody else is told. Set `UPDATE_CHECK=false`
+in `.env` to turn the check off. Browsers that had the app open while you
+upgraded offer a reload, so nobody keeps running the old page.
 
 **Back up first** (section 8). Then:
 

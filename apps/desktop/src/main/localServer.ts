@@ -1,3 +1,4 @@
+import { app as electronApp } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -55,6 +56,9 @@ export async function startLocalServer(connectionId: string): Promise<LocalServe
   // A local workspace is one person on one machine. Anyone who could reach an
   // invite endpoint here already has the user's account.
   process.env.ALLOW_REGISTRATION = 'true';
+  // The server reports the app's version: it is the same release, and its own
+  // manifest is not on disk inside the package.
+  process.env.PARADOCS_VERSION = electronApp.getVersion();
 
   const [{ buildApp }, { createCollabServer }, { createChatServer }, { useDriver, closeDb }, { runMigrations }] =
     await Promise.all([

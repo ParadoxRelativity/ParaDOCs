@@ -1,10 +1,20 @@
-import type { ChannelKind, ChatEvent } from '@paradocs/shared';
+import { HERE_REF, type ChannelKind, type ChatEvent } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import type { Role } from '../plugins/session.js';
 import { publishToChannel, publishToUser } from '../chat/hub.js';
 import { UUID, channelLevelSql, type Level } from './access.js';
 
 export { UUID };
+
+/**
+ * A condition on `m.body`: the message mentions this user, by their own token
+ * or with `@here`. Matched on the stored tokens rather than names, so someone
+ * renaming themselves cannot change what counts. Whoever can read the channel
+ * is who `@here` reaches, so the caller's access check already scopes it.
+ */
+export function mentionsUserSql(userParam: string): string {
+  return `(position('<@' || ${userParam}::text || '>' in lower(m.body)) > 0 OR position('${HERE_REF}' in m.body) > 0)`;
+}
 
 export interface ChannelAccess {
   workspaceId: string;

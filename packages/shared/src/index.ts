@@ -14,3 +14,4 @@ export * from './sheetCompute.js';
 export * from './sheetFormat.js';
 export * from './sheetRefs.js';
 export * from './types.js';
+export * from './version.js';

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type {
@@ -6,6 +6,7 @@ import type {
   MentionNotification,
   MessageNotification,
   Notifications,
+  ServerUpdateNotification,
 } from '@paradocs/shared';
 import {
   useAcceptInvite,
@@ -13,15 +14,18 @@ import {
   useMarkMentionsRead,
   useMarkNotificationsRead,
   useNotifications,
+  useServerVersion,
 } from '../api/hooks';
 import {
   desktop,
   requireDesktop,
   useDesktopConnections,
   useDesktopNotifications,
+  useDesktopUpdates,
   type DesktopConnection,
   type Outcome,
 } from '../lib/desktop';
+import { useDismissedUpdates } from '../lib/dismissedUpdates';
 import { getOpenBehaviour } from '../lib/openBehaviour';
 import { openTab } from '../lib/tabs';
 import { cx, formatRelative } from '../lib/util';
@@ -48,6 +52,7 @@ interface Actions {
   accept: (invite: InviteNotification) => Promise<void>;
   decline: (invite: InviteNotification) => Promise<void>;
   markAllRead: () => Promise<void>;
+  dismissServerUpdate: () => void;
 }
 
 /** Everything from one server. In the desktop app there is one per signed-in connection. */
@@ -59,8 +64,80 @@ interface Group {
 }
 
 function countOf(notifications: Notifications): number {
-  // A server that predates tagging sends no mentions at all.
-  return notifications.invites.length + notifications.messages.length + (notifications.mentions?.length ?? 0);
+  // A server that predates tagging sends no mentions at all, and one that
+  // predates release checks no server update.
+  return (
+    notifications.invites.length +
+    notifications.messages.length +
+    (notifications.mentions?.length ?? 0) +
+    (notifications.serverUpdate ? 1 : 0)
+  );
+}
+
+/** A new version of this app, or of the page in this browser tab. */
+interface ClientUpdate {
+  /** Names the release and the stage, so dismissing one never hides the next. */
+  key: string;
+  headline: string;
+  detail: string;
+  action?: { label: string; run: () => unknown };
+  percent?: number;
+  /** Something to do, rather than progress to watch. */
+  actionable: boolean;
+}
+
+/**
+ * The desktop app updates itself and says how far along it is. A browser tab
+ * keeps running the client it loaded, so it compares that with what the server
+ * now runs and offers a reload when they differ.
+ */
+function useClientUpdate(): ClientUpdate | null {
+  const app = useDesktopUpdates();
+  const built = __PARADOCS_VERSION__;
+  const serving = useServerVersion(!desktop && Boolean(built)).data;
+
+  if (desktop) {
+    if (!app?.newVersion) return null;
+    const version = app.newVersion;
+    const running = `You are running ${app.currentVersion}.`;
+    switch (app.phase) {
+      case 'available':
+        return {
+          key: `app-available:${version}`,
+          headline: `ParaDOCs ${version} is available`,
+          detail: running,
+          action: { label: 'Download', run: () => requireDesktop().updates.download() },
+          actionable: true,
+        };
+      case 'downloading':
+        return {
+          key: `app-downloading:${version}`,
+          headline: `Downloading ParaDOCs ${version}`,
+          detail: running,
+          percent: app.percent ?? 0,
+          actionable: false,
+        };
+      case 'downloaded':
+        return {
+          key: `app-ready:${version}`,
+          headline: `ParaDOCs ${version} is ready to install`,
+          detail: 'It installs when you quit, or restart now to use it straight away.',
+          action: { label: 'Restart to update', run: () => requireDesktop().updates.install() },
+          actionable: true,
+        };
+      default:
+        return null;
+    }
+  }
+
+  if (!built || !serving || serving === built) return null;
+  return {
+    key: `reload:${serving}`,
+    headline: `This server now runs ParaDOCs ${serving}`,
+    detail: `This page is still on ${built}. Reload to use the new version.`,
+    action: { label: 'Reload', run: () => window.location.reload() },
+    actionable: true,
+  };
 }
 
 /**
@@ -82,6 +159,9 @@ export default function NotificationsMenu() {
   const declineInvite = useDeclineInvite();
   const markRead = useMarkNotificationsRead();
   const markMentionsRead = useMarkMentionsRead();
+  const dismissed = useDismissedUpdates();
+  const update = useClientUpdate();
+  const clientUpdate = update && !dismissed.isDismissed(update.key) ? update : null;
 
   useEffect(() => {
     if (!open) return;
@@ -105,12 +185,26 @@ export default function NotificationsMenu() {
 
   const groups: Group[] = [];
 
+  /** A server update someone dismissed stays hidden until the release after it. */
+  const serverUpdateKey = (connection: DesktopConnection | null, update: ServerUpdateNotification) =>
+    `server:${connection?.id ?? 'here'}:${update.release.version}`;
+  const withoutDismissed = (connection: DesktopConnection | null, notifications: Notifications): Notifications =>
+    notifications.serverUpdate && dismissed.isDismissed(serverUpdateKey(connection, notifications.serverUpdate))
+      ? { ...notifications, serverUpdate: null }
+      : notifications;
+  const dismissServerUpdate = (connection: DesktopConnection | null, notifications: Notifications) => {
+    if (notifications.serverUpdate) dismissed.dismiss(serverUpdateKey(connection, notifications.serverUpdate));
+  };
+
   if (here.data) {
+    const connection = connections.find((c) => c.active) ?? null;
+    const notifications = here.data;
     groups.push({
       key: 'here',
-      connection: connections.find((c) => c.active) ?? null,
-      notifications: here.data,
+      connection,
+      notifications: withoutDismissed(connection, notifications),
       actions: {
+        dismissServerUpdate: () => dismissServerUpdate(connection, notifications),
         openChannel: (message, newTab) => {
           close();
           const path = `/w/${message.workspace.id}/c/${message.channelId}`;
@@ -166,8 +260,9 @@ export default function NotificationsMenu() {
     groups.push({
       key: connection.id,
       connection,
-      notifications,
+      notifications: withoutDismissed(connection, notifications),
       actions: {
+        dismissServerUpdate: () => dismissServerUpdate(connection, notifications),
         // Another server's page has its own tabs, and switching to it is
         // already a change of context; it opens where it opens.
         openChannel: (message) => {
@@ -194,7 +289,10 @@ export default function NotificationsMenu() {
     });
   }
 
-  const count = groups.reduce((total, group) => total + countOf(group.notifications), 0);
+  const count =
+    groups.reduce((total, group) => total + countOf(group.notifications), 0) + (clientUpdate?.actionable ? 1 : 0);
+  // Progress alone is not news, but it is still worth seeing when the menu is open.
+  const empty = count === 0 && !clientUpdate;
   // Being named, messaged directly, or invited is worth a louder badge than
   // ordinary chatter.
   const urgent = groups.some(
@@ -236,15 +334,20 @@ export default function NotificationsMenu() {
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
             {here.isLoading ? (
               <Spinner />
-            ) : count === 0 ? (
+            ) : empty ? (
               <div className="px-6 py-10 text-center">
                 <Icon name="bell" className="text-2xl text-[var(--color-muted)]" />
                 <p className="mt-2 text-sm font-medium">You are all caught up</p>
               </div>
             ) : (
-              groups.map((group) => (
-                <NotificationGroup key={group.key} group={group} labelled={Boolean(desktop)} />
-              ))
+              <>
+                {clientUpdate && (
+                  <ClientUpdateRow update={clientUpdate} onDismiss={() => dismissed.dismiss(clientUpdate.key)} />
+                )}
+                {groups.map((group) => (
+                  <NotificationGroup key={group.key} group={group} labelled={Boolean(desktop)} />
+                ))}
+              </>
             )}
           </div>
         </div>
@@ -256,6 +359,7 @@ export default function NotificationsMenu() {
 function NotificationGroup({ group, labelled }: { group: Group; labelled: boolean }) {
   const { invites, messages } = group.notifications;
   const mentions = group.notifications.mentions ?? [];
+  const serverUpdate = group.notifications.serverUpdate ?? null;
   if (countOf(group.notifications) === 0) return null;
   const unread = messages.length > 0 || mentions.length > 0;
   const heading = labelled && group.connection ? group.connection.label : unread ? 'Unread' : null;
@@ -278,6 +382,7 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
           )}
         </div>
       )}
+      {serverUpdate && <ServerUpdateRow update={serverUpdate} onDismiss={group.actions.dismissServerUpdate} />}
       {invites.map((invite) => (
         <InviteRow key={invite.id} invite={invite} actions={group.actions} />
       ))}
@@ -296,6 +401,93 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
         />
       ))}
     </section>
+  );
+}
+
+function UpdateRow({
+  icon,
+  headline,
+  detail,
+  children,
+}: {
+  icon: 'arrow-up-circle' | 'hdd-rack';
+  headline: string;
+  detail: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex gap-3 px-4 py-2.5">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+        <Icon name={icon} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{headline}</p>
+        <p className="text-xs text-[var(--color-muted)]">{detail}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** A new version of the desktop app, or of the page in this tab. */
+function ClientUpdateRow({ update, onDismiss }: { update: ClientUpdate; onDismiss: () => void }) {
+  return (
+    <section className="border-b border-[var(--color-line)] last:border-0">
+      <UpdateRow icon="arrow-up-circle" headline={update.headline} detail={update.detail}>
+        {update.percent !== undefined && (
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={update.percent}
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface)]"
+          >
+            <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${update.percent}%` }} />
+          </div>
+        )}
+        {update.actionable && (
+          <div className="mt-2 flex gap-1.5">
+            {update.action && (
+              <Button variant="primary" className="text-xs" onClick={() => void update.action!.run()}>
+                {update.action.label}
+              </Button>
+            )}
+            <Button variant="subtle" className="text-xs" onClick={onDismiss}>
+              Later
+            </Button>
+          </div>
+        )}
+      </UpdateRow>
+    </section>
+  );
+}
+
+/** A newer release than this server runs. Only server administrators are sent one. */
+function ServerUpdateRow({ update, onDismiss }: { update: ServerUpdateNotification; onDismiss: () => void }) {
+  const { release } = update;
+  const released = release.publishedAt ? ` · released ${formatRelative(release.publishedAt)}` : '';
+  return (
+    <UpdateRow
+      icon="hdd-rack"
+      headline={`ParaDOCs ${release.version} is available for this server`}
+      detail={`It runs ${update.currentVersion}${released}. Only server administrators see this.`}
+    >
+      <div className="mt-2 flex gap-1.5">
+        {/^https:\/\//i.test(release.url) && (
+          <a
+            href={release.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-line)] px-2 py-1 text-xs hover:bg-[var(--color-surface)]"
+          >
+            <Icon name="box-arrow-up-right" /> Release notes
+          </a>
+        )}
+        <Button variant="subtle" className="text-xs" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </UpdateRow>
   );
 }
 

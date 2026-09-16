@@ -3,7 +3,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   attachmentSummary,
   collectReferences,
+  directName,
+  isGroupDirect,
+  memberRef,
   mentions,
+  mentionsHere,
   messagePreview,
   type CallEvent,
   type Channel,
@@ -23,6 +27,10 @@ export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' 
 function permissionState(): NotificationPermissionState {
   if (typeof Notification === 'undefined') return 'unsupported';
   return Notification.permission as NotificationPermissionState;
+}
+
+function mentionsByName(body: string, userId: string): boolean {
+  return body.toLowerCase().includes(memberRef(userId).toLowerCase());
 }
 
 /** Shared with the chat view, which merges the references of an older page. */
@@ -168,8 +176,21 @@ export function useChatEvents({
       if (watching) return;
 
       const authorName = author?.name ?? 'Someone';
+      // Being named is the more personal of the two, so it wins when a message does both.
+      const addressed =
+        mentionsHere(event.message.body) && !mentionsByName(event.message.body, selfId)
+          ? 'notified everyone'
+          : 'mentioned you';
+      // A group conversation is named, so it is clear which of several it was said in.
+      const group = direct
+        ? qc.getQueryData<Channel[]>(keys.directs(event.workspaceId))?.find((c) => c.id === channelId)
+        : undefined;
       notify({
-        title: direct ? authorName : `${authorName} mentioned you in #${names.current.get(channelId) ?? 'chat'}`,
+        title: direct
+          ? group && isGroupDirect(group)
+            ? `${authorName} in ${directName(group)}`
+            : authorName
+          : `${authorName} ${addressed} in #${names.current.get(channelId) ?? 'chat'}`,
         body:
           messagePreview(event.message.body, event.references) ||
           attachmentSummary(event.message.attachments?.length ?? 0),
@@ -196,6 +217,9 @@ export function useChatEvents({
           return;
         case 'channels.changed':
           void qc.invalidateQueries({ queryKey: keys.channels(event.workspaceId) });
+          return;
+        case 'directs.changed':
+          void qc.invalidateQueries({ queryKey: keys.directs(event.workspaceId) });
           return;
         case 'members.changed':
           void qc.invalidateQueries({ queryKey: ['members', event.workspaceId] });

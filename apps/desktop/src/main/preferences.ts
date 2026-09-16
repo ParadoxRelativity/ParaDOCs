@@ -26,6 +26,8 @@ export interface Preferences {
   callLayout?: 'side' | 'bottom';
   /** Whether clicking a notification moves the current tab or opens a new one. */
   openNotifications?: 'here' | 'tab';
+  /** Update notices set aside, one entry per release, so the next one still shows. */
+  dismissedUpdates?: string[];
 }
 
 const file = path.join(paths.userData, 'preferences.json');
@@ -40,6 +42,14 @@ function isCallLayout(value: unknown): value is NonNullable<Preferences['callLay
 
 function isOpenBehaviour(value: unknown): value is NonNullable<Preferences['openNotifications']> {
   return value === 'here' || value === 'tab';
+}
+
+function sanitizeDismissed(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.slice(0, 200))
+    .slice(-50);
 }
 
 /** Pages send these, so every field is checked rather than stored as given. */
@@ -66,6 +76,8 @@ export function getPreferences(): Preferences {
   if (isOpenBehaviour(stored.openNotifications)) preferences.openNotifications = stored.openNotifications;
   const media = sanitizeMedia(stored.media);
   if (media) preferences.media = media;
+  const dismissed = sanitizeDismissed(stored.dismissedUpdates);
+  if (dismissed) preferences.dismissedUpdates = dismissed;
   return preferences;
 }
 
@@ -80,6 +92,8 @@ export function setPreference(key: unknown, value: unknown): unknown {
     next.callLayout = value;
   } else if (key === 'openNotifications' && isOpenBehaviour(value)) {
     next.openNotifications = value;
+  } else if (key === 'dismissedUpdates' && sanitizeDismissed(value)) {
+    next.dismissedUpdates = sanitizeDismissed(value);
   } else {
     return undefined;
   }

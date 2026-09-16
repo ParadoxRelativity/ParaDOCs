@@ -72,6 +72,9 @@ services:
       # Whether registration starts open. Once changed on the server admin page,
       # the admin page's setting is used instead.
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      # Whether the server checks GitHub for newer releases and tells server
+      # administrators. Set false for a server that should not reach GitHub.
+      UPDATE_CHECK: ${UPDATE_CHECK:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # The server admin page: server-wide settings and every account. It has
       # its own port, published below on loopback only.

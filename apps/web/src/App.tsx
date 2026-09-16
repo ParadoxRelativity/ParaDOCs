@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { parseMentionHref, type Channel, type PresenceStatus, type User } from '@paradocs/shared';
+import {
+  directName,
+  directPeople,
+  isGroupDirect,
+  parseMentionHref,
+  type Channel,
+  type PresenceStatus,
+  type User,
+} from '@paradocs/shared';
 import {
   useDeleteDocument,
   useDocument,
@@ -45,6 +53,7 @@ import { CallStage } from './components/chat/CallStage';
 import { MemberList } from './components/chat/MemberList';
 import { IncomingCallCard } from './components/chat/IncomingCall';
 import { DirectCallActions, DirectTitle } from './components/chat/DirectHeader';
+import { DirectPeopleButton } from './components/chat/DirectPeople';
 import { useCall } from './lib/call';
 import { useDirectCalls } from './lib/directCalls';
 import { effectiveStatus, useIdle } from './lib/idle';
@@ -184,9 +193,9 @@ function FirstWorkspaceRedirect() {
   return <Navigate to={`/w/${first.id}`} replace />;
 }
 
-/** A channel's name, or for a direct conversation, the other person's. */
+/** A channel's name, or for a direct conversation, the other people's. */
 function conversationName(channel: Channel): string {
-  return channel.kind === 'direct' ? (channel.peer?.name ?? 'Deleted account') : channel.name;
+  return channel.kind === 'direct' ? directName(channel) : channel.name;
 }
 
 function Workspace({
@@ -266,6 +275,7 @@ function Workspace({
 
   const directCalls = useDirectCalls({
     call,
+    selfId: userId,
     muted: quiet,
     onAccepted: (incoming) => navigate(`/w/${incoming.workspaceId}/c/${incoming.channelId}`),
   });
@@ -504,7 +514,7 @@ function Workspace({
   /** Opens the conversation with someone, starting it if need be. */
   async function messageMember(memberId: string): Promise<Channel | null> {
     try {
-      const conversation = await openDirect.mutateAsync(memberId);
+      const conversation = await openDirect.mutateAsync([memberId]);
       navigate(`/w/${workspaceId}/c/${conversation.id}`);
       return conversation;
     } catch (err) {
@@ -515,7 +525,7 @@ function Workspace({
 
   async function callMember(memberId: string, video: boolean) {
     const conversation = await messageMember(memberId);
-    if (conversation) directCalls.start(conversation.id, video);
+    if (conversation) directCalls.start(conversation.id, video, directPeople(conversation).length);
   }
 
   // Where the chat tab lands when the URL names no channel.
@@ -528,7 +538,8 @@ function Workspace({
 
   const direct = activeChannel?.kind === 'direct' ? activeChannel : null;
   const inDirectCall = direct !== null && call.channelId === direct.id;
-  const peerName = direct?.peer?.name ?? 'them';
+  const peerName = direct ? directName(direct) : 'them';
+  const group = direct !== null && isGroupDirect(direct);
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -729,8 +740,18 @@ function Workspace({
                   <>
                     {direct?.peer && voiceEnabled && !inDirectCall && (
                       <DirectCallActions
-                        name={direct.peer.name}
-                        onCall={(video) => directCalls.start(direct.id, video)}
+                        name={peerName}
+                        onCall={(video) => directCalls.start(direct.id, video, directPeople(direct).length)}
+                      />
+                    )}
+                    {direct && (
+                      <DirectPeopleButton
+                        workspaceId={workspaceId}
+                        channel={direct}
+                        self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+                        presence={presenceMap}
+                        onOpenConversation={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
+                        onLeft={() => navigate(firstChannelPath)}
                       />
                     )}
                     {desktop && popOutButton(activeChannel, inDirectCall)}
@@ -746,7 +767,9 @@ function Workspace({
                           directCalls.ringingOut === direct.id
                             ? `Calling ${peerName}…`
                             : call.participants.length <= 1
-                              ? `${peerName} is not in the call`
+                              ? group
+                                ? 'No one else is in the call'
+                                : `${peerName} is not in the call`
                               : null
                         }
                       />
@@ -905,6 +928,10 @@ function Workspace({
       {directCalls.incoming && (
         <IncomingCallCard
           incoming={directCalls.incoming}
+          group={(() => {
+            const conversation = directList.find((c) => c.id === directCalls.incoming?.channelId);
+            return conversation && isGroupDirect(conversation) ? directName(conversation) : undefined;
+          })()}
           inCall={call.channelId !== null}
           onAccept={directCalls.accept}
           onDecline={directCalls.decline}

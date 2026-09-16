@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ReleaseInfo } from './version.js';
 
 /**
  * Server administration, served on its own port. These are settings for the
@@ -47,6 +48,21 @@ export interface AdminStatus {
    * account, or to create one here, becomes one.
    */
   setupRequired: boolean;
+}
+
+/** The version this server runs, and what the release channel has. */
+export interface AdminVersionStatus {
+  /** Null when the server cannot tell, such as a development run with no manifest. */
+  currentVersion: string | null;
+  /** Off when UPDATE_CHECK is false, or when there is no version to compare. */
+  checksEnabled: boolean;
+  /** The newest published release, once a check has found one. */
+  latest: ReleaseInfo | null;
+  updateAvailable: boolean;
+  /** When a check last got an answer, whether or not it found anything. */
+  checkedAt: string | null;
+  /** Why the last check failed, if it did. */
+  error: string | null;
 }
 
 export const adminCreateUserSchema = z.object({

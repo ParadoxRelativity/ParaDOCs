@@ -16,7 +16,8 @@ export interface DirectCalls {
   incoming: IncomingCall | null;
   /** The direct conversation this window is ringing out from, until someone answers. */
   ringingOut: string | null;
-  start: (channelId: string, video: boolean) => void;
+  /** `others` is how many people the conversation has besides you, so a group rings until all of them decline. */
+  start: (channelId: string, video: boolean, others?: number) => void;
   accept: (video: boolean) => void;
   decline: () => void;
   handleEvent: (event: CallEvent) => void;
@@ -36,13 +37,20 @@ function ring(channelId: string, action: 'start' | 'cancel' | 'answer' | 'declin
  * connected, so the person answering never lands in an empty room. The ring
  * stops when they appear in the room, decline, or it times out — and hanging
  * up or moving to another call while it rings cancels it.
+ *
+ * In a group conversation everyone else is rung. The first to join answers it
+ * for the caller, but the rest keep ringing, since joining a call already under
+ * way is still what the caller wanted. One person declining only stops their
+ * own ringing; the caller hears "declined" once everyone has.
  */
 export function useDirectCalls({
   call,
+  selfId,
   muted,
   onAccepted,
 }: {
   call: Call;
+  selfId: string;
   /** Busy: calls still arrive, but without a sound. */
   muted: boolean;
   onAccepted: (incoming: IncomingCall) => void;
@@ -62,10 +70,17 @@ export function useDirectCalls({
   toastRef.current = toast;
   const acceptedRef = useRef(onAccepted);
   acceptedRef.current = onAccepted;
+  const selfRef = useRef(selfId);
+  selfRef.current = selfId;
+  // Who has declined the ring going out, against how many were rung.
+  const declinedRef = useRef(new Set<string>());
+  const othersRef = useRef(1);
 
-  const start = useCallback((channelId: string, video: boolean) => {
+  const start = useCallback((channelId: string, video: boolean, others = 1) => {
     const current = callRef.current;
     const begin = () => {
+      declinedRef.current = new Set();
+      othersRef.current = Math.max(1, others);
       setRingingOut(channelId);
       void ring(channelId, 'start', video);
     };
@@ -128,14 +143,23 @@ export function useDirectCalls({
       return;
     }
 
-    // Settled somewhere — possibly in another of this person's windows.
-    if (incomingRef.current?.channelId === event.channelId) setIncoming(null);
+    // Settled for this person: the caller gave up, or they answered or declined
+    // in another of their windows. In a group, someone else answering is not
+    // an answer for them.
+    if (
+      incomingRef.current?.channelId === event.channelId &&
+      (event.reason === 'cancelled' || event.userId === selfRef.current)
+    ) {
+      setIncoming(null);
+    }
 
-    if (event.reason === 'declined' && ringingOutRef.current === event.channelId) {
+    if (event.reason === 'declined' && ringingOutRef.current === event.channelId && event.userId !== selfRef.current) {
+      declinedRef.current.add(event.userId);
+      if (declinedRef.current.size < othersRef.current) return;
       setRingingOut(null);
       const current = callRef.current;
       if (current.channelId === event.channelId && current.participants.length <= 1) current.leave();
-      toastRef.current('Call declined');
+      toastRef.current(othersRef.current > 1 ? 'Everyone declined' : 'Call declined');
     }
   }, []);
 

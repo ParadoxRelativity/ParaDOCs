@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import type { User } from '@paradocs/shared';
+import { directName, directPeople, isGroupDirect, type User } from '@paradocs/shared';
 import {
   useChannels,
   useDirectConversations,
@@ -20,6 +20,7 @@ import { ChatView } from './chat/ChatView';
 import { VoiceRoom } from './chat/VoiceRoom';
 import { CallStage } from './chat/CallStage';
 import { DirectCallActions, DirectTitle } from './chat/DirectHeader';
+import { DirectPeopleButton } from './chat/DirectPeople';
 import { EmptyState, IconButton, Spinner } from './ui';
 import Icon from './Icon';
 
@@ -64,6 +65,7 @@ export default function PopoutWindow({ user }: { user: User }) {
 
   const directCalls = useDirectCalls({
     call,
+    selfId: user.id,
     // The main window rings and shows the card for an incoming call; this one
     // would only be a second copy of a sound that is already playing.
     muted: true,
@@ -163,7 +165,8 @@ export default function PopoutWindow({ user }: { user: User }) {
   }
 
   const direct = channel.kind === 'direct' ? channel : null;
-  const peerName = direct?.peer?.name ?? 'them';
+  const peerName = direct ? directName(direct) : 'them';
+  const group = direct !== null && isGroupDirect(direct);
   const canManage = workspace?.role === 'owner' || workspace?.role === 'admin';
 
   return (
@@ -187,7 +190,20 @@ export default function PopoutWindow({ user }: { user: User }) {
         actions={
           <>
             {direct?.peer && voiceEnabled && !inCall && (
-              <DirectCallActions name={direct.peer.name} onCall={(video) => directCalls.start(direct.id, video)} />
+              <DirectCallActions
+                name={peerName}
+                onCall={(video) => directCalls.start(direct.id, video, directPeople(direct).length)}
+              />
+            )}
+            {direct && (
+              <DirectPeopleButton
+                workspaceId={workspaceId}
+                channel={direct}
+                self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+                presence={presence.data ?? {}}
+                // This window holds one conversation; a new one opens in the main window.
+                onOpenConversation={(id) => showInMain(`/w/${workspaceId}/c/${id}`)}
+              />
             )}
             {popIn}
           </>
@@ -202,7 +218,9 @@ export default function PopoutWindow({ user }: { user: User }) {
                   directCalls.ringingOut === channel.id
                     ? `Calling ${peerName}…`
                     : call.participants.length <= 1
-                      ? `${peerName} is not in the call`
+                      ? group
+                        ? 'No one else is in the call'
+                        : `${peerName} is not in the call`
                       : null
                 }
               />

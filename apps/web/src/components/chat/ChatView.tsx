@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { mentions, type Channel, type Message, type MessageReferences } from '@paradocs/shared';
+import { directName, isGroupDirect, mentions, type Channel, type Message, type MessageReferences } from '@paradocs/shared';
 import { api } from '../../api/client';
 import {
   keys,
@@ -99,7 +99,7 @@ export function ChatView({
   const dragDepth = useRef(0);
 
   const direct = channel.kind === 'direct';
-  const personName = channel.peer?.name ?? 'Deleted account';
+  const personName = directName(channel);
   const target = direct ? personName : `#${channel.name}`;
 
   // Opening a channel clears its badge, and so does a message arriving while
@@ -295,6 +295,8 @@ export function ChatView({
         channelId={channel.id}
         channels={channels}
         target={target}
+        // A group has an everyone to address; a pair does not.
+        direct={direct && !isGroupDirect(channel)}
         disabled={!canPost}
         onTyping={onTyping ? (typing) => onTyping(channel.id, typing) : undefined}
         onSend={async (input) => {

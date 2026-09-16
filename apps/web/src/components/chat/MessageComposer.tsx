@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import {
+  HERE_REF,
   MAX_ATTACHMENTS_PER_MESSAGE,
   attachmentKind,
   channelRef,
@@ -35,7 +36,8 @@ import { fileIcon } from './MessageAttachments';
  * The message box, with inline pickers for the things you can reference and
  * the files going out with the message.
  *
- * Typing `#` offers channels, `@` people and `[[` documents and spreadsheets.
+ * Typing `#` offers channels, `@` people (and `@here`, for everyone in the
+ * channel) and `[[` documents and spreadsheets.
  * What gets inserted is the id token, not the name — so the rendered link
  * follows a rename — while what you typed to find it never appears in the
  * message.
@@ -55,6 +57,9 @@ interface Trigger {
   start: number;
   query: string;
 }
+
+/** What `@here` is typed as, and its row's key in the people picker. */
+const HERE = 'here';
 
 /** How many rows a picker offers before you are better off narrowing the query. */
 const PICKER_LIMIT = 6;
@@ -114,12 +119,14 @@ export const MessageComposer = forwardRef<
     channels: Channel[];
     /** Where the message goes, as the placeholder says it: "#general", or a person's name. */
     target: string;
+    /** A conversation between two people, where `@here` would only ever reach the one other. */
+    direct?: boolean;
     disabled?: boolean;
     onSend: (input: { body: string; attachmentIds: string[] }) => Promise<void>;
     /** Tells the others here that you are typing, or have stopped. */
     onTyping?: (typing: boolean) => void;
   }
->(function MessageComposer({ workspaceId, channelId, channels, target, disabled, onSend, onTyping }, ref) {
+>(function MessageComposer({ workspaceId, channelId, channels, target, direct = false, disabled, onSend, onTyping }, ref) {
   const [value, setValue] = useState('');
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [highlighted, setHighlighted] = useState(0);
@@ -179,9 +186,14 @@ export const MessageComposer = forwardRef<
         .map((c) => ({ id: c.id, label: `#${c.name}`, hint: c.topic ?? '', insert: `#${c.name}`, token: channelRef(c.id) }));
     }
     if (trigger.kind === 'member') {
-      return (members.data ?? [])
+      // Offered first while what is typed could still be it, so `@h` finds it.
+      const here =
+        !direct && HERE.startsWith(needle)
+          ? [{ id: HERE, label: '@here', hint: '', insert: '@here', token: HERE_REF }]
+          : [];
+      const people = (members.data ?? [])
         .filter((m) => m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle))
-        .slice(0, PICKER_LIMIT)
+        .slice(0, PICKER_LIMIT - here.length)
         .map((m) => ({
           id: m.userId,
           label: `@${m.name}`,
@@ -189,6 +201,7 @@ export const MessageComposer = forwardRef<
           insert: `@${m.name}`,
           token: memberRef(m.userId),
         }));
+      return [...here, ...people];
     }
     // Both lists arrive newest-first, so interleaving by title would bury a
     // sheet someone just touched under documents they have not opened in
@@ -222,7 +235,7 @@ export const MessageComposer = forwardRef<
       ...documentOptions.slice(0, documentShare),
       ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
     ];
-  }, [trigger, channels, documents.data, spreadsheets.data, members.data, emojiOptions]);
+  }, [trigger, channels, direct, documents.data, spreadsheets.data, members.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {
@@ -300,7 +313,7 @@ export const MessageComposer = forwardRef<
    * Picked references go first, each replacing its own first remaining
    * occurrence. Then any `#name` typed by hand that matches a real channel is
    * linked too, so writing `#general` straight out works the same as choosing
-   * it from the list.
+   * it from the list, and so is `@here`.
    */
   function toTokens(text: string): string {
     let body = text;
@@ -310,10 +323,11 @@ export const MessageComposer = forwardRef<
       if (body.includes(label)) body = body.replace(label, token);
     }
     const byName = new Map(channels.map((c) => [c.name, c.id]));
-    return body.replace(/(^|\s)#([a-z0-9-]+)/g, (match, lead: string, name: string) => {
+    body = body.replace(/(^|\s)#([a-z0-9-]+)/g, (match, lead: string, name: string) => {
       const id = byName.get(name);
       return id ? `${lead}${channelRef(id)}` : match;
     });
+    return direct ? body : body.replace(/(^|\s)@here(?![\w-])/gi, `$1${HERE_REF}`);
   }
 
   function update(key: string, patch: Partial<PendingFile>) {

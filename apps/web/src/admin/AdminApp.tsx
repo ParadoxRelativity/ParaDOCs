@@ -1,5 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { MAX_RETENTION_DAYS, type AdminStatus, type AdminUser, type ServerSettings } from '@paradocs/shared';
+import {
+  MAX_RETENTION_DAYS,
+  type AdminStatus,
+  type AdminUser,
+  type AdminVersionStatus,
+  type ServerSettings,
+} from '@paradocs/shared';
 import { Button, Spinner } from '../components/ui';
 import { ConfirmDialog, Modal } from '../components/Modal';
 import { FIELD, Section } from '../components/SettingsParts';
@@ -12,6 +18,7 @@ import {
   useAdminSetup,
   useAdminStatus,
   useAdminUsers,
+  useCheckForUpdate,
   useCreateUser,
   useDeleteUser,
   useServerSettings,
@@ -19,6 +26,7 @@ import {
   useSignOutUser,
   useUpdateServerSettings,
   useUpdateUser,
+  useVersionStatus,
 } from './api';
 
 /**
@@ -298,7 +306,102 @@ function SettingsPanel() {
   const settings = useServerSettings();
   if (settings.isLoading) return <Spinner />;
   if (!settings.data) return <p className="text-sm text-red-500">Could not load the server settings.</p>;
-  return <SettingsForm current={settings.data} />;
+  return (
+    <>
+      <VersionCard />
+      <SettingsForm current={settings.data} />
+    </>
+  );
+}
+
+const sentences = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(' ');
+
+function describeVersion(status: AdminVersionStatus): { icon: IconName; tone: string; headline: string; detail?: string } {
+  const muted = 'text-[var(--color-muted)]';
+  const running = status.currentVersion ? `This server runs ParaDOCs ${status.currentVersion}.` : undefined;
+  if (!status.checksEnabled) {
+    return {
+      icon: 'info-circle',
+      tone: muted,
+      headline: status.currentVersion ? `ParaDOCs ${status.currentVersion}` : 'Version unknown',
+      detail: status.currentVersion
+        ? 'Checking for new releases is off (UPDATE_CHECK=false).'
+        : 'This server cannot tell which version it is, so it does not check for new releases.',
+    };
+  }
+  if (status.updateAvailable && status.latest) {
+    const released = status.latest.publishedAt ? `Released ${formatRelative(status.latest.publishedAt)}.` : undefined;
+    return {
+      icon: 'arrow-up-circle-fill',
+      tone: 'text-[var(--color-accent)]',
+      headline: `ParaDOCs ${status.latest.version} is available`,
+      detail: sentences(running, released),
+    };
+  }
+  if (status.error) {
+    return { icon: 'exclamation-triangle', tone: 'text-amber-500', headline: 'Could not check for new releases', detail: status.error };
+  }
+  if (status.checkedAt) {
+    return {
+      icon: 'check-circle',
+      tone: 'text-emerald-500',
+      headline: 'This server is up to date',
+      detail: sentences(running, `Checked ${formatRelative(status.checkedAt)}.`),
+    };
+  }
+  return { icon: 'arrow-repeat', tone: muted, headline: 'Not checked yet', detail: sentences(running, 'The server checks shortly after it starts.') };
+}
+
+/** The version this server runs, and whether a newer release is out. */
+function VersionCard() {
+  const status = useVersionStatus();
+  const check = useCheckForUpdate();
+  const toast = useToast();
+  if (!status.data) return null;
+
+  const summary = describeVersion(status.data);
+  const { latest, updateAvailable, checksEnabled } = status.data;
+
+  return (
+    <section className="mb-6">
+      <h2 className="mb-3 text-lg font-semibold">Version</h2>
+      <div className="flex items-start gap-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] p-4">
+        <Icon name={summary.icon} className={cx('mt-0.5 text-lg', summary.tone)} />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">{summary.headline}</p>
+          {summary.detail && <p className="mt-0.5 text-xs text-[var(--color-muted)]">{summary.detail}</p>}
+          {updateAvailable && (
+            <p className="mt-2 text-xs text-[var(--color-muted)]">
+              With Docker Compose, back up, then run{' '}
+              <code className="rounded bg-[var(--color-surface)] px-1 py-px">docker compose pull && docker compose up -d</code>.
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {latest && (
+              <a
+                href={latest.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-line)] px-2.5 py-1 text-xs hover:bg-[var(--color-surface)]"
+              >
+                <Icon name="box-arrow-up-right" /> Release notes
+              </a>
+            )}
+            {checksEnabled && (
+              <Button
+                variant="subtle"
+                className="text-xs"
+                disabled={check.isPending}
+                onClick={() => check.mutate(undefined, { onError: (err) => toast(err.message, 'error') })}
+              >
+                <Icon name="arrow-clockwise" /> {check.isPending ? 'Checking…' : 'Check now'}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 const DEFAULT_RETENTION_DAYS = 365;

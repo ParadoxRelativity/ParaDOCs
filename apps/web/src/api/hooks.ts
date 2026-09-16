@@ -914,11 +914,17 @@ export function useDirectConversations(workspaceId: string | undefined) {
   });
 }
 
-/** Opens the conversation with another member, starting it if there is none. */
+/** Opens the conversation with one or more other members, starting it if there is none. */
 export function useOpenDirect(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (userId: string) => api.post<Channel>(`/workspaces/${workspaceId}/direct`, { userId }),
+    // One person goes as `userId`, which every server understands; only a
+    // group needs a server that knows about them.
+    mutationFn: (userIds: string[]) =>
+      api.post<Channel>(
+        `/workspaces/${workspaceId}/direct`,
+        userIds.length === 1 ? { userId: userIds[0] } : { userIds },
+      ),
     onSuccess: (conversation) => {
       // In the list straight away, so opening it does not wait on a refetch to find it.
       qc.setQueryData<Channel[]>(keys.directs(workspaceId), (current) =>
@@ -928,6 +934,32 @@ export function useOpenDirect(workspaceId: string) {
     },
   });
 }
+
+/** A change to a group conversation, after which the list is refetched for everything it shows. */
+function useDirectMutation<TInput, TResult>(workspaceId: string, fn: (input: TInput) => Promise<TResult>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.directs(workspaceId) }),
+  });
+}
+
+/** Names a group conversation. An empty name goes back to naming it for its people. */
+export const useRenameDirect = (workspaceId: string) =>
+  useDirectMutation(workspaceId, ({ channelId, name }: { channelId: string; name: string }) =>
+    api.patch<Channel>(`/direct/${channelId}`, { name }),
+  );
+
+export const useAddDirectMembers = (workspaceId: string) =>
+  useDirectMutation(workspaceId, ({ channelId, userIds }: { channelId: string; userIds: string[] }) =>
+    api.post<Channel>(`/direct/${channelId}/members`, { userIds }),
+  );
+
+/** Removes someone from a group conversation, or with your own id, leaves it. */
+export const useRemoveDirectMember = (workspaceId: string) =>
+  useDirectMutation(workspaceId, ({ channelId, userId }: { channelId: string; userId: string }) =>
+    api.delete(`/direct/${channelId}/members/${userId}`),
+  );
 
 // --- presence --------------------------------------------------------------
 
@@ -979,6 +1011,21 @@ export function useNotifications() {
     // Messages in workspaces other than the one open arrive on no socket here,
     // and invitations never do, so this is polled.
     refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * The version the server is running. A browser tab keeps the client it loaded,
+ * so this is how it notices the server was upgraded since. The desktop app
+ * ships its own client and is updated with the app instead.
+ */
+export function useServerVersion(enabled: boolean) {
+  return useQuery({
+    queryKey: ['serverVersion'],
+    queryFn: async () => (await api.get<{ version: string | null }>('/health')).version,
+    enabled,
+    refetchInterval: 10 * 60_000,
     refetchOnWindowFocus: true,
   });
 }

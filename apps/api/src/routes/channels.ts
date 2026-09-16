@@ -16,7 +16,7 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess, roleAtLeast, type Role } from '../plugins/session.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
+import { channelAccessFor, mentionsUserSql, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { channelLevelSql, permissionSql } from '../lib/access.js';
 import { removeStoredFile, removeStoredFiles, storeUpload, uploadLimits, uploadUrlSql } from '../lib/storage.js';
 import { publishToWorkspace } from '../chat/hub.js';
@@ -114,14 +114,12 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
                   AND m.deleted_at IS NULL
                   AND m.author_id IS DISTINCT FROM $2
                   AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)) AS unread,
-              -- Mentions are matched on the stored token rather than the name,
-              -- so someone renaming themselves cannot change what counts.
               (SELECT count(*)::int FROM messages m
                 WHERE m.channel_id = c.id
                   AND m.deleted_at IS NULL
                   AND m.author_id IS DISTINCT FROM $2
                   AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
-                  AND position('<@' || $2::text || '>' in lower(m.body)) > 0) AS mentions
+                  AND ${mentionsUserSql('$2')}) AS mentions
          FROM channels c
          LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $2
         WHERE c.workspace_id = $1 AND c.kind <> 'direct' AND ${channelLevelSql('$2', '$3')} > 0

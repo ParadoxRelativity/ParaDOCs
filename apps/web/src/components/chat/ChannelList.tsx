@@ -1,16 +1,16 @@
 import { useState } from 'react';
-import type { Channel, PresenceStatus, VoiceOccupant } from '@paradocs/shared';
+import { directName, type Channel, type PresenceStatus, type VoiceOccupant } from '@paradocs/shared';
 import { useCreateChannel, useDeleteChannel, useOpenDirect } from '../../api/hooks';
 import { useToast } from '../Toast';
 import { IconButton, InlineInput } from '../ui';
 import Avatar from '../Avatar';
 import Icon from '../Icon';
-import { PresenceAvatar } from '../Presence';
 import { useTypists } from '../../lib/typing';
 import { TypingDots } from './Typing';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { cx } from '../../lib/util';
 import { ChannelSettingsDialog } from './ChannelSettingsDialog';
+import { DirectAvatar } from './DirectHeader';
 import { DirectMessageDialog } from './DirectMessageDialog';
 import { LockMark, type NamedAccessTarget } from '../AccessDialog';
 
@@ -88,10 +88,10 @@ export function ChannelList({
     }
   }
 
-  async function startDirect(userId: string) {
+  async function startDirect(userIds: string[]) {
     setChoosingPerson(false);
     try {
-      const conversation = await openDirect.mutateAsync(userId);
+      const conversation = await openDirect.mutateAsync(userIds);
       onSelect(conversation.id);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not open the conversation', 'error');
@@ -182,7 +182,7 @@ export function ChannelList({
         canAdd
         onAdd={() => setChoosingPerson(true)}
         creating={null}
-        empty="Message someone one-to-one with +."
+        empty=""
         count={directs.length}
       >
         {directs.map((conversation) => (
@@ -206,7 +206,7 @@ export function ChannelList({
         <DirectMessageDialog
           workspaceId={workspaceId}
           presence={presence}
-          onChoose={(userId) => void startDirect(userId)}
+          onChoose={(userIds) => void startDirect(userIds)}
           onClose={() => setChoosingPerson(false)}
         />
       )}
@@ -220,7 +220,7 @@ export function ChannelList({
  * chat can sit beside a document rather than replacing it.
  */
 function conversationOpener(workspaceId: string, channel: Channel, onSelect: (id: string) => void) {
-  const label = channel.kind === 'direct' ? (channel.peer?.name ?? 'Conversation') : `#${channel.name}`;
+  const label = channel.kind === 'direct' ? directName(channel) : `#${channel.name}`;
   const path = `/w/${workspaceId}/c/${channel.id}`;
   return {
     title: `${label} — hold ${MODIFIER} to open in a new tab`,
@@ -450,10 +450,10 @@ function DirectRow({
   onSelect: (id: string) => void;
 }) {
   const unread = conversation.unread ?? 0;
-  const peer = conversation.peer;
-  const name = peer?.name ?? 'Deleted account';
-  // Only the other person can be typing here; your own typing is never recorded.
-  const typing = useTypists(conversation.id).length > 0;
+  const name = directName(conversation);
+  // Only the others can be typing here; your own typing is never recorded.
+  const typists = useTypists(conversation.id);
+  const typing = typists.length > 0;
   return (
     <button
       {...conversationOpener(workspaceId, conversation, onSelect)}
@@ -463,18 +463,15 @@ function DirectRow({
         !active && unread === 0 && 'text-[var(--color-muted)]',
       )}
     >
-      <PresenceAvatar
-        name={name}
-        url={peer?.avatarUrl}
-        seed={peer?.id}
-        size="sm"
-        status={peer ? status : undefined}
-      />
+      <DirectAvatar channel={conversation} status={status} />
       <span className={cx('min-w-0 flex-1 truncate', unread > 0 && !active && 'font-semibold text-[var(--color-ink)]')}>
         {name}
       </span>
       {typing && (
-        <span title={`${name} is typing`} className="shrink-0 text-[var(--color-muted)]">
+        <span
+          title={`${typists.map((typist) => typist.name).join(', ')} ${typists.length === 1 ? 'is' : 'are'} typing`}
+          className="shrink-0 text-[var(--color-muted)]"
+        >
           <TypingDots />
         </span>
       )}

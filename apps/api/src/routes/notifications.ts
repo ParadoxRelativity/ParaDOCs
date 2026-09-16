@@ -14,7 +14,9 @@ import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
 import { channelLevelSql, documentLevelSql } from '../lib/access.js';
+import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
+import { availableServerUpdate } from '../lib/releases.js';
 
 const PREVIEW_LENGTH = 200;
 const MAX_CHANNELS = 50;
@@ -99,6 +101,11 @@ function truncate(text: string): string {
   return text.length > PREVIEW_LENGTH ? `${text.slice(0, PREVIEW_LENGTH - 1).trimEnd()}…` : text;
 }
 
+async function isServerAdmin(userId: string): Promise<boolean> {
+  const { rows } = await query<{ admin: boolean }>('SELECT is_server_admin AS admin FROM users WHERE id = $1', [userId]);
+  return rows[0]?.admin === true;
+}
+
 /**
  * What wants the signed-in person's attention on this server: invitations
  * addressed to their email, and channels and direct conversations with
@@ -132,8 +139,12 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       ),
       query<ChannelRow>(
         `SELECT c.id AS channel_id,
-                -- A direct conversation is named for the other person in it.
-                CASE WHEN c.kind = 'direct' THEN COALESCE(peer.name, 'Deleted account') ELSE c.name END AS channel_name,
+                -- A direct conversation is named for the other people in it,
+                -- unless it is a group someone gave a name.
+                CASE WHEN c.kind = 'direct'
+                     THEN COALESCE(NULLIF(c.name, ''), peer.names,
+                                   CASE WHEN c.direct_group THEN 'Just you' ELSE 'Deleted account' END)
+                     ELSE c.name END AS channel_name,
                 (c.kind = 'direct') AS direct,
                 ${WORKSPACE_SELECT},
                 stats.unread, stats.mentions,
@@ -144,17 +155,16 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
            JOIN workspaces w ON w.id = wm.workspace_id
            JOIN channels c ON c.workspace_id = w.id AND ${readableChannel('wm.role')}
            LEFT JOIN LATERAL (
-             SELECT u.name
+             SELECT string_agg(u.name, ', ' ORDER BY lower(u.name), u.id) AS names
                FROM channel_members other
                JOIN users u ON u.id = other.user_id
               WHERE other.channel_id = c.id AND other.user_id <> $1
-              LIMIT 1
            ) peer ON c.kind = 'direct'
            LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $1
            CROSS JOIN LATERAL (
              SELECT count(*)::int AS unread,
                     count(*) FILTER (
-                      WHERE position('<@' || $1::text || '>' in lower(m.body)) > 0
+                      WHERE ${mentionsUserSql('$1')}
                     )::int AS mentions
                FROM messages m
               WHERE m.channel_id = c.id
@@ -202,6 +212,11 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         [user.id],
       ),
     ]);
+
+    // Only administrators hear about releases, and only while there is one, so
+    // the usual request costs no extra query.
+    const release = availableServerUpdate();
+    const serverUpdate = release && (await isServerAdmin(user.id)) ? release : null;
 
     const messages: MessageNotification[] = await Promise.all(
       channelRows.map(async (row) => {
@@ -251,6 +266,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           createdAt: row.created_at,
         }),
       ),
+      serverUpdate,
     };
   });
 

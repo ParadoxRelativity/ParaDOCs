@@ -6,6 +6,7 @@ import { createCollabServer } from './collab/server.js';
 import { createChatServer } from './chat/server.js';
 import { attachVoiceProxy } from './lib/voiceProxy.js';
 import { sweepExpiredMessages } from './lib/retention.js';
+import { scheduleServerUpdateChecks } from './lib/releases.js';
 
 const app = await buildApp();
 
@@ -49,6 +50,10 @@ const sweep = setInterval(() => {
     app.log.warn({ err }, 'admin session sweep failed'),
   );
   void sweepRetention();
+
+// Started here rather than in buildApp, so the server the desktop app runs
+// locally, which updates with the app, never asks.
+scheduleServerUpdateChecks(app.log);
 }, 60 * 60 * 1000);
 sweep.unref();
 

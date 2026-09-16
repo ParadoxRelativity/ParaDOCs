@@ -98,7 +98,7 @@ async function replaceTeamMembers(client: DbClient, teamId: string, userIds: str
 async function resolveTarget(kind: TargetKind, id: string): Promise<Target> {
   const { table, parent, label } = TARGETS[kind];
   if (!UUID.test(id)) throw notFound(`${label} not found`);
-  // A direct conversation is only ever its two people; there is nothing to lock.
+  // A direct conversation is only ever the people in it; there is nothing to lock.
   const { rows } = await query<{ workspace_id: string; access: AccessMode; parent: string | null }>(
     `SELECT workspace_id, access, ${parent ?? 'NULL::uuid'} AS parent
        FROM ${table}

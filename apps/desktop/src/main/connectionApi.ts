@@ -293,7 +293,23 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
       }),
     );
 
-    return { status: 'ok', notifications: { invites, messages, mentions } };
+    // The link is opened in the user's browser, so it has to be a web page.
+    const update = body.serverUpdate ? record(body.serverUpdate) : null;
+    const release = update ? record(update.release) : null;
+    const releaseUrl = release ? text(release.url) : '';
+    const serverUpdate =
+      update && release && /^https:\/\//i.test(releaseUrl)
+        ? {
+            currentVersion: text(update.currentVersion).slice(0, 40),
+            release: {
+              version: text(release.version).slice(0, 40),
+              url: releaseUrl.slice(0, 500),
+              publishedAt: nullable(release.publishedAt),
+            },
+          }
+        : null;
+
+    return { status: 'ok', notifications: { invites, messages, mentions, serverUpdate } };
   } catch {
     return { status: 'unavailable' };
   }

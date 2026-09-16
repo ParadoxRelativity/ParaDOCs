@@ -11,9 +11,12 @@ export function IncomingCallCard({
   incoming,
   inCall,
   onAccept,
+  group,
   onDecline,
 }: {
   incoming: IncomingCall;
+  /** For a group conversation, its name, so it is clear the call is not only with the caller. */
+  group?: string;
   /** Answering leaves the call you are in, which is worth saying. */
   inCall: boolean;
   onAccept: (video: boolean) => void;
@@ -35,6 +38,7 @@ export function IncomingCallCard({
           <p className="truncate text-sm font-semibold">{caller.name}</p>
           <p className="text-xs text-[var(--color-muted)]">
             {incoming.video ? 'Incoming video call' : 'Incoming voice call'}
+            {group && ` in ${group}`}
             {inCall && ' · answering leaves your current call'}
           </p>
         </div>

@@ -7,6 +7,7 @@ import {
   registerSchema,
   updateServerSettingsSchema,
   type AdminStatus,
+  type AdminVersionStatus,
   type AdminUser,
 } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
@@ -18,6 +19,7 @@ import { createAccount } from '../lib/accounts.js';
 import { signedOut } from '../lib/accountEvents.js';
 import { sweepExpiredMessages } from '../lib/retention.js';
 import { getServerSettings, updateServerSettings } from '../lib/serverSettings.js';
+import { checkForServerUpdate, versionStatus } from '../lib/releases.js';
 import { removeStoredFiles } from '../lib/storage.js';
 import { ADMIN_COOKIE, endAdminSession, startAdminSession } from './session.js';
 
@@ -144,6 +146,11 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       }
       return settings;
     });
+
+    admin.get('/version', async (): Promise<AdminVersionStatus> => versionStatus());
+
+    /** Asks the release channel now, rather than waiting for the next scheduled check. */
+    admin.post('/version/check', async (): Promise<AdminVersionStatus> => checkForServerUpdate(app.log));
 
     admin.get<{ Querystring: { q?: string } }>('/users', async (req) => {
       const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';

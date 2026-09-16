@@ -84,7 +84,7 @@ export interface PoppedOut {
   inCall: boolean;
 }
 
-export type DesktopPreferenceKey = 'theme' | 'media' | 'callLayout' | 'openNotifications';
+export type DesktopPreferenceKey = 'theme' | 'media' | 'callLayout' | 'openNotifications' | 'dismissedUpdates';
 
 export interface DesktopBridge {
   connections: {

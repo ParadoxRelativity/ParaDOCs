@@ -49,6 +49,24 @@ function roomService(): RoomServiceClient {
 }
 
 /**
+ * Takes someone out of a room they may no longer be in, such as the call of a
+ * group conversation they were removed from. Their token only said what was
+ * allowed when it was minted. Nothing to do when they are not in it.
+ */
+export async function removeFromCall(room: string, userId: string, log: FastifyBaseLogger): Promise<void> {
+  if (!voiceEnabled()) return;
+  try {
+    const service = roomService();
+    const participants = await service.listParticipants(room);
+    if (participants.some((p) => p.identity === userId)) await service.removeParticipant(room, userId);
+  } catch (err) {
+    // No room yet is the usual case, and a call that cannot be reached is not
+    // worth failing the change that prompted this.
+    log.debug({ err, room }, 'could not check the call for someone who left');
+  }
+}
+
+/**
  * The address a browser dials to join a call: LIVEKIT_URL when it is set, or
  * null when this server relays signalling under /rtc, which means "the address
  * this page was loaded from".
@@ -176,7 +194,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
    * The room is the channel id, so a room can only be joined by someone the
    * access check below lets through — the token is the only way in, and it is
    * scoped to exactly that room. For a direct conversation that check admits
-   * only the two people in it. Identity is the user id so LiveKit's own
+   * only the people in it. Identity is the user id so LiveKit's own
    * participant list lines up with ours, and a second tab replaces the first
    * rather than appearing twice.
    */
@@ -216,10 +234,10 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * Rings the other person in a direct conversation, or settles a ring.
+   * Rings the other people in a direct conversation, or settles a ring.
    *
-   * The call itself is an ordinary room; ringing is only how the other person
-   * learns someone is waiting in it. It travels over each person's chat
+   * The call itself is an ordinary room; ringing is only how the other people
+   * learn someone is waiting in it. It travels over each person's chat
    * sockets, so every window they have open rings, and answering or declining
    * in one quiets the rest.
    */
@@ -268,7 +286,7 @@ const announcing = new Map<string, Promise<void>>();
 /**
  * Tells everyone with a workspace open who is now in one of its voice channels.
  *
- * Direct calls are left out: who is on a call between two people is nobody
+ * Direct calls are left out: who is on a call in a private conversation is nobody
  * else's business, and the channel list does not show them anyway.
  */
 async function announceOccupancy(event: WebhookEvent, room: string): Promise<void> {

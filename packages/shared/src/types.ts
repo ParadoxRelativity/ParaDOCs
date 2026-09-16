@@ -1,6 +1,7 @@
 /** Shared domain types. The API returns these shapes verbatim. */
 
 import type { DocumentMode } from './canvas.js';
+import type { ReleaseInfo } from './version.js';
 
 export interface User {
   id: string;
@@ -284,9 +285,20 @@ export interface MentionNotification {
   createdAt: string;
 }
 
+/**
+ * A newer release than the server is running. Only server administrators are
+ * told, since only they can do anything about it.
+ */
+export interface ServerUpdateNotification {
+  currentVersion: string;
+  release: ReleaseInfo;
+}
+
 /** Everything on a server that wants the signed-in person's attention. */
 export interface Notifications {
   invites: InviteNotification[];
   messages: MessageNotification[];
   mentions: MentionNotification[];
+  /** Null when there is none, or for anyone but a server administrator. Absent from older servers. */
+  serverUpdate?: ServerUpdateNotification | null;
 }

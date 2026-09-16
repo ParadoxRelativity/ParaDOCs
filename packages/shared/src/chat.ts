@@ -5,14 +5,15 @@ import type { AccessMode, Permission } from './types.js';
 
 /**
  * A voice channel is a place to meet; it carries no messages. A direct
- * conversation is between two people, carries messages and can hold a call.
+ * conversation is between two or more people, carries messages and can hold a
+ * call.
  */
 export type ChannelKind = 'text' | 'voice' | 'direct';
 
 export interface Channel {
   id: string;
   workspaceId: string;
-  /** Empty for a direct conversation, which is named for `peer`. */
+  /** Empty for a direct conversation, which is named for the people in it. */
   name: string;
   topic: string | null;
   kind: ChannelKind;
@@ -24,8 +25,19 @@ export interface Channel {
    *  because being addressed directly is worth interrupting someone for
    *  and ordinary chatter is not. */
   mentions?: number;
-  /** In a direct conversation, the other person. Null once their account is gone. */
+  /**
+   * In a direct conversation, the first of the other people in it. Null once
+   * every other account in it is gone. Kept alongside `members` for clients
+   * that predate group conversations.
+   */
   peer?: MessageAuthor | null;
+  /** In a direct conversation, everyone in it but you, by name. Absent from older servers. */
+  members?: MessageAuthor[];
+  /**
+   * A group conversation, which can be renamed, added to and left. It stays one
+   * however many people remain. Absent from older servers.
+   */
+  group?: boolean;
   /** In a direct conversation, when the latest message was sent. */
   lastMessageAt?: string | null;
   /** A named channel's access setting. A channel has no folder, so it never inherits. */
@@ -266,7 +278,7 @@ export interface CallCaller {
 
 /**
  * Ringing for a call in a direct conversation. The call itself is an ordinary
- * room; these only tell the other person someone is waiting in it, and tell
+ * room; these only tell the other people someone is waiting in it, and tell
  * everyone when that has been settled.
  */
 export type CallEvent =
@@ -283,6 +295,8 @@ export type CallEvent =
 export type WorkspaceEvent =
   | { type: 'presence.changed'; workspaceId: string; userId: string; status: PresenceStatus }
   | { type: 'channels.changed'; workspaceId: string }
+  /** Sent to the people in a direct conversation whose name or people changed, and to anyone removed from it. */
+  | { type: 'directs.changed'; workspaceId: string }
   | { type: 'members.changed'; workspaceId: string }
   /** Who can see what has changed: a lock, a team, or someone's role. Refetch what is shown. */
   | { type: 'access.changed'; workspaceId: string }
@@ -313,9 +327,50 @@ export const TYPING_INTERVAL_MS = 3_000;
  */
 export const TYPING_TIMEOUT_MS = 6_000;
 
-export const openDirectSchema = z.object({
-  userId: z.string().uuid(),
+/** The most people a direct conversation can have, you included. */
+export const MAX_DIRECT_PEOPLE = 9;
+
+/**
+ * Who to talk to: `userId` for one person, which is what clients before group
+ * conversations send, or `userIds` for one or more.
+ */
+export const openDirectSchema = z
+  .object({
+    userId: z.string().uuid().optional(),
+    userIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(MAX_DIRECT_PEOPLE - 1, `A conversation can have up to ${MAX_DIRECT_PEOPLE} people, you included`)
+      .optional(),
+  })
+  .refine((v) => Boolean(v.userId) !== Boolean(v.userIds), { message: 'Pick who to talk to' });
+
+export const renameDirectSchema = z.object({
+  /** Empty goes back to naming it for the people in it. */
+  name: z.string().trim().max(80),
 });
+
+export const addDirectMembersSchema = z.object({
+  userIds: z.array(z.string().uuid()).min(1).max(MAX_DIRECT_PEOPLE - 1),
+});
+
+/** Everyone in a direct conversation but you, from whichever field the server sent. */
+export function directPeople(channel: Channel): MessageAuthor[] {
+  return channel.members ?? (channel.peer ? [channel.peer] : []);
+}
+
+/** A direct conversation's name: the one a group was given, or the people in it besides you. */
+export function directName(channel: Channel): string {
+  if (channel.name) return channel.name;
+  const people = directPeople(channel);
+  if (people.length > 0) return people.map((person) => person.name).join(', ');
+  return isGroupDirect(channel) ? 'Just you' : 'Deleted account';
+}
+
+/** A group conversation, as opposed to one between two people. */
+export function isGroupDirect(channel: Channel): boolean {
+  return channel.group ?? directPeople(channel).length > 1;
+}
 
 export const ringSchema = z.object({
   action: z.enum(['start', 'cancel', 'answer', 'decline']),
@@ -330,6 +385,7 @@ export const RING_TIMEOUT_MS = 45_000;
 /**
  * Documents, spreadsheets, channels and people are referenced by id inside a
  * message, not by name: `<doc:uuid>`, `<sheet:uuid>`, `<#uuid>` and `<@uuid>`.
+ * `<!here>` addresses everyone who can read the channel it is posted in.
  * Rendering resolves them, so someone changing their display name updates every
  * message that mentions them instead of leaving a stale name scattered through
  * the history.
@@ -340,14 +396,18 @@ export const RING_TIMEOUT_MS = 45_000;
  * token covering both would have to carry which it meant anyway.
  */
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID}))>`, 'g');
+const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here))>`, 'g');
 
 export type MessageSegment =
   | { type: 'text'; value: string }
   | { type: 'document'; id: string }
   | { type: 'spreadsheet'; id: string }
   | { type: 'channel'; id: string }
-  | { type: 'member'; id: string };
+  | { type: 'member'; id: string }
+  | { type: 'here' };
+
+/** Stored for `@here`: a mention of everyone who can read the channel. */
+export const HERE_REF = '<!here>';
 
 export function documentRef(id: string): string {
   return `<doc:${id}>`;
@@ -378,6 +438,7 @@ export function parseMessage(body: string): MessageSegment[] {
     else if (match[2]) segments.push({ type: 'spreadsheet', id: match[2].toLowerCase() });
     else if (match[3]) segments.push({ type: 'channel', id: match[3].toLowerCase() });
     else if (match[4]) segments.push({ type: 'member', id: match[4].toLowerCase() });
+    else if (match[5]) segments.push({ type: 'here' });
     index = match.index + match[0].length;
   }
   if (index < body.length) segments.push({ type: 'text', value: body.slice(index) });
@@ -424,6 +485,7 @@ export function messagePreview(body: string, references: MessageReferences): str
   return parseMessage(body)
     .map((segment) => {
       if (segment.type === 'text') return segment.value;
+      if (segment.type === 'here') return '@here';
       if (segment.type === 'document') return documents.get(segment.id)?.title ?? 'a document';
       if (segment.type === 'spreadsheet') return spreadsheets.get(segment.id)?.title ?? 'a spreadsheet';
       if (segment.type === 'channel') {
@@ -437,7 +499,18 @@ export function messagePreview(body: string, references: MessageReferences): str
     .trim();
 }
 
-/** True when the message mentions this person; used to highlight it for them. */
+/**
+ * True when the message mentions this person, by name or with `@here`; used to
+ * highlight it for them and to decide whether to interrupt them.
+ */
 export function mentions(body: string, userId: string): boolean {
-  return parseMessage(body).some((segment) => segment.type === 'member' && segment.id === userId.toLowerCase());
+  const id = userId.toLowerCase();
+  return parseMessage(body).some(
+    (segment) => segment.type === 'here' || (segment.type === 'member' && segment.id === id),
+  );
+}
+
+/** True when the message is addressed to everyone in the channel. */
+export function mentionsHere(body: string): boolean {
+  return parseMessage(body).some((segment) => segment.type === 'here');
 }

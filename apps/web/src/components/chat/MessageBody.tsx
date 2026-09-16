@@ -5,13 +5,15 @@ import { DocumentIcon, SpreadsheetIcon } from '../Icon';
 
 /**
  * Renders a message body, turning `<doc:…>`, `<sheet:…>` and `<#…>` tokens
- * into links.
+ * into links, and `<@…>` and `<!here>` into mentions.
  *
  * References are resolved from the page's reference table rather than baked
  * into the text, so renaming a document updates every message that mentions it.
  * A token that does not resolve — a document since deleted, or one in another
  * workspace — renders as muted text rather than a dead link.
  */
+const MENTION = 'mx-0.5 inline-block rounded px-1.5 py-0.5 align-baseline text-[13px] font-medium';
+
 export function MessageBody({
   body,
   references,
@@ -40,6 +42,19 @@ export function MessageBody({
     <span className={cx('whitespace-pre-wrap break-words', jumbo && 'text-4xl leading-tight')}>
       {parseMessage(body).map((segment, index) => {
         if (segment.type === 'text') return <span key={index}>{segment.value}</span>;
+
+        // Addressed to everyone who can read the channel, so to whoever is reading.
+        if (segment.type === 'here') {
+          return (
+            <span
+              key={index}
+              title="Everyone in this channel"
+              className={cx(MENTION, 'bg-amber-400/25 text-amber-700 dark:text-amber-300')}
+            >
+              @here
+            </span>
+          );
+        }
 
         if (segment.type === 'document') {
           const doc = documents.get(segment.id);
@@ -81,7 +96,7 @@ export function MessageBody({
             key={index}
             title={member.email}
             className={cx(
-              'mx-0.5 inline-block rounded px-1.5 py-0.5 align-baseline text-[13px] font-medium',
+              MENTION,
               isSelf
                 ? 'bg-amber-400/25 text-amber-700 dark:text-amber-300'
                 : 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]',
