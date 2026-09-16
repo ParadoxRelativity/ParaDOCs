@@ -42,10 +42,7 @@ export function ServersSection() {
 
   return (
     <>
-      <Section
-        title="Servers"
-        hint="Where this app keeps workspaces. Switch between them from the workspace menu at the top of the sidebar."
-      >
+      <Section title="Servers">
         <ul className="space-y-1">
           {connections.map((connection) => (
             <li
@@ -101,8 +98,8 @@ export function ServersSection() {
           title={`Remove ${removing.label}?`}
           description={
             removing.kind === 'local'
-              ? 'It is taken off the list. Its documents stay on this computer.'
-              : 'It is taken off the list and this app is signed out of it. Nothing on the server is deleted.'
+              ? 'Its documents stay on this computer.'
+              : 'This app is signed out of it. Nothing on the server is deleted.'
           }
           confirmLabel="Remove"
           onConfirm={() => void remove(removing)}
@@ -241,13 +238,11 @@ export function UpdatesSection() {
           <div className="space-y-3">
             <Toggle
               label="Check for updates automatically"
-              hint="Shortly after the app starts, then every six hours."
               checked={status.checkOnLaunch}
               onChange={(on) => void run(() => updates.setCheckOnLaunch(on))}
             />
             <Toggle
               label="Download updates in the background"
-              hint="Otherwise a new version waits here until you download it."
               checked={status.autoDownload}
               onChange={(on) => void run(() => updates.setAutoDownload(on))}
             />
@@ -260,27 +255,22 @@ export function UpdatesSection() {
 
 function Toggle({
   label,
-  hint,
   checked,
   onChange,
 }: {
   label: string;
-  hint: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-start gap-2">
+    <label className="flex items-center gap-2">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-[var(--color-accent)]"
+        className="accent-[var(--color-accent)]"
       />
-      <span>
-        <span className="block text-sm">{label}</span>
-        <span className="block text-xs text-[var(--color-muted)]">{hint}</span>
-      </span>
+      <span className="text-sm">{label}</span>
     </label>
   );
 }

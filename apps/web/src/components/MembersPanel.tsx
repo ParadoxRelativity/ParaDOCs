@@ -214,7 +214,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
               </Button>
             </form>
             <p className="mt-1 text-[11px] text-[var(--color-muted)]">
-              This server does not send email. Creating an invite copies its link to your clipboard.
+              Invite links are copied to your clipboard.
             </p>
           </section>
 

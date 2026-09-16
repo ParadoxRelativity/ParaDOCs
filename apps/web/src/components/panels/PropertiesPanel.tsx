@@ -53,9 +53,6 @@ export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }:
             </button>
           ))}
         </div>
-        <p className="mt-1 text-[11px] text-[var(--color-muted)]">
-          Both modes keep their own content, so switching back and forth loses nothing.
-        </p>
       </section>
 
       <section>

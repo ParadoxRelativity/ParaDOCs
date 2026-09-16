@@ -377,7 +377,7 @@ export default function LeftSidebar(props: Props) {
 
         {tree.data && tree.data.folders.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-[var(--color-muted)]">
-            No folders yet. Create one to organize your documents.
+            No folders yet.
           </p>
         )}
 
@@ -510,7 +510,6 @@ function NewWorkspaceDialog({
   return (
     <Modal
       title="New workspace"
-      description="Workspaces keep separate sets of documents, folders and tags."
       onClose={onClose}
       footer={
         <>

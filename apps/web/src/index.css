@@ -58,6 +58,14 @@ body {
   background: transparent;
 }
 
+/* Scrolls without a bar, for strips too short to give one room (the tab bar). */
+.scroll-none {
+  scrollbar-width: none;
+}
+.scroll-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Let BlockNote inherit the app surface instead of its own white card. */
 .bn-container,
 .bn-editor {

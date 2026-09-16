@@ -158,6 +158,18 @@ export function openTab(path: string, label = '', options: { background?: boolea
   commit({ tabs, activeId: options.background ? state.activeId : tab.id });
 }
 
+/**
+ * The new-tab button: always a fresh tab, at the far end, the way a browser's
+ * does it. Unlike `openTab` it does not raise a tab already on the path — the
+ * path is only a starting point, and a workspace's front door being open
+ * somewhere is no reason the button should do nothing.
+ */
+export function openNewTab(path: string): void {
+  const tab = makeTab(path, '');
+  if (!tab || state.tabs.length >= MAX_TABS) return;
+  commit({ tabs: [...state.tabs, tab], activeId: tab.id });
+}
+
 export function activateTab(id: string): void {
   if (!state.tabs.some((tab) => tab.id === id)) return;
   commit({ ...state, activeId: id });

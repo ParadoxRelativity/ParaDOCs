@@ -134,11 +134,6 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, onSelect
         )}
 
         <div className="scroll-thin max-h-[45vh] overflow-y-auto">
-          {!debounced && !hasFilters && (
-            <p className="p-6 text-center text-xs text-[var(--color-muted)]">
-              Search by words in the title or body, then narrow by tag or date.
-            </p>
-          )}
           {(debounced || hasFilters) && results.length === 0 && !search.isFetching && (
             <p className="p-6 text-center text-xs text-[var(--color-muted)]">No matching documents or spreadsheets.</p>
           )}

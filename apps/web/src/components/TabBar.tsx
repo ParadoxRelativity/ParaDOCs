@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceSummary } from '../api/hooks';
 import {
   activateTab,
@@ -60,12 +60,40 @@ export default function TabBar({
   // Only worth marking which workspace a tab is in when they are not all in
   // the same one; otherwise it is the same badge on every tab.
   const mixed = new Set(tabs.map((tab) => tab.workspaceId)).size > 1;
+  const hasTabs = tabs.length > 0;
 
-  if (tabs.length === 0) return null;
+  // Once the tabs no longer fit, the one in front is kept in view: opening a
+  // tab at the far end, or switching from a menu, should not leave it scrolled
+  // off the edge.
+  useEffect(() => {
+    const active = strip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    active?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [activeId, tabs.length]);
+
+  // The strip scrolls sideways, but most mice only have a vertical wheel.
+  // Attached by hand because React's wheel listener is passive and cannot
+  // stop the page from scrolling too.
+  useEffect(() => {
+    const element = strip.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      if (element.scrollWidth <= element.clientWidth) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      element.scrollLeft += event.deltaY;
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, [hasTabs]);
+
+  if (!hasTabs) return null;
 
   return (
     <div className="flex h-9 shrink-0 items-stretch gap-1 border-b border-[var(--color-line)] bg-[var(--color-surface)] px-1.5">
-      <div ref={strip} role="tablist" aria-label="Open tabs" className="scroll-thin flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto">
+      {/* Sized to its tabs rather than stretched, so the new-tab button sits
+          just after the last one and only reaches the edge once they fill the
+          bar. Past that the tabs narrow, and past their narrowest they scroll. */}
+      <div ref={strip} role="tablist" aria-label="Open tabs" className="scroll-none flex min-w-0 items-stretch gap-1 overflow-x-auto">
         {tabs.map((tab, index) => (
           <TabButton
             key={tab.id}
@@ -128,10 +156,15 @@ function TabButton({
   // A workspace this page has not loaded — one on another server, or one left
   // over from before losing access — still names itself as best it can.
   const workspaceName = workspace?.name;
+  // The menu is placed against the window rather than the tab: the strip
+  // scrolls, and a scrolling box clips anything that hangs out of it.
+  const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
 
   return (
     <div
-      className={cx('group relative flex min-w-0 shrink-0 items-center', dragging && 'opacity-40')}
+      // Tabs give up width together as the bar fills, down to enough to still
+      // tell one from another; past that the strip scrolls instead.
+      className={cx('group relative flex min-w-24 shrink items-center', dragging && 'opacity-40')}
       draggable
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move';
@@ -161,10 +194,12 @@ function TabButton({
         }}
         onContextMenu={(event) => {
           event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          setMenuAt({ left: rect.left + 8, top: rect.bottom });
           onMenu(!menuOpen);
         }}
         className={cx(
-          'my-1 flex min-w-0 max-w-52 items-center gap-1.5 rounded-md py-1 pl-2 text-xs',
+          'my-1 flex w-full min-w-0 max-w-52 items-center gap-1.5 rounded-md py-1 pl-2 text-xs',
           closable ? 'pr-6' : 'pr-2',
           active
             ? 'bg-[var(--color-canvas)] font-medium text-[var(--color-ink)] shadow-sm'
@@ -204,10 +239,12 @@ function TabButton({
         </button>
       )}
 
-      {menuOpen && (
+      {menuOpen && menuAt && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => onMenu(false)} />
-          <div className="absolute left-2 top-full z-40 w-44 overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] py-1 text-xs shadow-xl">
+          <div
+            style={menuAt}
+            className="fixed z-40 w-44 overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] py-1 text-xs shadow-xl">
             <MenuItem
               label="Close tab"
               disabled={!closable}

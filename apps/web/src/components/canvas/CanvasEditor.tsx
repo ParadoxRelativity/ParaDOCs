@@ -602,9 +602,6 @@ export default function CanvasEditor({
               <Icon name={SHAPE_ICONS[kind]} />
             </Chip>
           ))}
-          <span className="text-[var(--color-muted)]">
-            Drag on the board to draw, or click for a default size. Double-click a shape to write in it.
-          </span>
           <Button variant="subtle" className="ml-auto text-xs" onClick={() => setShapeTool(null)}>
             Done
           </Button>
@@ -725,8 +722,7 @@ export default function CanvasEditor({
             <div className="text-center text-sm text-[var(--color-muted)]">
               <p className="font-medium">Empty canvas</p>
               <p className="mt-1 text-xs">
-                Double-click anywhere to drop a note, or pick a tool and click where it goes. Drag to pan, ⌘-scroll to
-                zoom, shift-drag to select, space-drag to pan over elements.
+                Double-click anywhere to drop a note, or pick a tool and click where it goes.
               </p>
             </div>
           </div>
@@ -1127,13 +1123,7 @@ function InsertDialog({
   return (
     <Modal
       title={titles[kind]}
-      description={
-        kind === 'embed'
-          ? 'YouTube, Vimeo and Loom links are converted to their embeddable form. Some sites refuse to be framed.'
-          : kind === 'link'
-            ? 'Places a card on the canvas. Double-click the card to open the document.'
-            : 'Paste a URL, or upload a file. Files can also be dropped straight onto the board.'
-      }
+      description={kind === 'embed' ? "Some sites can't be embedded." : undefined}
       onClose={onCancel}
       footer={
         <>

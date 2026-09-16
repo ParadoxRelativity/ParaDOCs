@@ -50,7 +50,6 @@ export default function ConnectServerDialog({ onClose }: { onClose: () => void }
   return (
     <Modal
       title="Connect to a server"
-      description="Add a ParaDOCs server you use. It opens in this window, and its workspaces join the workspace menu."
       onClose={onClose}
       footer={
         <>

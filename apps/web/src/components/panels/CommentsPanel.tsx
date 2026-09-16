@@ -30,7 +30,7 @@ export default function CommentsPanel({ documentId, currentUserId }: { documentI
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3">
         {visible.length === 0 && (
           <p className="py-6 text-center text-xs text-[var(--color-muted)]">
-            No comments yet. Leave a note for future you.
+            No comments yet.
           </p>
         )}
         <div className="space-y-3">

@@ -103,9 +103,6 @@ export function ChannelSettingsDialog({
             maxLength={TOPIC_LENGTH}
             placeholder={voice ? 'Drop in to talk' : 'What this channel is for'}
           />
-          <span className="mt-1 block text-xs text-[var(--color-muted)]">
-            Shown beside the name at the top of the channel. Leave it empty for none.
-          </span>
         </label>
         {/* Enter in either field saves. */}
         <button type="submit" hidden />

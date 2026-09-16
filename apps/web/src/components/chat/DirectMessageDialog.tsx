@@ -36,7 +36,6 @@ export function DirectMessageDialog({
   return (
     <Modal
       title="New direct message"
-      description="Talk one-to-one with someone in this workspace."
       onClose={onClose}
       footer={
         <Button variant="subtle" className="text-xs" onClick={onClose}>

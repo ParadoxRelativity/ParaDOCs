@@ -43,7 +43,7 @@ export default function VoiceSettings() {
 
   return (
     <>
-      <Section title="Devices" hint="Saved on this device. Changes apply straight away, including to a call in progress.">
+      <Section title="Devices">
         {!labelled && (
           <div className="mb-3 flex items-center gap-2 rounded-md bg-[var(--color-surface)] px-3 py-2 text-xs">
             <Icon name="shield-lock" className="text-[var(--color-muted)]" />

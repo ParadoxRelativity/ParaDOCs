@@ -240,9 +240,6 @@ export default function NotificationsMenu() {
               <div className="px-6 py-10 text-center">
                 <Icon name="bell" className="text-2xl text-[var(--color-muted)]" />
                 <p className="mt-2 text-sm font-medium">You are all caught up</p>
-                <p className="mt-1 text-xs text-[var(--color-muted)]">
-                  New messages, tags and invitations to workspaces appear here.
-                </p>
               </div>
             ) : (
               groups.map((group) => (

@@ -149,7 +149,7 @@ export default function PopoutWindow({ user }: { user: User }) {
       <EmptyState
         icon="exclamation-triangle"
         title="This conversation is no longer here"
-        hint="It may have been deleted, or you may no longer be in it. Closing this window is safe."
+        hint="It may have been deleted, or you may no longer be in it."
       />
     );
   }

@@ -194,7 +194,7 @@ function AccountSection({ user }: { user: User }) {
 
   return (
     <>
-      <Section title="Picture" hint="Shown beside your name in chat, comments, calls and the member list.">
+      <Section title="Picture">
         <PictureField
           preview={<Avatar name={user.name} url={user.avatarUrl} seed={user.id} size="xl" />}
           hasPicture={Boolean(user.avatarUrl)}
@@ -275,42 +275,30 @@ function AccountSection({ user }: { user: User }) {
 function StatusSection() {
   const { current, change } = useStatusControls();
   return (
-    <Section
-      title="Status"
-      hint="How you show to everyone in your workspaces. Kept on your account, so it applies on every device."
-    >
-      <StatusChoices
-        value={current.status}
-        awayAfterMinutes={current.awayAfterMinutes}
-        onChange={(status) => change({ status })}
-      />
+    <Section title="Status">
+      <StatusChoices value={current.status} onChange={(status) => change({ status })} />
       <label className="mt-3 flex items-center justify-between gap-3">
-        <span className="text-xs">
-          <span className="block">Show as away after</span>
-          <span className="block text-[var(--color-muted)]">
-            Without mouse or keyboard activity in ParaDOCs, while set to Online. Being in a call counts as activity.
-          </span>
-        </span>
+        <span className="text-xs">Show as away after</span>
         <AwayAfterSelect value={current.awayAfterMinutes} onChange={(minutes) => change({ awayAfterMinutes: minutes })} />
       </label>
     </Section>
   );
 }
 
-const THEMES: { id: Theme; label: string; hint: string; icon: IconName }[] = [
-  { id: 'light', label: 'Light', hint: 'Always light', icon: 'sun' },
-  { id: 'dark', label: 'Dark', hint: 'Always dark', icon: 'moon-stars' },
-  { id: 'system', label: 'System', hint: 'Follow your OS setting', icon: 'display' },
+const THEMES: { id: Theme; label: string; icon: IconName }[] = [
+  { id: 'light', label: 'Light', icon: 'sun' },
+  { id: 'dark', label: 'Dark', icon: 'moon-stars' },
+  { id: 'system', label: 'System', icon: 'display' },
 ];
 
-const CALL_LAYOUTS: { id: CallLayout; label: string; hint: string }[] = [
-  { id: 'side', label: 'Beside', hint: 'Other videos in a column' },
-  { id: 'bottom', label: 'Below', hint: 'Other videos in a row' },
+const CALL_LAYOUTS: { id: CallLayout; label: string }[] = [
+  { id: 'side', label: 'Beside' },
+  { id: 'bottom', label: 'Below' },
 ];
 
-const OPEN_BEHAVIOURS: { id: OpenBehaviour; label: string; hint: string; icon: IconName }[] = [
-  { id: 'here', label: 'In this tab', hint: 'Leaves what you were on', icon: 'box-arrow-in-right' },
-  { id: 'tab', label: 'In a new tab', hint: 'Keeps what you were on', icon: 'window-plus' },
+const OPEN_BEHAVIOURS: { id: OpenBehaviour; label: string; icon: IconName }[] = [
+  { id: 'here', label: 'In this tab', icon: 'box-arrow-in-right' },
+  { id: 'tab', label: 'In a new tab', icon: 'window-plus' },
 ];
 
 function OptionCard({
@@ -371,11 +359,9 @@ function AppearanceSection({
 }) {
   const [callLayout, setCallLayout] = useCallLayout();
   const [openBehaviour, setOpenBehaviour] = useOpenBehaviour();
-  const scope = desktop ? 'Applies on every server in this app.' : 'Applies to this browser only.';
-
   return (
     <>
-      <Section title="Theme" hint={scope}>
+      <Section title="Theme">
         <div className="grid grid-cols-3 gap-2">
           {THEMES.map((option) => (
             <OptionCard key={option.id} selected={theme === option.id} onClick={() => onThemeChange(option.id)}>
@@ -383,16 +369,12 @@ function AppearanceSection({
                 <Icon name={option.icon} />
               </div>
               <div className="mt-1 text-xs font-medium">{option.label}</div>
-              <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
             </OptionCard>
           ))}
         </div>
       </Section>
 
-      <Section
-        title="Opening a notification"
-        hint={`Where a message, mention or invitation goes when you click it in the bell. Holding ${'\u2318'} or Ctrl while clicking does the other one. ${scope}`}
-      >
+      <Section title="Opening a notification" hint={`Hold ${'\u2318'} or Ctrl to do the other one.`}>
         <div className="grid grid-cols-2 gap-2">
           {OPEN_BEHAVIOURS.map((option) => (
             <OptionCard
@@ -404,23 +386,18 @@ function AppearanceSection({
                 <Icon name={option.icon} />
               </div>
               <div className="mt-1 text-xs font-medium">{option.label}</div>
-              <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
             </OptionCard>
           ))}
         </div>
       </Section>
 
       {showCallLayout && (
-        <Section
-          title="Focused video in calls"
-          hint={`Click a camera or shared screen in a call to make it large; the other videos move aside. ${scope}`}
-        >
+        <Section title="Focused video in calls">
           <div className="grid grid-cols-2 gap-2">
             {CALL_LAYOUTS.map((option) => (
               <OptionCard key={option.id} selected={callLayout === option.id} onClick={() => setCallLayout(option.id)}>
                 <CallLayoutDiagram layout={option.id} />
                 <div className="mt-2 text-xs font-medium">{option.label}</div>
-                <div className="text-[10px] text-[var(--color-muted)]">{option.hint}</div>
               </OptionCard>
             ))}
           </div>
@@ -519,9 +496,6 @@ function WorkspaceSection({
               />
             </label>
           </div>
-          <p className="text-xs text-[var(--color-muted)]">
-            A picture takes the place of the icon. With neither, a letter from the workspace name is shown.
-          </p>
           {canManage && (
             <div className="flex items-center gap-2">
               <Button
@@ -553,7 +527,7 @@ function WorkspaceSection({
 
       {/* Deleting is owner-only, and the API refuses your last workspace. */}
       {workspace.role === 'owner' && (
-        <Section title="Danger zone" hint="Deleting a workspace removes its documents for everyone in it.">
+        <Section title="Danger zone">
           <Button variant="danger" className="text-xs" onClick={() => setConfirming(true)}>
             Delete this workspace
           </Button>

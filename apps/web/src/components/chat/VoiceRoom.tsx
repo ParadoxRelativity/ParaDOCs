@@ -33,11 +33,7 @@ export function VoiceRoom({
 
   if (config && !config.enabled) {
     return (
-      <EmptyState
-        icon="volume-mute"
-        title="Voice is off on this server"
-        hint="The Docker deployment runs voice unless VOICE_ENABLED is false. Elsewhere, set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET."
-      />
+      <EmptyState icon="volume-mute" title="Voice is off on this server" />
     );
   }
 

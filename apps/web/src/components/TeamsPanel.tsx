@@ -44,11 +44,7 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-[var(--color-muted)]">
-        Teams let you lock a folder, document or channel to a group of people at once. Everything is open to the whole
-        workspace until someone locks it.
-        {!canManage && ' Ask an owner or admin to change a team.'}
-      </p>
+      {!canManage && <p className="text-xs text-[var(--color-muted)]">Ask an owner or admin to change a team.</p>}
 
       {canManage && (
         <form onSubmit={(e) => void create(e)} className="flex gap-1.5">
@@ -188,7 +184,7 @@ function TeamRow({
       {confirming && (
         <ConfirmDialog
           title={`Delete ${team.name}?`}
-          description="Its line comes off every allow and deny list that names it. Where a list let the team in, its members lose that access unless they are listed some other way."
+          description="Members lose any access they had only through this team."
           confirmLabel="Delete team"
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
@@ -236,7 +232,7 @@ function ManageTeamDialog({
   return (
     <Modal
       title={`Manage ${team.name}`}
-      description={`${team.memberIds.length} ${team.memberIds.length === 1 ? 'member' : 'members'}. Tick everyone who should be on the team.`}
+      description={`${team.memberIds.length} ${team.memberIds.length === 1 ? 'member' : 'members'}`}
       onClose={onClose}
       wide
       footer={

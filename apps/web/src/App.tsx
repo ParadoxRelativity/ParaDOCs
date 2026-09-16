@@ -53,7 +53,7 @@ import {
   activeTab,
   describePath,
   ensureTabFor,
-  openTab,
+  openNewTab,
   updateActiveTab,
   useTabState,
   type TabKind,
@@ -151,7 +151,7 @@ function TabStrip() {
       onNewTab={() => {
         // A new tab opens on the workspace you are in, at its front door.
         const workspaceId = activeTab()?.workspaceId ?? workspaces.data?.[0]?.id;
-        if (workspaceId) openTab(`/w/${workspaceId}`, '');
+        if (workspaceId) openNewTab(`/w/${workspaceId}`);
       }}
     />
   );
@@ -764,15 +764,7 @@ function Workspace({
             ) : channelId && directs.isLoading ? (
               <Spinner />
             ) : (
-              <EmptyState
-                icon="chat-dots"
-                title="No channel open"
-                hint={
-                  canManageChannels
-                    ? 'Pick a channel on the left, or create one with +.'
-                    : 'Pick a channel on the left.'
-                }
-              />
+              <EmptyState icon="chat-dots" title="No channel open" />
             )
           ) : people ? (
             workspace ? (
@@ -790,11 +782,7 @@ function Workspace({
                 canEdit={canEdit}
               />
             ) : (
-              <EmptyState
-                icon="table"
-                title="No spreadsheet open"
-                hint={canEdit ? 'Pick one on the left, or create one with +.' : 'Pick a spreadsheet on the left.'}
-              />
+              <EmptyState icon="table" title="No spreadsheet open" />
             )
           ) : allDocuments ? (
             <AllDocuments
@@ -802,11 +790,7 @@ function Workspace({
               onOpen={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
             />
           ) : !documentId ? (
-            <EmptyState
-              icon="file-earmark-text"
-              title="Nothing open"
-              hint="Pick a document from the sidebar, press ⌘K to search, or open today's journal."
-            />
+            <EmptyState icon="file-earmark-text" title="Nothing open" />
           ) : document.isLoading ? (
             <Spinner />
           ) : document.error ? (
@@ -951,9 +935,6 @@ function InItsOwnWindow({
         <Icon name="window-stack" />
       </div>
       <p className="text-sm font-medium">{name} is in its own window</p>
-      <p className="max-w-xs text-xs text-[var(--color-muted)]">
-        It is still part of this app — it shares your session, and it closes when this window does.
-      </p>
       <div className="flex gap-2">
         <Button variant="subtle" onClick={onShow}>
           Show that window

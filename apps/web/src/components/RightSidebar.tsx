@@ -60,7 +60,7 @@ export default function RightSidebar(props: Props) {
             onOpenJournal={props.onOpenJournal}
           />
         ) : !props.doc ? (
-          <EmptyState icon="file-earmark-text" title="No document open" hint="Open a document to see its details here." />
+          <EmptyState icon="file-earmark-text" title="No document open" />
         ) : props.tab === 'toc' ? (
           <TableOfContents blocks={props.liveBlocks} />
         ) : props.tab === 'properties' ? (

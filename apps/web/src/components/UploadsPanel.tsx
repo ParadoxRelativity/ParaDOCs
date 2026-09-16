@@ -41,9 +41,7 @@ export default function UploadsPanel({ workspaceId, onOpenDocument }: Props) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-[var(--color-muted)]">
-        Files uploaded to this workspace. A file is unattached when no document owns it — it was
-        uploaded on its own, or the document holding it was deleted. Deleting a file here removes it
-        from disk permanently.
+        A file is unattached when no document uses it.
       </p>
 
       {totals && (
@@ -206,7 +204,7 @@ function AttachDialog({
   return (
     <Modal
       title="Attach to a new document"
-      description={`A new document will be created containing ${upload.filename}, which takes the file out of the unattached list.`}
+      description={`A new document will be created containing ${upload.filename}.`}
       onClose={onClose}
       footer={
         <>

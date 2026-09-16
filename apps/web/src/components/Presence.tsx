@@ -85,25 +85,18 @@ function awayAfterLabel(minutes: number): string {
   return AWAY_AFTER_CHOICES.find((choice) => choice.minutes === minutes)?.label ?? `${minutes} minutes`;
 }
 
-const CHOICES: { status: PresenceStatus; label: string; hint: (awayAfterMinutes: number) => string }[] = [
-  {
-    status: 'online',
-    label: 'Online',
-    hint: (minutes) =>
-      minutes > 0 ? `Shows as away after ${awayAfterLabel(minutes)} without activity` : 'Stays online while ParaDOCs is open',
-  },
-  { status: 'away', label: 'Away', hint: () => 'Until you change it back' },
-  { status: 'busy', label: 'Busy', hint: () => 'Mutes message notifications and call ringing' },
-  { status: 'offline', label: 'Appear offline', hint: () => 'Others see you as offline; everything still works' },
+const CHOICES: { status: PresenceStatus; label: string; hint?: string }[] = [
+  { status: 'online', label: 'Online' },
+  { status: 'away', label: 'Away' },
+  { status: 'busy', label: 'Busy', hint: 'Mutes message notifications and call ringing' },
+  { status: 'offline', label: 'Appear offline' },
 ];
 
 export function StatusChoices({
   value,
-  awayAfterMinutes,
   onChange,
 }: {
   value: PresenceStatus;
-  awayAfterMinutes: number;
   onChange: (status: PresenceStatus) => void;
 }) {
   return (
@@ -125,7 +118,7 @@ export function StatusChoices({
             <StatusDot status={choice.status} className="mt-1.5 h-2.5 w-2.5" />
             <span className="min-w-0 flex-1">
               <span className="block text-sm">{choice.label}</span>
-              <span className="block text-[11px] text-[var(--color-muted)]">{choice.hint(awayAfterMinutes)}</span>
+              {choice.hint && <span className="block text-[11px] text-[var(--color-muted)]">{choice.hint}</span>}
             </span>
             {selected && <Icon name="check2" className="mt-1 text-[var(--color-accent)]" />}
           </button>
@@ -190,7 +183,6 @@ export function StatusMenu({ onChosen }: { onChosen?: () => void }) {
     <div>
       <StatusChoices
         value={current.status}
-        awayAfterMinutes={current.awayAfterMinutes}
         onChange={(status) => {
           change({ status });
           onChosen?.();

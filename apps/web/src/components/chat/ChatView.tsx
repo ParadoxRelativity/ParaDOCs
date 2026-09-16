@@ -245,13 +245,9 @@ export function ChatView({
           <Spinner />
         ) : messages.length === 0 ? (
           direct ? (
-            <EmptyState
-              icon="chat-dots"
-              title={`This is the start of your conversation with ${personName}`}
-              hint="Only the two of you can see what is said here."
-            />
+            <EmptyState icon="chat-dots" title={`This is the start of your conversation with ${personName}`} />
           ) : (
-            <EmptyState icon="chat-dots" title={`#${channel.name} is quiet`} hint="Say something to start it off." />
+            <EmptyState icon="chat-dots" title={`#${channel.name} is quiet`} />
           )
         ) : (
           <>

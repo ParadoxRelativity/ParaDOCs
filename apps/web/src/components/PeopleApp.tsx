@@ -9,15 +9,9 @@ export function isPeopleSection(value: string | undefined): value is PeopleSecti
   return value === 'members' || value === 'teams';
 }
 
-const PAGES: Record<PeopleSection, { title: string; hint: string }> = {
-  members: {
-    title: 'Members',
-    hint: 'Everyone in this workspace, the role each person has, and the teams they are on.',
-  },
-  teams: {
-    title: 'Teams',
-    hint: 'Named groups of members, so permissions can be given to several people at once.',
-  },
+const TITLES: Record<PeopleSection, string> = {
+  members: 'Members',
+  teams: 'Teams',
 };
 
 /**
@@ -27,12 +21,10 @@ const PAGES: Record<PeopleSection, { title: string; hint: string }> = {
  * the server holds them to.
  */
 export default function PeopleApp({ workspace, section }: { workspace: WorkspaceSummary; section: PeopleSection }) {
-  const page = PAGES[section];
   return (
     <div className="scroll-thin h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-6 py-6">
-        <h1 className="text-lg font-semibold">{page.title}</h1>
-        <p className="mb-4 mt-0.5 text-sm text-[var(--color-muted)]">{page.hint}</p>
+        <h1 className="mb-4 text-lg font-semibold">{TITLES[section]}</h1>
         {section === 'members' ? (
           <MembersPanel workspaceId={workspace.id} myRole={workspace.role} />
         ) : (

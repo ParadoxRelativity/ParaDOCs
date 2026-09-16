@@ -86,11 +86,6 @@ export default function SheetRefPicker({
   return (
     <Modal
       title={kind === 'cell' ? 'Insert a spreadsheet cell' : 'Insert a spreadsheet chart'}
-      description={
-        kind === 'cell'
-          ? 'Shows the cell’s value as it is in the spreadsheet whenever this is opened, copied or exported.'
-          : 'Draws the chart from the spreadsheet’s data whenever this is opened. Exports carry its numbers as a table.'
-      }
       onClose={onCancel}
       footer={
         <>

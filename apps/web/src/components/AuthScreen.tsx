@@ -177,7 +177,7 @@ function DesktopPlaces() {
       {removing && here && (
         <ConfirmDialog
           title={`Remove ${here.label}?`}
-          description="It is taken off the app's list. Nothing on the server is deleted."
+          description="Nothing on the server is deleted."
           confirmLabel="Remove"
           onConfirm={() => void removeHere()}
           onCancel={() => setRemoving(false)}

@@ -215,9 +215,6 @@ function SignIn({ setupRequired }: { setupRequired: boolean }) {
           </button>
         )}
       </div>
-      <p className="mt-4 max-w-sm text-center text-xs text-[var(--color-muted)]">
-        This page is separate from the app. Signing in here does not sign you in there, or the other way round.
-      </p>
     </Centered>
   );
 }
@@ -351,22 +348,19 @@ function SettingsForm({ current }: { current: ServerSettings }) {
         else save();
       }}
     >
-      <h2 className="text-lg font-semibold">Server settings</h2>
-      <p className="mb-6 text-sm text-[var(--color-muted)]">
-        These apply to every workspace on this server. Workspace owners cannot change them.
-      </p>
+      <h2 className="mb-6 text-lg font-semibold">Server settings</h2>
 
       <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] p-4">
         <Section
           title="Registration"
-          hint="Closed, nobody can sign up on their own; create their accounts under Accounts instead. The first account on a new server can always be created. Invited people also need an account before they can accept."
+          hint="When off, create accounts under Accounts."
         >
           <Switch checked={allowRegistration} onChange={setAllowRegistration} label="Anyone can create an account" />
         </Section>
 
         <Section
           title="Message retention"
-          hint="The longest a message in a text channel is kept. Older messages, and files shared in them, are permanently deleted, checked every hour. Direct messages are not affected."
+          hint="Direct messages are not affected."
         >
           <div className="space-y-2 text-sm">
             <label className="flex cursor-pointer items-center gap-2">
@@ -540,7 +534,6 @@ function CreateAccountDialog({ onClose }: { onClose: () => void }) {
   return (
     <Modal
       title="New account"
-      description="It starts with its own Personal workspace, just as if they had registered. Give them the password privately."
       onClose={onClose}
       footer={
         <>
@@ -702,7 +695,7 @@ function ManageAccountDialog({ user, self, onClose }: { user: AdminUser; self: b
           </form>
         </Section>
 
-        <Section title="Sessions" hint="Ends every session the account has in the app and closes its open connections.">
+        <Section title="Sessions">
           <Button
             variant="subtle"
             disabled={signOut.isPending}
@@ -720,7 +713,7 @@ function ManageAccountDialog({ user, self, onClose }: { user: AdminUser; self: b
         {!self && (
           <Section
             title="Delete account"
-            hint="Deletes the account and the workspaces it created. Messages it sent elsewhere stay, without an author. An account whose workspaces other people use cannot be deleted; disable it instead."
+            hint="Accounts whose workspaces others use can't be deleted; disable them instead."
           >
             <Button variant="danger" disabled={remove.isPending} onClick={() => setConfirmingDelete(true)}>
               <Icon name="trash" /> Delete account
