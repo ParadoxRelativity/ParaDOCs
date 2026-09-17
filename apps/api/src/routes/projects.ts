@@ -1,14 +1,17 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  canMoveTo,
   createProjectSchema,
   createRoleSchema,
   createStatusSchema,
   createWorkItemSchema,
+  createWorkflowSchema,
   deleteStatusSchema,
   memberRef,
   moveWorkItemsSchema,
   resolveWorkItemsSchema,
+  setTypeWorkflowSchema,
   setWorkItemRoleSchema,
   textMembers,
   textWorkItems,
@@ -16,11 +19,14 @@ import {
   updateRoleSchema,
   updateStatusSchema,
   updateWorkItemSchema,
+  updateWorkflowSchema,
   workItemCommentSchema,
+  workflowForType,
   type Project,
   type ProjectKind,
   type ProjectRole,
   type ProjectStatus,
+  type ProjectWorkflow,
   type StatusCategory,
   type WorkItem,
   type WorkItemActivity,
@@ -30,6 +36,7 @@ import {
   type WorkItemListing,
   type WorkItemSummary,
   type WorkItemTimeline,
+  type WorkItemType,
 } from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
@@ -130,6 +137,15 @@ function authorJson(alias: string): string {
                            'avatarUrl', ${uploadUrlSql(`${alias}.avatar_key`)}) END`;
 }
 
+/** A workflow's moves as the client wants them: to-statuses keyed by from-status. */
+const TRANSITIONS_JSON = `COALESCE((
+  SELECT json_object_agg(g.from_status, g.tos)
+    FROM (SELECT t.from_status, json_agg(t.to_status) AS tos
+            FROM project_workflow_transitions t
+           WHERE t.workflow_id = w.id
+           GROUP BY t.from_status) g
+), '{}'::json)`;
+
 async function fetchProject(id: string, userId: string): Promise<Project> {
   const { rows } = await query<Project>(
     `SELECT ${projectColumns('$2', roleSql('$2', 'p.workspace_id'))},
@@ -141,6 +157,12 @@ async function fetchProject(id: string, userId: string): Promise<Project> {
                                                         'position', r.position)
                                       ORDER BY r.position, r.created_at)
                         FROM project_roles r WHERE r.project_id = p.id), '[]'::json) AS roles,
+            COALESCE((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'position', w.position,
+                                                        'transitions', ${TRANSITIONS_JSON})
+                                      ORDER BY w.position, w.created_at)
+                        FROM project_workflows w WHERE w.project_id = p.id), '[]'::json) AS workflows,
+            COALESCE((SELECT json_object_agg(tw.type, tw.workflow_id)
+                        FROM project_type_workflows tw WHERE tw.project_id = p.id), '{}'::json) AS "typeWorkflows",
             (${roleSql('$2', 'p.workspace_id')} IN ('owner', 'admin') OR p.created_by = $2) AS "canDelete"
        FROM projects p WHERE p.id = $1`,
     [id, userId],
@@ -167,6 +189,42 @@ async function projectOfStatus(statusId: string): Promise<string> {
   const { rows } = await query<{ project_id: string }>('SELECT project_id FROM project_statuses WHERE id = $1', [statusId]);
   if (!rows[0]) throw notFound('Status not found');
   return rows[0].project_id;
+}
+
+async function projectOfWorkflow(workflowId: string): Promise<string> {
+  if (!UUID.test(workflowId)) throw notFound('Workflow not found');
+  const { rows } = await query<{ project_id: string }>('SELECT project_id FROM project_workflows WHERE id = $1', [workflowId]);
+  if (!rows[0]) throw notFound('Workflow not found');
+  return rows[0].project_id;
+}
+
+async function assertWorkflowNameFree(projectId: string, name: string, exceptId?: string): Promise<void> {
+  const { rows } = await query(
+    'SELECT 1 FROM project_workflows WHERE project_id = $1 AND lower(name) = lower($2) AND id IS DISTINCT FROM $3',
+    [projectId, name, exceptId ?? null],
+  );
+  if (rows.length) throw conflict(`This project already has a workflow called ${name}`);
+}
+
+/**
+ * Refuses a move no workflow allows. Owners and admins are let through: a
+ * workflow is how a team means to work, not a cage, and someone has to be able
+ * to unstick an item when the rules themselves turn out to be wrong.
+ */
+function assertMoveAllowed(
+  project: Project,
+  role: string | null,
+  moves: { key: string; type: WorkItemType; from: string; to: string }[],
+): void {
+  if (role === 'owner' || role === 'admin') return;
+  const name = (id: string) => project.statuses.find((s) => s.id === id)?.name ?? 'that status';
+  for (const move of moves) {
+    if (canMoveTo(project, move.type, move.from, move.to)) continue;
+    const workflow = workflowForType(project, move.type)!;
+    throw badRequest(
+      `${move.key} cannot go from ${name(move.from)} to ${name(move.to)}: the ${workflow.name} workflow does not allow it`,
+    );
+  }
 }
 
 async function projectOfRole(roleId: string): Promise<string> {
@@ -520,6 +578,106 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     reply.status(204);
   });
 
+  // --- workflows -------------------------------------------------------------
+
+  /** One workflow, read back the way `fetchProject` builds them. */
+  async function fetchWorkflow(id: string): Promise<ProjectWorkflow> {
+    const { rows } = await query<ProjectWorkflow>(
+      `SELECT w.id, w.name, w.position, ${TRANSITIONS_JSON} AS transitions
+         FROM project_workflows w WHERE w.id = $1`,
+      [id],
+    );
+    if (!rows[0]) throw notFound('Workflow not found');
+    return rows[0];
+  }
+
+  app.post<{ Params: { id: string } }>('/projects/:id/workflows', async (req, reply) => {
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const input = parse(createWorkflowSchema, req.body ?? {});
+    await assertWorkflowNameFree(req.params.id, input.name);
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO project_workflows (project_id, name, position)
+       VALUES ($1, $2, (SELECT COALESCE(max(position), 0) + 1 FROM project_workflows WHERE project_id = $1))
+       RETURNING id`,
+      [req.params.id, input.name],
+    );
+    projectChanged(workspaceId, req.params.id);
+    reply.status(201);
+    return fetchWorkflow(rows[0].id);
+  });
+
+  app.patch<{ Params: { id: string } }>('/project-workflows/:id', async (req) => {
+    const projectId = await projectOfWorkflow(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const input = parse(updateWorkflowSchema, req.body ?? {});
+    if (input.name) await assertWorkflowNameFree(projectId, input.name, req.params.id);
+
+    // Both ends of every move have to be statuses of this project.
+    const moves = Object.entries(input.transitions ?? {}).flatMap(([from, tos]) =>
+      [...new Set(tos)].filter((to) => to !== from).map((to) => ({ from, to })),
+    );
+    if (moves.length > 0) {
+      const { rows } = await query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM project_statuses
+          WHERE project_id = $1 AND id = ANY($2::uuid[])`,
+        [projectId, [...new Set(moves.flatMap((m) => [m.from, m.to]))]],
+      );
+      if (rows[0].count !== new Set(moves.flatMap((m) => [m.from, m.to])).size) {
+        throw badRequest('A workflow can only move work between this project\'s own statuses');
+      }
+    }
+
+    await transaction(async (client) => {
+      await client.query(
+        'UPDATE project_workflows SET name = COALESCE($2, name), position = COALESCE($3, position) WHERE id = $1',
+        [req.params.id, input.name ?? null, input.position ?? null],
+      );
+      // The moves are replaced wholesale, so what is not sent is no longer allowed.
+      if (input.transitions) {
+        await client.query('DELETE FROM project_workflow_transitions WHERE workflow_id = $1', [req.params.id]);
+        if (moves.length > 0) {
+          await client.query(
+            `INSERT INTO project_workflow_transitions (workflow_id, from_status, to_status)
+             SELECT $1, m.from_status, m.to_status
+               FROM unnest($2::uuid[], $3::uuid[]) AS m(from_status, to_status)`,
+            [req.params.id, moves.map((m) => m.from), moves.map((m) => m.to)],
+          );
+        }
+      }
+    });
+    projectChanged(workspaceId, projectId);
+    return fetchWorkflow(req.params.id);
+  });
+
+  app.delete<{ Params: { id: string } }>('/project-workflows/:id', async (req, reply) => {
+    const projectId = await projectOfWorkflow(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    // The types that followed it lose their row too, and move freely again.
+    await query('DELETE FROM project_workflows WHERE id = $1', [req.params.id]);
+    projectChanged(workspaceId, projectId);
+    reply.status(204);
+  });
+
+  /** Points one item type at a workflow, or at none. */
+  app.put<{ Params: { id: string } }>('/projects/:id/type-workflows', async (req) => {
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const input = parse(setTypeWorkflowSchema, req.body ?? {});
+    if (input.workflowId) {
+      if ((await projectOfWorkflow(input.workflowId)) !== req.params.id) {
+        throw badRequest('That workflow is in another project');
+      }
+      await query(
+        `INSERT INTO project_type_workflows (project_id, type, workflow_id) VALUES ($1, $2, $3)
+         ON CONFLICT (project_id, type) DO UPDATE SET workflow_id = EXCLUDED.workflow_id`,
+        [req.params.id, input.type, input.workflowId],
+      );
+    } else {
+      await query('DELETE FROM project_type_workflows WHERE project_id = $1 AND type = $2', [req.params.id, input.type]);
+    }
+    projectChanged(workspaceId, req.params.id);
+    return fetchProject(req.params.id, req.user!.id);
+  });
+
   // --- work items --------------------------------------------------------------
 
   app.get<{ Params: { id: string } }>('/projects/:id/items', async (req) => {
@@ -608,15 +766,24 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    * hundred items picked and put on the board is one request and one change.
    */
   app.post<{ Params: { id: string } }>('/projects/:id/items/move', async (req) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'edit');
     const input = parse(moveWorkItemsSchema, req.body ?? {});
-    const { rows: statuses } = await query<{ id: string; name: string; category: StatusCategory }>(
-      'SELECT id, name, category FROM project_statuses WHERE id = $1 AND project_id = $2',
-      [input.statusId, req.params.id],
-    );
-    const target = statuses[0];
+    const project = await fetchProject(req.params.id, req.user!.id);
+    const target = project.statuses.find((s) => s.id === input.statusId);
     if (!target) throw badRequest('That status is not in this project');
     const itemIds = [...new Set(input.itemIds)];
+
+    const { rows: moving } = await query<{ key: string; type: WorkItemType; status_id: string }>(
+      `SELECT p.key || '-' || i.number AS key, i.type, i.status_id
+         FROM work_items i JOIN projects p ON p.id = i.project_id
+        WHERE i.id = ANY($1::uuid[]) AND i.project_id = $2`,
+      [itemIds, req.params.id],
+    );
+    assertMoveAllowed(
+      project,
+      role,
+      moving.map((item) => ({ key: item.key, type: item.type, from: item.status_id, to: target.id })),
+    );
 
     const moved = await transaction(async (client) => {
       const { rows } = await client.query<{ id: string; from_name: string }>(
@@ -659,31 +826,38 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch<{ Params: { id: string } }>('/work-items/:id', async (req) => {
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId, role } = await assertWorkItemAccess(req, req.params.id, 'edit');
     const input = parse(updateWorkItemSchema, req.body ?? {});
 
     const { rows: before } = await query<{
+      key: string;
       title: string;
       description: string;
+      type: WorkItemType;
       priority: WorkItem['priority'];
       status_id: string;
       status_name: string;
       status_category: StatusCategory;
     }>(
-      `SELECT i.title, i.description, i.priority, i.status_id, st.name AS status_name, st.category AS status_category
-         FROM work_items i JOIN project_statuses st ON st.id = i.status_id WHERE i.id = $1`,
+      `SELECT p.key || '-' || i.number AS key, i.title, i.description, i.type, i.priority, i.status_id,
+              st.name AS status_name, st.category AS status_category
+         FROM work_items i
+         JOIN projects p ON p.id = i.project_id
+         JOIN project_statuses st ON st.id = i.status_id
+        WHERE i.id = $1`,
       [req.params.id],
     );
     const current = before[0];
 
     let target: { id: string; name: string; category: StatusCategory } | null = null;
     if (input.statusId && input.statusId !== current.status_id) {
-      const { rows } = await query<{ id: string; name: string; category: StatusCategory }>(
-        'SELECT id, name, category FROM project_statuses WHERE id = $1 AND project_id = $2',
-        [input.statusId, projectId],
-      );
-      if (!rows[0]) throw badRequest('That status is not in this project');
-      target = rows[0];
+      const project = await fetchProject(projectId, req.user!.id);
+      const status = project.statuses.find((s) => s.id === input.statusId);
+      if (!status) throw badRequest('That status is not in this project');
+      // The type it is being given, if it is being given one, is the type it moves as.
+      const type = input.type ?? current.type;
+      assertMoveAllowed(project, role, [{ key: current.key, type, from: current.status_id, to: status.id }]);
+      target = status;
     }
 
     await transaction(async (client) => {

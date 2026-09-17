@@ -1,10 +1,9 @@
 import { useState } from 'react';
-import type { Project, ProjectStatus, WorkItemSummary, WorkspaceMember } from '@paradocs/shared';
-import { useCreateWorkItem, useUpdateWorkItem } from '../../api/hooks';
+import { canMoveTo, type Project, type ProjectStatus, type WorkItemSummary, type WorkspaceMember } from '@paradocs/shared';
+import { useUpdateWorkItem } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import { useToast } from '../Toast';
-import { IconButton, InlineInput } from '../ui';
 import { PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 /** What a dragged card carries, so nothing else can be dropped on a column. */
@@ -23,6 +22,10 @@ export function positionBetween(before: number | undefined, after: number | unde
  * are dragged between and within columns; where one is dropped is where it
  * stays, for everyone. Backlog statuses have no column: what is in them is not
  * planned yet, and has a view of its own.
+ *
+ * Where a card may be dropped is what the workflow its type follows allows.
+ * Columns it does not are dimmed while the card is in the air and will not take
+ * it, so a move that the server would refuse cannot be started.
  */
 export default function ProjectBoard({
   project,
@@ -47,6 +50,9 @@ export default function ProjectBoard({
   const [drop, setDrop] = useState<{ statusId: string; index: number } | null>(null);
 
   const columns = project.statuses.filter((s) => s.category !== 'backlog');
+  const held = dragging ? items.find((item) => item.id === dragging) : undefined;
+  /** Whether the card in the air may be dropped here. Nothing in the air: anywhere. */
+  const takes = (statusId: string) => !held || canMoveTo(project, held.type, held.statusId, statusId);
   const backlogIds = new Set(project.statuses.filter((s) => s.category === 'backlog').map((s) => s.id));
   const backlogCount = items.filter((item) => backlogIds.has(item.statusId)).length;
   const byStatus = new Map<string, WorkItemSummary[]>(columns.map((s) => [s.id, []]));
@@ -94,6 +100,7 @@ export default function ProjectBoard({
             canEdit={canEdit}
             activeItemId={activeItemId}
             dragging={dragging}
+            takesDrop={takes(status.id)}
             dropIndex={drop?.statusId === status.id ? drop.index : null}
             onOpenItem={onOpenItem}
             onDragStart={setDragging}
@@ -122,6 +129,7 @@ function Column({
   canEdit,
   activeItemId,
   dragging,
+  takesDrop,
   dropIndex,
   onOpenItem,
   onDragStart,
@@ -136,6 +144,8 @@ function Column({
   canEdit: boolean;
   activeItemId: string | null;
   dragging: string | null;
+  /** False while a card whose workflow forbids this status is being dragged. */
+  takesDrop: boolean;
   dropIndex: number | null;
   onOpenItem: (itemId: string) => void;
   onDragStart: (itemId: string) => void;
@@ -143,9 +153,6 @@ function Column({
   onDragOverIndex: (index: number) => void;
   onDropAt: (index: number, itemId: string) => void;
 }) {
-  const [adding, setAdding] = useState(false);
-  const create = useCreateWorkItem(project.id);
-  const toast = useToast();
   const estimate = items.reduce((total, item) => total + (item.estimate ?? 0), 0);
   const primaryRole = project.roles[0];
 
@@ -153,16 +160,21 @@ function Column({
 
   return (
     <section
-      className="flex w-72 shrink-0 flex-col rounded-xl bg-[var(--color-surface)]"
+      className={cx(
+        'flex w-72 shrink-0 flex-col rounded-xl bg-[var(--color-surface)] transition-opacity',
+        dragging && !takesDrop && 'opacity-40',
+      )}
+      title={dragging && !takesDrop ? `${status.name} is not a move this item's workflow allows` : undefined}
       onDragOver={(e) => {
-        if (!canEdit || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+        // Not preventing the default is what refuses the drop.
+        if (!canEdit || !takesDrop || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
         e.preventDefault();
         // Over the column but past its cards: the end of it.
         if ((e.target as HTMLElement).closest('[data-card]') === null) onDragOverIndex(items.length);
       }}
       onDrop={(e) => {
         const id = e.dataTransfer.getData(DRAG_TYPE);
-        if (!id || dropIndex === null) return;
+        if (!id || dropIndex === null || !takesDrop) return;
         e.preventDefault();
         onDropAt(dropIndex, id);
       }}
@@ -175,30 +187,9 @@ function Column({
             · {Number(estimate.toFixed(2))} est
           </span>
         )}
-        <span className="flex-1" />
-        {canEdit && !project.archivedAt && (
-          <IconButton label={`New work item in ${status.name}`} onClick={() => setAdding(true)}>
-            <Icon name="plus-lg" />
-          </IconButton>
-        )}
       </header>
 
       <div className="scroll-thin min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 pb-2 pt-1">
-        {adding && (
-          <div className="rounded-lg bg-[var(--color-raised)] p-2 shadow-sm">
-            <InlineInput
-              placeholder="What needs doing?"
-              onCancel={() => setAdding(false)}
-              onCommit={(title) => {
-                setAdding(false);
-                create.mutate(
-                  { title, statusId: status.id },
-                  { onError: (err) => toast(err instanceof Error ? err.message : 'Could not create the work item', 'error') },
-                );
-              }}
-            />
-          </div>
-        )}
         {items.map((item, index) => {
           const holders = primaryRole ? (item.roles[primaryRole.id] ?? []) : [];
           const overdue = isOverdue(item.dueDate, status.category === 'done');
@@ -215,7 +206,7 @@ function Column({
                 }}
                 onDragEnd={onDragEnd}
                 onDragOver={(e) => {
-                  if (!canEdit || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+                  if (!canEdit || !takesDrop || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
                   e.preventDefault();
                   const rect = e.currentTarget.getBoundingClientRect();
                   onDragOverIndex(e.clientY < rect.top + rect.height / 2 ? index : index + 1);
@@ -261,9 +252,7 @@ function Column({
           );
         })}
         {dropIndex === items.length && indicator}
-        {items.length === 0 && !adding && (
-          <p className="px-2 py-4 text-center text-xs text-[var(--color-muted)]">Nothing here</p>
-        )}
+        {items.length === 0 && <p className="px-2 py-4 text-center text-xs text-[var(--color-muted)]">Nothing here</p>}
       </div>
     </section>
   );

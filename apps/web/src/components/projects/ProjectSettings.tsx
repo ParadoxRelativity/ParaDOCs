@@ -3,9 +3,11 @@ import {
   STATUS_CATEGORIES,
   STATUS_CATEGORY_LABELS,
   STATUS_COLORS,
+  WORK_ITEM_TYPES,
   type Project,
   type ProjectRole,
   type ProjectStatus,
+  type ProjectWorkflow,
   type StatusCategory,
   type WorkItemSummary,
 } from '@paradocs/shared';
@@ -14,10 +16,10 @@ import { cx } from '../../lib/util';
 import { AccessDialog } from '../AccessDialog';
 import Icon from '../Icon';
 import { ConfirmDialog, Modal } from '../Modal';
-import { FIELD, Section } from '../SettingsParts';
+import { FIELD, FIELD_BASE, Section } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
-import { CATEGORY_ICON, PROJECT_KIND } from './projectUi';
+import { CATEGORY_ICON, ITEM_TYPE, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
 
 /**
@@ -50,6 +52,7 @@ export default function ProjectSettings({
       <div className="mx-auto max-w-2xl px-6 py-6">
         <GeneralSection project={project} canEdit={canEdit} />
         <StatusSection project={project} items={items} canEdit={canEdit} />
+        <WorkflowSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
 
         <Section
@@ -283,7 +286,7 @@ function StatusSection({ project, items, canEdit }: { project: Project; items: W
                   { onError: fail('Could not change the status') },
                 )
               }
-              className={cx(FIELD, 'w-32 py-1 text-xs')}
+              className={cx(FIELD_BASE, 'w-32 shrink-0 py-1 text-xs')}
               aria-label={`What ${status.name} means`}
             >
               {STATUS_CATEGORIES.map((category) => (
@@ -322,12 +325,12 @@ function StatusSection({ project, items, canEdit }: { project: Project; items: W
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New status"
-              className={cx(FIELD, 'min-w-0 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
             />
             <select
               value={newCategory}
               onChange={(e) => setNewCategory(e.target.value as StatusCategory)}
-              className={cx(FIELD, 'w-32 py-1 text-xs')}
+              className={cx(FIELD_BASE, 'w-32 shrink-0 py-1 text-xs')}
               aria-label="What the new status means"
             >
               {STATUS_CATEGORIES.map((category) => (
@@ -401,6 +404,220 @@ function RemoveStatusDialog({
         ))}
       </select>
     </Modal>
+  );
+}
+
+/**
+ * The routes work can take through the board. A workflow says, for each status,
+ * which statuses an item there may move to next; a type is then pointed at a
+ * workflow, and its items follow it. Nothing is set up to begin with, and a
+ * type with no workflow moves anywhere, so this only ever narrows things.
+ */
+function WorkflowSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
+  const setup = useProjectSetup(project.workspaceId, project.id);
+  const toast = useToast();
+  const [newName, setNewName] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<ProjectWorkflow | null>(null);
+  const fail = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
+
+  const { workflows, statuses } = project;
+
+  function add() {
+    const name = newName.trim();
+    if (!name) return;
+    setup.addWorkflow.mutate(
+      { name },
+      {
+        onSuccess: (workflow) => {
+          setNewName('');
+          setOpen(workflow.id);
+        },
+        onError: fail('Could not add the workflow'),
+      },
+    );
+  }
+
+  /** Turns one move on or off, sending the whole set back as it should now stand. */
+  function toggleMove(workflow: ProjectWorkflow, from: string, to: string, allow: boolean) {
+    const current = workflow.transitions[from] ?? [];
+    const next = { ...workflow.transitions, [from]: allow ? [...current, to] : current.filter((id) => id !== to) };
+    setup.updateWorkflow.mutate({ id: workflow.id, transitions: next }, { onError: fail('Could not change the workflow') });
+  }
+
+  return (
+    <Section
+      title="Workflows"
+      hint="How work moves through the board. A workflow says which statuses an item may go to from where it is — including which board status it may leave the backlog for. Each item type follows one workflow; a type with none set moves anywhere."
+    >
+      <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
+        {workflows.map((workflow) => {
+          const moves = Object.values(workflow.transitions).reduce((total, tos) => total + tos.length, 0);
+          const expanded = open === workflow.id;
+          return (
+            <li key={workflow.id}>
+              <div className="flex items-center gap-2 px-2 py-1.5">
+                <Icon name="diagram-2" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
+                <RenameField
+                  value={workflow.name}
+                  disabled={!canEdit}
+                  onCommit={(name) =>
+                    setup.updateWorkflow.mutate({ id: workflow.id, name }, { onError: fail('Could not rename the workflow') })
+                  }
+                />
+                <span className="shrink-0 text-xs text-[var(--color-muted)]">
+                  {moves === 1 ? '1 move' : `${moves} moves`}
+                </span>
+                <Button variant="subtle" className="shrink-0 text-xs" onClick={() => setOpen(expanded ? null : workflow.id)}>
+                  {expanded ? 'Done' : canEdit ? 'Edit moves' : 'See moves'}
+                </Button>
+                {canEdit && (
+                  <IconButton label="Delete workflow" onClick={() => setRemoving(workflow)}>
+                    <Icon name="trash3" />
+                  </IconButton>
+                )}
+              </div>
+              {expanded && <TransitionGrid workflow={workflow} statuses={statuses} canEdit={canEdit} onToggle={toggleMove} />}
+            </li>
+          );
+        })}
+        {workflows.length === 0 && (
+          <li className="px-3 py-2 text-xs text-[var(--color-muted)]">
+            No workflows yet, so work moves anywhere on the board.
+          </li>
+        )}
+        {canEdit && (
+          <li className="flex items-center gap-2 px-2 py-1.5">
+            <Icon name="plus-circle" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && add()}
+              placeholder="New workflow, such as Standard"
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+            />
+            <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
+              Add
+            </Button>
+          </li>
+        )}
+      </ul>
+
+      {workflows.length > 0 && (
+        <div className="mt-3">
+          <h4 className="text-xs font-semibold">What each type follows</h4>
+          <ul className="mt-1 divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
+            {WORK_ITEM_TYPES.map((type) => (
+              <li key={type} className="flex items-center gap-2 px-2 py-1.5">
+                <TypeIcon type={type} className="w-5 shrink-0 justify-center" />
+                <span className="min-w-0 flex-1 text-sm">{ITEM_TYPE[type].label}</span>
+                <select
+                  value={project.typeWorkflows[type] ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.setTypeWorkflow.mutate(
+                      { type, workflowId: e.target.value || null },
+                      { onError: fail('Could not change what this type follows') },
+                    )
+                  }
+                  className={cx(FIELD_BASE, 'w-44 shrink-0 py-1 text-xs')}
+                  aria-label={`Workflow ${ITEM_TYPE[type].label} items follow`}
+                >
+                  <option value="">Moves anywhere</option>
+                  {workflows.map((workflow) => (
+                    <option key={workflow.id} value={workflow.id}>
+                      {workflow.name}
+                    </option>
+                  ))}
+                </select>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title={`Delete ${removing.name}?`}
+          description="Any item type following it moves anywhere again. Nothing else about the work changes."
+          confirmLabel="Delete workflow"
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            setRemoving(null);
+            if (open === removing.id) setOpen(null);
+            setup.deleteWorkflow.mutate(removing.id, { onError: fail('Could not delete the workflow') });
+          }}
+        />
+      )}
+    </Section>
+  );
+}
+
+/**
+ * The moves a workflow allows, as a grid: a row per status an item can be in,
+ * a column per status it could go to. The diagonal is blank — staying put is
+ * not a move — and a row with nothing ticked is where work stops.
+ */
+function TransitionGrid({
+  workflow,
+  statuses,
+  canEdit,
+  onToggle,
+}: {
+  workflow: ProjectWorkflow;
+  statuses: ProjectStatus[];
+  canEdit: boolean;
+  onToggle: (workflow: ProjectWorkflow, from: string, to: string, allow: boolean) => void;
+}) {
+  if (statuses.length < 2) {
+    return <p className="px-3 pb-2 text-xs text-[var(--color-muted)]">Add a second status before setting out a route between them.</p>;
+  }
+  return (
+    <div className="scroll-thin overflow-x-auto border-t border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2">
+      <table className="text-xs">
+        <thead>
+          <tr>
+            <th className="sticky left-0 z-10 bg-[var(--color-surface)] pr-2 text-left font-medium text-[var(--color-muted)]">
+              From ↓ / to →
+            </th>
+            {statuses.map((status) => (
+              <th key={status.id} className="px-1 pb-1 font-normal">
+                <span className="block w-16 truncate text-center" title={status.name}>
+                  {status.name}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {statuses.map((from) => (
+            <tr key={from.id}>
+              <th scope="row" className="sticky left-0 z-10 bg-[var(--color-surface)] py-0.5 pr-2 text-left font-normal">
+                <StatusPill status={from} />
+              </th>
+              {statuses.map((to) => {
+                const allowed = (workflow.transitions[from.id] ?? []).includes(to.id);
+                return (
+                  <td key={to.id} className="px-1 text-center">
+                    {from.id === to.id ? (
+                      <span className="text-[var(--color-line)]">·</span>
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={allowed}
+                        disabled={!canEdit}
+                        onChange={(e) => onToggle(workflow, from.id, to.id, e.target.checked)}
+                        aria-label={`Allow ${from.name} to ${to.name}`}
+                      />
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -542,7 +759,7 @@ function RenameField({ value, disabled, onCommit }: { value: string; disabled: b
 function ColorSwatch({ color, disabled, onChange }: { color: string; disabled: boolean; onChange: (color: string) => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="relative">
+    <div className="relative shrink-0">
       <button
         disabled={disabled}
         onClick={() => setOpen(!open)}
@@ -552,8 +769,10 @@ function ColorSwatch({ color, disabled, onChange }: { color: string; disabled: b
         <span className="h-3.5 w-3.5 rounded-full" style={{ background: color }} />
       </button>
       {open && (
+        // `w-max` so the swatches lay out at their own size rather than being
+        // squeezed into however wide the button beneath them happens to be.
         <div
-          className="absolute left-0 top-full z-20 mt-1 grid grid-cols-4 gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] p-1.5 shadow-lg"
+          className="absolute left-0 top-full z-20 mt-1 grid w-max grid-cols-4 gap-1.5 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] p-2 shadow-lg"
           onMouseLeave={() => setOpen(false)}
         >
           {STATUS_COLORS.map((option) => (
@@ -564,7 +783,10 @@ function ColorSwatch({ color, disabled, onChange }: { color: string; disabled: b
                 if (option !== color) onChange(option);
               }}
               aria-label={option}
-              className={cx('h-5 w-5 rounded-full', option === color && 'ring-2 ring-[var(--color-accent)] ring-offset-1')}
+              className={cx(
+                'h-5 w-5 shrink-0 rounded-full',
+                option === color && 'ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-raised)]',
+              )}
               style={{ background: option }}
             />
           ))}

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import type { Project, ProjectStatus, WorkItemSummary, WorkspaceMember } from '@paradocs/shared';
+import { allowedMoves, type Project, type ProjectStatus, type WorkItemSummary, type WorkspaceMember } from '@paradocs/shared';
 import { useCreateWorkItem, useMoveWorkItems, useUpdateWorkItem } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
+import { Popover } from '../Popover';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
 import { positionBetween } from './ProjectBoard';
@@ -39,7 +40,8 @@ export default function ProjectBacklog({
   const backlogStatuses = project.statuses.filter((s) => s.category === 'backlog');
   const boardStatuses = project.statuses.filter((s) => s.category !== 'backlog');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [target, setTarget] = useState(boardStatuses.find((s) => s.category === 'todo')?.id ?? boardStatuses[0]?.id ?? '');
+  /** Which items a destination is being picked for, and the button it hangs under. */
+  const [picking, setPicking] = useState<{ ids: string[]; anchor: HTMLElement } | null>(null);
   const [shown, setShown] = useState(PAGE);
   const move = useMoveWorkItems(project.id);
   const toast = useToast();
@@ -69,13 +71,30 @@ export default function ProjectBacklog({
     });
   }
 
-  function moveToBoard(ids: string[]) {
-    if (!target || ids.length === 0) return;
-    const statusName = boardStatuses.find((s) => s.id === target)?.name ?? 'the board';
+  /**
+   * The board statuses every one of these items may leave the backlog for: what
+   * each one's workflow allows out of the status it is sitting in, narrowed to
+   * what they have in common, since they all move together. A type with no
+   * workflow allows any of them.
+   */
+  function destinations(ids: string[]): ProjectStatus[] {
+    const picked = items.filter((item) => ids.includes(item.id));
+    if (picked.length === 0) return [];
+    return boardStatuses.filter((status) =>
+      picked.every((item) => {
+        const allowed = allowedMoves(project, item.type, item.statusId);
+        return allowed === null || allowed.includes(status.id);
+      }),
+    );
+  }
+
+  function moveToBoard(ids: string[], statusId: string) {
+    const statusName = boardStatuses.find((s) => s.id === statusId)?.name ?? 'the board';
     // In backlog order, so what was ranked first lands first.
     const order = groups.flatMap((group) => group.items.map((item) => item.id)).filter((id) => ids.includes(id));
+    if (order.length === 0) return;
     move.mutate(
-      { itemIds: order, statusId: target },
+      { itemIds: order, statusId },
       {
         onSuccess: () => {
           setSelected(new Set());
@@ -84,6 +103,26 @@ export default function ProjectBacklog({
         onError: (err) => toast(err instanceof Error ? err.message : 'Could not move them', 'error'),
       },
     );
+  }
+
+  /**
+   * Sends items to the one place their workflow allows, or asks which when it
+   * allows several. Nowhere allowed is a workflow saying this work is not ready
+   * for the board, which is worth saying out loud rather than failing quietly.
+   */
+  function startMove(ids: string[], anchor: HTMLElement) {
+    const open = destinations(ids);
+    if (open.length === 0) {
+      toast(
+        ids.length === 1
+          ? 'No workflow lets this item onto the board from where it is'
+          : 'These items have no board status in common that their workflows allow',
+        'error',
+      );
+      return;
+    }
+    if (open.length === 1) moveToBoard(ids, open[0].id);
+    else setPicking({ ids, anchor });
   }
 
   if (backlogStatuses.length === 0) {
@@ -114,30 +153,37 @@ export default function ProjectBacklog({
           </>
         )}
         {canEdit && boardStatuses.length > 0 && (
-          <>
-            <select
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              className="rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
-              aria-label="Board status to move to"
-            >
-              {boardStatuses.map((s) => (
-                <option key={s.id} value={s.id}>
-                  To {s.name}
-                </option>
-              ))}
-            </select>
-            <Button
-              variant="primary"
-              className="text-xs"
-              disabled={selected.size === 0 || move.isPending}
-              onClick={() => moveToBoard([...selected])}
-            >
-              <Icon name="kanban" /> Move to board
-            </Button>
-          </>
+          <Button
+            variant="primary"
+            className="text-xs"
+            disabled={selected.size === 0 || move.isPending}
+            onClick={(e) => startMove([...selected], e.currentTarget)}
+          >
+            <Icon name="kanban" /> Move to board
+          </Button>
         )}
       </div>
+
+      {picking && (
+        <Popover anchor={picking.anchor} placement="below" onClose={() => setPicking(null)} className="w-52 p-1">
+          <p className="px-2 py-1 text-xs text-[var(--color-muted)]">
+            {picking.ids.length === 1 ? 'Move it to' : `Move ${picking.ids.length} items to`}
+          </p>
+          {destinations(picking.ids).map((status) => (
+            <button
+              key={status.id}
+              onClick={() => {
+                const { ids } = picking;
+                setPicking(null);
+                moveToBoard(ids, status.id);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-[var(--color-surface)]"
+            >
+              <StatusPill status={status} />
+            </button>
+          ))}
+        </Popover>
+      )}
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto pb-6">
         {groups.map(({ status, items: rows }) => {
@@ -167,7 +213,7 @@ export default function ProjectBacklog({
                 })
               }
               onOpenItem={onOpenItem}
-              onMoveOne={boardStatuses.length > 0 ? (id) => moveToBoard([id]) : undefined}
+              onMoveOne={boardStatuses.length > 0 ? (id, anchor) => startMove([id], anchor) : undefined}
             />
           );
         })}
@@ -210,7 +256,7 @@ function BacklogGroup({
   onToggle: (id: string) => void;
   onToggleAll: (on: boolean) => void;
   onOpenItem: (id: string) => void;
-  onMoveOne?: (id: string) => void;
+  onMoveOne?: (id: string, anchor: HTMLElement) => void;
 }) {
   const create = useCreateWorkItem(project.id);
   const update = useUpdateWorkItem(project.id);
@@ -352,7 +398,7 @@ function BacklogGroup({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onMoveOne(item.id);
+                    onMoveOne(item.id, e.currentTarget);
                   }}
                   title="Move to the board"
                   className="hidden shrink-0 rounded px-1.5 py-0.5 text-xs text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] group-hover:inline"

@@ -61,6 +61,24 @@ export interface ProjectStatus {
   position: number;
 }
 
+/**
+ * A named set of the moves a work item may make between statuses: for each
+ * status, the ones an item sitting in it may go to next. It is what says how
+ * work leaves the backlog, since a backlog status's moves are the board
+ * statuses an item may enter at.
+ *
+ * Which workflow an item follows is decided by its type, so a bug can take a
+ * different route through the board than a story. A type no workflow is set
+ * for moves freely, which is how every project starts.
+ */
+export interface ProjectWorkflow {
+  id: string;
+  name: string;
+  position: number;
+  /** The statuses reachable from each status, keyed by the status moved from. */
+  transitions: Record<string, string[]>;
+}
+
 export interface ProjectRole {
   id: string;
   name: string;
@@ -98,6 +116,10 @@ export interface Project extends ProjectSummary {
   statuses: ProjectStatus[];
   /** In the order an item lists them. */
   roles: ProjectRole[];
+  /** What routes through the board the project offers. Empty until one is made. */
+  workflows: ProjectWorkflow[];
+  /** The workflow each item type follows, by workflow id. A type left out moves freely. */
+  typeWorkflows: Partial<Record<WorkItemType, string>>;
   /** Deleting is for owners, admins, and whoever made the project. */
   canDelete: boolean;
 }
@@ -194,6 +216,47 @@ export interface WorkItemNotification {
   workspace: NotificationWorkspace;
   by: { id: string; name: string; avatarUrl: string | null } | null;
   createdAt: string;
+}
+
+// --- workflows ---------------------------------------------------------------
+
+/** The workflow an item of this type follows here, or null when none is set. */
+export function workflowForType(
+  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  type: WorkItemType,
+): ProjectWorkflow | null {
+  const id = project.typeWorkflows[type];
+  return (id && project.workflows.find((w) => w.id === id)) || null;
+}
+
+/**
+ * The statuses an item of this type may move to from where it is, or null when
+ * nothing constrains it — no workflow for its type. Null and an empty array
+ * mean opposite things, so callers must tell them apart: nowhere to go is a
+ * dead end, no workflow is anywhere.
+ */
+export function allowedMoves(
+  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  type: WorkItemType,
+  fromStatusId: string,
+): string[] | null {
+  const workflow = workflowForType(project, type);
+  return workflow ? (workflow.transitions[fromStatusId] ?? []) : null;
+}
+
+/**
+ * Whether a workflow lets an item of this type make this move. Staying put is
+ * always allowed: reordering within a status is not a move.
+ */
+export function canMoveTo(
+  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  type: WorkItemType,
+  fromStatusId: string,
+  toStatusId: string,
+): boolean {
+  if (fromStatusId === toStatusId) return true;
+  const allowed = allowedMoves(project, type, fromStatusId);
+  return allowed === null || allowed.includes(toStatusId);
 }
 
 /** Where a work item opens in the app. */
@@ -331,6 +394,29 @@ export const updateRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40).optional(),
   multiple: z.boolean().optional(),
   position: z.number().finite().optional(),
+});
+
+/** A workflow can offer at most this many moves out of one status. */
+export const MAX_TRANSITIONS = 50;
+
+export const createWorkflowSchema = z.object({
+  name: z.string().trim().min(1, 'Name the workflow').max(40),
+});
+
+export const updateWorkflowSchema = z.object({
+  name: z.string().trim().min(1, 'Name the workflow').max(40).optional(),
+  position: z.number().finite().optional(),
+  /**
+   * Replaces the whole set of moves at once, keyed by the status moved from.
+   * A status left out allows nothing out of itself.
+   */
+  transitions: z.record(uuid, z.array(uuid).max(MAX_TRANSITIONS)).optional(),
+});
+
+/** Points one item type at a workflow, or at none with a null. */
+export const setTypeWorkflowSchema = z.object({
+  type: workItemTypeSchema,
+  workflowId: uuid.nullable(),
 });
 
 export const MAX_ROLE_HOLDERS = 20;

@@ -5,7 +5,7 @@ import { cx } from '../lib/util';
 import Avatar from './Avatar';
 import Icon from './Icon';
 import { Modal } from './Modal';
-import { FIELD } from './SettingsParts';
+import { FIELD_BASE } from './SettingsParts';
 import { useToast } from './Toast';
 import { Button, IconButton, Spinner } from './ui';
 
@@ -254,7 +254,7 @@ export function AccessDialog({
                   {mode === 'allow' ? 'Let in' : 'Kept out'}
                 </h3>
                 <select
-                  className={cx(FIELD, 'w-60 py-1 text-xs')}
+                  className={cx(FIELD_BASE, 'w-60 shrink-0 py-1 text-xs')}
                   value=""
                   onChange={(e) => add(e.target.value)}
                   aria-label="Add a team or person"
@@ -305,7 +305,7 @@ export function AccessDialog({
                           {line.kind === 'team' && <span className="text-xs text-[var(--color-muted)]"> · team</span>}
                         </span>
                         <select
-                          className={cx(FIELD, 'w-32 py-1 text-xs')}
+                          className={cx(FIELD_BASE, 'w-32 shrink-0 py-1 text-xs')}
                           value={line.permission}
                           onChange={(e) =>
                             setLines((current) =>

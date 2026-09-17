@@ -38,6 +38,7 @@ import type {
   ProjectRole,
   ProjectStatus,
   ProjectSummary,
+  ProjectWorkflow,
   StatusCategory,
   UpdateWorkItemInput,
   WorkItem,
@@ -46,6 +47,7 @@ import type {
   WorkItemSearchHit,
   WorkItemSummary,
   WorkItemTimeline,
+  WorkItemType,
 } from '@paradocs/shared';
 import { WORKSPACE_APPS } from '@paradocs/shared';
 import { formatBytes } from '../lib/util';
@@ -694,7 +696,7 @@ export function useDeleteProject(workspaceId: string) {
   });
 }
 
-/** Adding, changing and removing a project's statuses and roles. */
+/** Adding, changing and removing a project's statuses, roles and workflows. */
 export function useProjectSetup(workspaceId: string, projectId: string) {
   const qc = useQueryClient();
   const settle = () => {
@@ -728,6 +730,24 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
     }),
     deleteRole: useMutation({
       mutationFn: (id: string) => api.delete(`/project-roles/${id}`),
+      onSuccess: settle,
+    }),
+    addWorkflow: useMutation({
+      mutationFn: (input: { name: string }) => api.post<ProjectWorkflow>(`/projects/${projectId}/workflows`, input),
+      onSuccess: settle,
+    }),
+    updateWorkflow: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; position?: number; transitions?: Record<string, string[]> }) =>
+        api.patch<ProjectWorkflow>(`/project-workflows/${id}`, patch),
+      onSuccess: settle,
+    }),
+    deleteWorkflow: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-workflows/${id}`),
+      onSuccess: settle,
+    }),
+    setTypeWorkflow: useMutation({
+      mutationFn: (input: { type: WorkItemType; workflowId: string | null }) =>
+        api.put<Project>(`/projects/${projectId}/type-workflows`, input),
       onSuccess: settle,
     }),
   };

@@ -66,6 +66,17 @@ body {
   display: none;
 }
 
+/* The list a native <select> drops down is drawn by the browser, which takes
+   its colours from the element rather than from the page. A select styled
+   transparent, or left to the page's own dark background, would leave the list
+   light with our near-white text on it — unreadable. Naming both here covers
+   every select in the app, whatever its own background is. */
+option,
+optgroup {
+  background-color: var(--color-raised);
+  color: var(--color-ink);
+}
+
 /* Let BlockNote inherit the app surface instead of its own white card. */
 .bn-container,
 .bn-editor {

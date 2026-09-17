@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
   WORK_ITEM_TYPES,
+  canMoveTo,
   type MessageReferences,
   type Project,
   type ProjectRole,
@@ -228,11 +229,14 @@ function ItemDetail({
               className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
               aria-label="Status"
             >
-              {project.statuses.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
+              {/* Where it is, and wherever its workflow lets it go from there. */}
+              {project.statuses
+                .filter((s) => canMoveTo(project, item.type, item.statusId, s.id))
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
             </select>
           </Property>
           <Property label="Priority">

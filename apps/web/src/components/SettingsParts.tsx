@@ -2,9 +2,17 @@ import { useRef, type ReactNode } from 'react';
 import Icon from './Icon';
 import { Button } from './ui';
 
-export const FIELD =
-  'w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1.5 text-sm ' +
+/**
+ * How a field looks, with no width of its own, for the ones that set their own
+ * (`w-32`, `flex-1`). `w-full` in `FIELD` would win over those whatever order
+ * they are written in, since Tailwind puts it last.
+ */
+export const FIELD_BASE =
+  'rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1.5 text-sm ' +
   'outline-none focus:border-[var(--color-accent)] disabled:opacity-60';
+
+/** A field that fills its container, which is how most of them are laid out. */
+export const FIELD = `${FIELD_BASE} w-full`;
 
 export function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
