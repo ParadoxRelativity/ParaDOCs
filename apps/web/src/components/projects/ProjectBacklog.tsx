@@ -393,7 +393,12 @@ function BacklogGroup({
                   {item.estimate}
                 </span>
               )}
-              <PeopleStack userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []} members={memberMap} size="xs" />
+              <PeopleStack
+                userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []}
+                names={primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : []}
+                members={memberMap}
+                size="xs"
+              />
               {canEdit && onMoveOne && (
                 <button
                   onClick={(e) => {

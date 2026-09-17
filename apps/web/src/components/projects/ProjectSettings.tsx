@@ -627,6 +627,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   const [removing, setRemoving] = useState<ProjectRole | null>(null);
   const [newName, setNewName] = useState('');
   const [newMultiple, setNewMultiple] = useState(false);
+  const [newFreeForm, setNewFreeForm] = useState(false);
   const fail = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
   const roles = project.roles;
 
@@ -642,11 +643,12 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
     const name = newName.trim();
     if (!name) return;
     setup.addRole.mutate(
-      { name, multiple: newMultiple },
+      { name, multiple: newMultiple, freeForm: newFreeForm },
       {
         onSuccess: () => {
           setNewName('');
           setNewMultiple(false);
+          setNewFreeForm(false);
         },
         onError: fail('Could not add the role'),
       },
@@ -656,12 +658,15 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   return (
     <Section
       title="Roles"
-      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from."
+      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here."
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {roles.map((role, index) => (
           <li key={role.id} className="flex items-center gap-2 px-2 py-1.5">
-            <Icon name={role.multiple ? 'people' : 'person'} className="w-5 text-center text-[var(--color-muted)]" />
+            <Icon
+              name={role.freeForm ? 'person-vcard' : role.multiple ? 'people' : 'person'}
+              className="w-5 text-center text-[var(--color-muted)]"
+            />
             <RenameField
               value={role.name}
               disabled={!canEdit}
@@ -676,7 +681,21 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
                   setup.updateRole.mutate({ id: role.id, multiple: e.target.checked }, { onError: fail('Could not change the role') })
                 }
               />
-              Several people
+              Several
+            </label>
+            <label
+              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+              title={`Lets a name be typed into ${role.name} as well as someone picked, for a customer or anyone else without an account here. Turning it off again drops the names already typed in.`}
+            >
+              <input
+                type="checkbox"
+                checked={role.freeForm}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  setup.updateRole.mutate({ id: role.id, freeForm: e.target.checked }, { onError: fail('Could not change the role') })
+                }
+              />
+              Free-form
             </label>
             {canEdit && (
               <>
@@ -706,7 +725,14 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
             />
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
               <input type="checkbox" checked={newMultiple} onChange={(e) => setNewMultiple(e.target.checked)} />
-              Several people
+              Several
+            </label>
+            <label
+              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+              title="Lets a name be typed into the role as well as someone picked, for a customer or anyone else without an account here."
+            >
+              <input type="checkbox" checked={newFreeForm} onChange={(e) => setNewFreeForm(e.target.checked)} />
+              Free-form
             </label>
             <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
               Add

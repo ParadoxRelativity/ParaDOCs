@@ -39,6 +39,7 @@ import {
   PeopleStack,
   PriorityIcon,
   TypeIcon,
+  holderLabel,
   isOverdue,
   useMemberMap,
 } from './projectUi';
@@ -53,6 +54,9 @@ export interface ProjectNavigation {
 const FIELD =
   'w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-sm outline-none ' +
   'hover:border-[var(--color-line)] focus:border-[var(--color-accent)] disabled:hover:border-transparent';
+
+/** Tells an account apart from a name typed into a free-form role. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * One work item, open beside the board or list it was chosen from: what it is,
@@ -466,10 +470,14 @@ function RoleProperty({
   const toast = useToast();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const holders = item.roles[role.id] ?? [];
+  const names = role.freeForm ? (item.roleNames[role.id] ?? []) : [];
+  const count = holders.length + names.length;
 
-  function change(userIds: string[]) {
+  // Members and typed names are one field, so both go in every save: whichever
+  // half the picker did not touch is sent back as it stands.
+  function change(userIds: string[], nextNames: string[] = names) {
     setRole.mutate(
-      { itemId: item.id, roleId: role.id, userIds },
+      { itemId: item.id, roleId: role.id, userIds, names: role.freeForm ? nextNames : [] },
       { onError: (err) => toast(err instanceof Error ? err.message : `Could not change ${role.name}`, 'error') },
     );
   }
@@ -485,23 +493,22 @@ function RoleProperty({
             canEdit && 'hover:border-[var(--color-line)]',
           )}
         >
-          {holders.length === 0 ? (
-            <span className="text-[var(--color-muted)]">{canEdit ? 'Add someone' : 'Nobody'}</span>
-          ) : holders.length === 1 ? (
-            <>
-              <PeopleStack userIds={holders} members={memberMap} />
-              <span className="truncate">{memberMap.get(holders[0])?.name ?? 'Former member'}</span>
-            </>
+          {count === 0 ? (
+            <span className="text-[var(--color-muted)]">
+              {canEdit ? (role.freeForm ? 'Add someone, or type a name' : 'Add someone') : 'Nobody'}
+            </span>
           ) : (
             <>
-              <PeopleStack userIds={holders} members={memberMap} max={5} />
-              <span className="truncate text-xs text-[var(--color-muted)]">{holders.length} people</span>
+              <PeopleStack userIds={holders} names={names} members={memberMap} max={5} />
+              <span className={cx('truncate', count > 1 && 'text-xs text-[var(--color-muted)]')}>
+                {holderLabel(holders, names, memberMap)}
+              </span>
             </>
           )}
         </button>
         {canEdit && !holders.includes(selfId) && (
           <button
-            onClick={() => change(role.multiple ? [...holders, selfId] : [selfId])}
+            onClick={() => (role.multiple ? change([...holders, selfId]) : change([selfId], []))}
             className="shrink-0 rounded px-1.5 py-0.5 text-xs text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
           >
             {role.multiple ? 'Add me' : 'Take it'}
@@ -513,8 +520,11 @@ function RoleProperty({
           anchor={anchor}
           members={members}
           selected={holders}
+          names={names}
           multiple={role.multiple}
-          onChange={change}
+          freeForm={role.freeForm}
+          onChange={(userIds) => change(userIds)}
+          onNamesChange={(nextNames) => change(holders, nextNames)}
           onClose={() => setAnchor(null)}
         />
       )}
@@ -590,7 +600,12 @@ function Timeline({
     ...(timeline.data?.activity ?? []).map((activity): Entry => ({ kind: 'activity', at: activity.createdAt, activity })),
   ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
 
-  const name = (id: string) => memberMap.get(id)?.name ?? references?.members.find((m) => m.id === id)?.name ?? 'someone';
+  // A free-form role writes the name itself into the history, since no account
+  // holds it; anything that is not an id is already what to show.
+  const name = (id: string) =>
+    UUID.test(id)
+      ? (memberMap.get(id)?.name ?? references?.members.find((m) => m.id === id)?.name ?? 'someone')
+      : id;
 
   return (
     <>

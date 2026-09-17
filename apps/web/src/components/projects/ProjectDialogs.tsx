@@ -16,7 +16,16 @@ import { Modal } from '../Modal';
 import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
-import { DueDatePicker, ITEM_TYPE, PRIORITY, PROJECT_KIND, PeoplePicker, PeopleStack, useMemberMap } from './projectUi';
+import {
+  DueDatePicker,
+  ITEM_TYPE,
+  PRIORITY,
+  PROJECT_KIND,
+  PeoplePicker,
+  PeopleStack,
+  holderLabel,
+  useMemberMap,
+} from './projectUi';
 
 export function NewProjectDialog({
   workspaceId,
@@ -173,6 +182,8 @@ export function NewWorkItemDialog({
     const filer = project.roles.find((role) => /report|request/i.test(role.name));
     return filer ? { [filer.id]: [selfId] } : {};
   });
+  // Names typed into free-form roles, beside the members chosen for them.
+  const [roleNames, setRoleNames] = useState<Record<string, string[]>>({});
   const [picking, setPicking] = useState<{ roleId: string; anchor: HTMLElement } | null>(null);
 
   async function submit(e?: React.FormEvent) {
@@ -188,6 +199,7 @@ export function NewWorkItemDialog({
         dueDate: dueDate || null,
         estimate: parsedEstimate !== null && Number.isFinite(parsedEstimate) ? parsedEstimate : null,
         roles,
+        roleNames,
       });
       toast(`Created ${item.key}`);
       onCreated(item.id);
@@ -278,6 +290,7 @@ export function NewWorkItemDialog({
           <div className="grid grid-cols-3 gap-2">
             {project.roles.map((role) => {
               const holders = roles[role.id] ?? [];
+              const names = role.freeForm ? (roleNames[role.id] ?? []) : [];
               return (
                 <div key={role.id} className="text-xs text-[var(--color-muted)]">
                   {role.name}
@@ -286,14 +299,12 @@ export function NewWorkItemDialog({
                     onClick={(e) => setPicking({ roleId: role.id, anchor: e.currentTarget })}
                     className={cx(FIELD, 'mt-1 flex items-center gap-1.5 text-left')}
                   >
-                    {holders.length === 0 ? (
-                      <span className="text-[var(--color-muted)]">Nobody</span>
+                    {holders.length + names.length === 0 ? (
+                      <span className="text-[var(--color-muted)]">{role.freeForm ? 'Nobody yet' : 'Nobody'}</span>
                     ) : (
                       <>
-                        <PeopleStack userIds={holders} members={memberMap} />
-                        <span className="truncate text-[var(--color-ink)]">
-                          {holders.length === 1 ? (memberMap.get(holders[0])?.name ?? '') : `${holders.length} people`}
-                        </span>
+                        <PeopleStack userIds={holders} names={names} members={memberMap} />
+                        <span className="truncate text-[var(--color-ink)]">{holderLabel(holders, names, memberMap)}</span>
                       </>
                     )}
                   </button>
@@ -309,8 +320,11 @@ export function NewWorkItemDialog({
           anchor={picking.anchor}
           members={members}
           selected={roles[pickingRole.id] ?? []}
+          names={pickingRole.freeForm ? (roleNames[pickingRole.id] ?? []) : []}
           multiple={pickingRole.multiple}
+          freeForm={pickingRole.freeForm}
           onChange={(userIds) => setRoles((current) => ({ ...current, [pickingRole.id]: userIds }))}
+          onNamesChange={(names) => setRoleNames((current) => ({ ...current, [pickingRole.id]: names }))}
           onClose={() => setPicking(null)}
         />
       )}

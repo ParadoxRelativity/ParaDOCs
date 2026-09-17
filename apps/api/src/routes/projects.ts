@@ -8,6 +8,7 @@ import {
   createWorkItemSchema,
   createWorkflowSchema,
   deleteStatusSchema,
+  MAX_ROLE_HOLDERS,
   memberRef,
   moveWorkItemsSchema,
   resolveWorkItemsSchema,
@@ -75,7 +76,10 @@ type Queryable = Pick<DbClient, 'query'>;
 
 const DEFAULTS: Record<
   ProjectKind,
-  { statuses: { name: string; category: StatusCategory; color: string }[]; roles: { name: string; multiple: boolean }[] }
+  {
+    statuses: { name: string; category: StatusCategory; color: string }[];
+    roles: { name: string; multiple: boolean; freeForm?: boolean }[];
+  }
 > = {
   // New work lands in the backlog, and goes on the board once someone plans it.
   project: {
@@ -101,7 +105,9 @@ const DEFAULTS: Record<
     ],
     roles: [
       { name: 'Assignee', multiple: false },
-      { name: 'Requester', multiple: false },
+      // Whoever asked is often a customer rather than a colleague, so the name
+      // can be typed in when there is no account to point at.
+      { name: 'Requester', multiple: false, freeForm: true },
       { name: 'Watcher', multiple: true },
     ],
   },
@@ -126,8 +132,17 @@ const ITEM_COLUMNS = `
   COALESCE((
     SELECT json_object_agg(g.role_id, g.users)
       FROM (SELECT wr.role_id, json_agg(wr.user_id ORDER BY wr.created_at) AS users
-              FROM work_item_roles wr WHERE wr.work_item_id = i.id GROUP BY wr.role_id) g
+              FROM work_item_roles wr
+             WHERE wr.work_item_id = i.id AND wr.user_id IS NOT NULL
+             GROUP BY wr.role_id) g
   ), '{}'::json) AS roles,
+  COALESCE((
+    SELECT json_object_agg(g.role_id, g.names)
+      FROM (SELECT wr.role_id, json_agg(wr.name ORDER BY wr.created_at) AS names
+              FROM work_item_roles wr
+             WHERE wr.work_item_id = i.id AND wr.name IS NOT NULL
+             GROUP BY wr.role_id) g
+  ), '{}'::json) AS "roleNames",
   (SELECT count(*)::int FROM work_item_comments c WHERE c.work_item_id = i.id) AS "commentCount",
   i.created_at AS "createdAt", i.updated_at AS "updatedAt", i.completed_at AS "completedAt"`;
 
@@ -154,7 +169,7 @@ async function fetchProject(id: string, userId: string): Promise<Project> {
                                       ORDER BY st.position, st.created_at)
                         FROM project_statuses st WHERE st.project_id = p.id), '[]'::json) AS statuses,
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'name', r.name, 'multiple', r.multiple,
-                                                        'position', r.position)
+                                                        'freeForm', r.free_form, 'position', r.position)
                                       ORDER BY r.position, r.created_at)
                         FROM project_roles r WHERE r.project_id = p.id), '[]'::json) AS roles,
             COALESCE((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'position', w.position,
@@ -274,6 +289,71 @@ async function assertMembers(workspaceId: string, userIds: string[]): Promise<vo
   if (rows[0].count !== userIds.length) throw badRequest('Everyone given a role must be a member of this workspace');
 }
 
+/**
+ * What a free-form role is being given, tidied: blanks dropped, and the same
+ * name twice — however it was capitalised the second time — kept once.
+ */
+function uniqueNames(names: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names ?? []) {
+    const name = raw.trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
+/**
+ * Checks what one role is being given against how it is set up: a name only
+ * where names are allowed, and one holder where only one may hold it.
+ */
+function assertRoleFits(
+  role: { name: string; multiple: boolean; freeForm: boolean },
+  userIds: string[],
+  names: string[],
+): void {
+  if (names.length > 0 && !role.freeForm) {
+    throw badRequest(`${role.name} is for people with an account here. Make it free-form to type a name in.`);
+  }
+  if (!role.multiple && userIds.length + names.length > 1) {
+    throw badRequest(role.freeForm ? `Only one can be ${role.name}` : `Only one person can be ${role.name}`);
+  }
+}
+
+/**
+ * Gives a role its holders on a new item. Members go in first and names after,
+ * a microsecond apart each, so every list reads back in the order it was given.
+ */
+async function insertRoleHolders(
+  db: Queryable,
+  itemId: string,
+  roleId: string,
+  userIds: string[],
+  names: string[],
+): Promise<void> {
+  if (userIds.length > 0) {
+    await db.query(
+      `INSERT INTO work_item_roles (work_item_id, role_id, user_id, created_at)
+       SELECT $1, $2, u.id, now() + (u.n * interval '1 microsecond')
+         FROM unnest($3::uuid[]) WITH ORDINALITY AS u(id, n)
+       ON CONFLICT DO NOTHING`,
+      [itemId, roleId, userIds],
+    );
+  }
+  if (names.length > 0) {
+    await db.query(
+      `INSERT INTO work_item_roles (work_item_id, role_id, name, created_at)
+       SELECT $1, $2, n.name, now() + ((n.i + ${MAX_ROLE_HOLDERS}) * interval '1 microsecond')
+         FROM unnest($3::text[]) WITH ORDINALITY AS n(name, i)
+       ON CONFLICT DO NOTHING`,
+      [itemId, roleId, names],
+    );
+  }
+}
+
 async function logActivity(db: Queryable, itemId: string, actorId: string, data: WorkItemActivityData): Promise<void> {
   await db.query('INSERT INTO work_item_activity (work_item_id, actor_id, data) VALUES ($1, $2, $3)', [
     itemId,
@@ -375,10 +455,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         ],
       );
       await client.query(
-        `INSERT INTO project_roles (project_id, name, multiple, position)
-         SELECT $1, r.name, r.multiple, r.position
-           FROM unnest($2::text[], $3::boolean[]) WITH ORDINALITY AS r(name, multiple, position)`,
-        [projectId, defaults.roles.map((r) => r.name), defaults.roles.map((r) => r.multiple)],
+        `INSERT INTO project_roles (project_id, name, multiple, free_form, position)
+         SELECT $1, r.name, r.multiple, r.free_form, r.position
+           FROM unnest($2::text[], $3::boolean[], $4::boolean[])
+                WITH ORDINALITY AS r(name, multiple, free_form, position)`,
+        [
+          projectId,
+          defaults.roles.map((r) => r.name),
+          defaults.roles.map((r) => r.multiple),
+          defaults.roles.map((r) => r.freeForm ?? false),
+        ],
       );
       return projectId;
     });
@@ -529,10 +615,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const input = parse(createRoleSchema, req.body ?? {});
     await assertRoleNameFree(req.params.id, input.name);
     const { rows } = await query<ProjectRole>(
-      `INSERT INTO project_roles (project_id, name, multiple, position)
-       VALUES ($1, $2, $3, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
-       RETURNING id, name, multiple, position`,
-      [req.params.id, input.name, input.multiple],
+      `INSERT INTO project_roles (project_id, name, multiple, free_form, position)
+       VALUES ($1, $2, $3, $4, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
+       RETURNING id, name, multiple, free_form AS "freeForm", position`,
+      [req.params.id, input.name, input.multiple, input.freeForm],
     );
     projectChanged(workspaceId, req.params.id);
     reply.status(201);
@@ -548,19 +634,26 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const { rows } = await transaction(async (client) => {
       const result = await client.query<ProjectRole>(
         `UPDATE project_roles
-            SET name = COALESCE($2, name), multiple = COALESCE($3, multiple), position = COALESCE($4, position)
+            SET name = COALESCE($2, name), multiple = COALESCE($3, multiple),
+                free_form = COALESCE($5, free_form), position = COALESCE($4, position)
           WHERE id = $1
-          RETURNING id, name, multiple, position`,
-        [req.params.id, input.name ?? null, input.multiple ?? null, input.position ?? null],
+          RETURNING id, name, multiple, free_form AS "freeForm", position`,
+        [req.params.id, input.name ?? null, input.multiple ?? null, input.position ?? null, input.freeForm ?? null],
       );
-      // A role narrowed to one person keeps whoever was given it first.
+      // A role that no longer takes typed names lets go of the ones it has;
+      // there is nowhere left in the app to read or clear them from.
+      if (input.freeForm === false) {
+        await client.query('DELETE FROM work_item_roles WHERE role_id = $1 AND name IS NOT NULL', [req.params.id]);
+      }
+      // A role narrowed to one holder keeps whoever was given it first.
       if (input.multiple === false) {
         await client.query(
           `DELETE FROM work_item_roles wr
             WHERE wr.role_id = $1
               AND EXISTS (SELECT 1 FROM work_item_roles earlier
                            WHERE earlier.role_id = wr.role_id AND earlier.work_item_id = wr.work_item_id
-                             AND (earlier.created_at, earlier.user_id) < (wr.created_at, wr.user_id))`,
+                             AND (earlier.created_at, COALESCE(earlier.user_id::text, earlier.name))
+                               < (wr.created_at, COALESCE(wr.user_id::text, wr.name)))`,
           [req.params.id],
         );
       }
@@ -703,12 +796,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const status = input.statusId ? project.statuses.find((s) => s.id === input.statusId) : project.statuses[0];
     if (!status) throw badRequest('That status is not in this project');
 
-    const roles = Object.entries(input.roles ?? {}).map(([roleId, userIds]) => {
+    const roleIds = new Set([...Object.keys(input.roles ?? {}), ...Object.keys(input.roleNames ?? {})]);
+    const roles = [...roleIds].map((roleId) => {
       const role = project.roles.find((r) => r.id === roleId);
       if (!role) throw badRequest('That role is not in this project');
-      const unique = [...new Set(userIds)];
-      if (!role.multiple && unique.length > 1) throw badRequest(`Only one person can be ${role.name}`);
-      return { role, userIds: unique };
+      const userIds = [...new Set(input.roles?.[roleId] ?? [])];
+      const names = uniqueNames(input.roleNames?.[roleId]);
+      assertRoleFits(role, userIds, names);
+      return { role, userIds, names };
     });
     await assertMembers(workspaceId, [...new Set(roles.flatMap((r) => r.userIds))]);
 
@@ -739,14 +834,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         ],
       );
       const itemId = rows[0].id;
-      for (const { role, userIds } of roles) {
-        if (userIds.length === 0) continue;
-        await client.query(
-          `INSERT INTO work_item_roles (work_item_id, role_id, user_id, created_at)
-           SELECT $1, $2, u.id, now() + (u.n * interval '1 microsecond')
-             FROM unnest($3::uuid[]) WITH ORDINALITY AS u(id, n)`,
-          [itemId, role.id, userIds],
-        );
+      for (const { role, userIds, names } of roles) {
+        await insertRoleHolders(client, itemId, role.id, userIds, names);
       }
       await logActivity(client, itemId, req.user!.id, { kind: 'created' });
       return itemId;
@@ -919,39 +1008,48 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
     const input = parse(setWorkItemRoleSchema, req.body ?? {});
     if (!UUID.test(req.params.roleId)) throw notFound('Role not found');
-    const { rows: roles } = await query<{ name: string; multiple: boolean }>(
-      'SELECT name, multiple FROM project_roles WHERE id = $1 AND project_id = $2',
+    const { rows: roles } = await query<{ name: string; multiple: boolean; freeForm: boolean }>(
+      'SELECT name, multiple, free_form AS "freeForm" FROM project_roles WHERE id = $1 AND project_id = $2',
       [req.params.roleId, projectId],
     );
     const role = roles[0];
     if (!role) throw notFound('Role not found');
     const userIds = [...new Set(input.userIds)];
-    if (!role.multiple && userIds.length > 1) throw badRequest(`Only one person can be ${role.name}`);
+    const names = uniqueNames(input.names);
+    assertRoleFits(role, userIds, names);
     await assertMembers(workspaceId, userIds);
 
     const added = await transaction(async (client) => {
-      const { rows: existing } = await client.query<{ user_id: string }>(
-        'SELECT user_id FROM work_item_roles WHERE work_item_id = $1 AND role_id = $2',
+      const { rows: existing } = await client.query<{ user_id: string | null; name: string | null }>(
+        'SELECT user_id, name FROM work_item_roles WHERE work_item_id = $1 AND role_id = $2',
         [req.params.id, req.params.roleId],
       );
-      const had = new Set(existing.map((r) => r.user_id));
-      const adding = userIds.filter((id) => !had.has(id));
-      const removing = [...had].filter((id) => !userIds.includes(id));
-      if (adding.length === 0 && removing.length === 0) return [];
+      const hadUsers = existing.flatMap((r) => (r.user_id === null ? [] : [r.user_id]));
+      const hadNames = existing.flatMap((r) => (r.name === null ? [] : [r.name]));
+      const keptNames = new Set(names.map((n) => n.toLowerCase()));
+      const adding = userIds.filter((id) => !hadUsers.includes(id));
+      const removing = hadUsers.filter((id) => !userIds.includes(id));
+      const addingNames = names.filter((n) => !hadNames.some((had) => had.toLowerCase() === n.toLowerCase()));
+      const removingNames = hadNames.filter((had) => !keptNames.has(had.toLowerCase()));
+      if (adding.length + removing.length + addingNames.length + removingNames.length === 0) return [];
 
       await client.query(
-        'DELETE FROM work_item_roles WHERE work_item_id = $1 AND role_id = $2 AND NOT (user_id = ANY($3::uuid[]))',
-        [req.params.id, req.params.roleId, userIds],
+        `DELETE FROM work_item_roles
+          WHERE work_item_id = $1 AND role_id = $2
+            AND CASE WHEN user_id IS NOT NULL THEN NOT (user_id = ANY($3::uuid[]))
+                     ELSE NOT (lower(name) = ANY($4::text[])) END`,
+        [req.params.id, req.params.roleId, userIds, [...keptNames]],
       );
-      await client.query(
-        `INSERT INTO work_item_roles (work_item_id, role_id, user_id, created_at)
-         SELECT $1, $2, u.id, now() + (u.n * interval '1 microsecond')
-           FROM unnest($3::uuid[]) WITH ORDINALITY AS u(id, n)
-         ON CONFLICT DO NOTHING`,
-        [req.params.id, req.params.roleId, adding],
-      );
+      await insertRoleHolders(client, req.params.id, req.params.roleId, adding, addingNames);
       await client.query('UPDATE work_items SET updated_at = now() WHERE id = $1', [req.params.id]);
-      await logActivity(client, req.params.id, req.user!.id, { kind: 'role', role: role.name, added: adding, removed: removing });
+      // Typed names sit in the history beside the people, written as they were
+      // given: nothing else records what a customer was called at the time.
+      await logActivity(client, req.params.id, req.user!.id, {
+        kind: 'role',
+        role: role.name,
+        added: [...adding, ...addingNames],
+        removed: [...removing, ...removingNames],
+      });
       return adding;
     });
 

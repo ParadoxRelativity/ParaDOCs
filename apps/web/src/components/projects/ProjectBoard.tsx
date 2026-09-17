@@ -192,6 +192,7 @@ function Column({
       <div className="scroll-thin min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 pb-2 pt-1">
         {items.map((item, index) => {
           const holders = primaryRole ? (item.roles[primaryRole.id] ?? []) : [];
+          const holderNames = primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : [];
           const overdue = isOverdue(item.dueDate, status.category === 'done');
           return (
             <div key={item.id}>
@@ -245,7 +246,7 @@ function Column({
                       {item.estimate}
                     </span>
                   )}
-                  <PeopleStack userIds={holders} members={memberMap} max={2} size="xs" />
+                  <PeopleStack userIds={holders} names={holderNames} members={memberMap} max={2} size="xs" />
                 </div>
               </button>
             </div>

@@ -720,12 +720,21 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
       onSuccess: settle,
     }),
     addRole: useMutation({
-      mutationFn: (input: { name: string; multiple: boolean }) => api.post<ProjectRole>(`/projects/${projectId}/roles`, input),
+      mutationFn: (input: { name: string; multiple: boolean; freeForm: boolean }) =>
+        api.post<ProjectRole>(`/projects/${projectId}/roles`, input),
       onSuccess: settle,
     }),
     updateRole: useMutation({
-      mutationFn: ({ id, ...patch }: { id: string; name?: string; multiple?: boolean; position?: number }) =>
-        api.patch<ProjectRole>(`/project-roles/${id}`, patch),
+      mutationFn: ({
+        id,
+        ...patch
+      }: {
+        id: string;
+        name?: string;
+        multiple?: boolean;
+        freeForm?: boolean;
+        position?: number;
+      }) => api.patch<ProjectRole>(`/project-roles/${id}`, patch),
       onSuccess: settle,
     }),
     deleteRole: useMutation({
@@ -850,8 +859,18 @@ export function useMoveWorkItems(projectId: string) {
 export function useSetWorkItemRole(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ itemId, roleId, userIds }: { itemId: string; roleId: string; userIds: string[] }) =>
-      api.put<WorkItem>(`/work-items/${itemId}/roles/${roleId}`, { userIds }),
+    mutationFn: ({
+      itemId,
+      roleId,
+      userIds,
+      names = [],
+    }: {
+      itemId: string;
+      roleId: string;
+      userIds: string[];
+      /** Only a free-form role takes these. */
+      names?: string[];
+    }) => api.put<WorkItem>(`/work-items/${itemId}/roles/${roleId}`, { userIds, names }),
     onSuccess: (item) => settleItem(qc, projectId, item),
   });
 }

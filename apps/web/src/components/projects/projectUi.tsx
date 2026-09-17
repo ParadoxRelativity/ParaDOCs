@@ -108,72 +108,132 @@ export function useMemberMap(members: WorkspaceMember[] | undefined): Map<string
   return useMemo(() => new Map((members ?? []).map((m) => [m.userId, m])), [members]);
 }
 
-/** Overlapping avatars for the people holding a role. */
+/**
+ * Overlapping avatars for whoever holds a role: the members it was given, and
+ * then the names typed into it where it is free-form.
+ */
 export function PeopleStack({
   userIds,
+  names = [],
   members,
   max = 3,
   size = 'sm',
 }: {
   userIds: string[];
+  /** Typed into a free-form role, so there is nobody here to look up. */
+  names?: string[];
   members: Map<string, WorkspaceMember>;
   max?: number;
   size?: 'xs' | 'sm' | 'md';
 }) {
-  if (userIds.length === 0) return null;
-  const names = userIds.map((id) => members.get(id)?.name ?? 'Former member');
+  const holders = [
+    ...userIds.map((id) => {
+      const member = members.get(id);
+      return { key: id, seed: id, name: member?.name ?? 'Former member', url: member?.avatarUrl };
+    }),
+    ...names.map((name) => ({ key: `name:${name}`, seed: name, name, url: undefined })),
+  ];
+  if (holders.length === 0) return null;
   return (
-    <span className="flex items-center -space-x-1.5" title={names.join(', ')}>
-      {userIds.slice(0, max).map((id) => {
-        const member = members.get(id);
-        return (
-          <Avatar
-            key={id}
-            name={member?.name ?? '?'}
-            url={member?.avatarUrl}
-            seed={id}
-            size={size}
-            className="ring-2 ring-[var(--color-raised)]"
-          />
-        );
-      })}
-      {userIds.length > max && <span className="pl-2 text-[10px] text-[var(--color-muted)]">+{userIds.length - max}</span>}
+    <span className="flex items-center -space-x-1.5" title={holders.map((h) => h.name).join(', ')}>
+      {holders.slice(0, max).map((holder) => (
+        <Avatar
+          key={holder.key}
+          name={holder.name}
+          url={holder.url}
+          seed={holder.seed}
+          size={size}
+          className="ring-2 ring-[var(--color-raised)]"
+        />
+      ))}
+      {holders.length > max && <span className="pl-2 text-[10px] text-[var(--color-muted)]">+{holders.length - max}</span>}
     </span>
   );
 }
 
 /**
+ * How a role's holders read in a line. Several members are a count, since a
+ * long list of colleagues says little; anything typed in is spelled out, both
+ * because a customer's name is the point and because "2 people" would be wrong
+ * about a company.
+ */
+export function holderLabel(
+  userIds: string[],
+  names: string[],
+  members: Map<string, WorkspaceMember>,
+): string {
+  const all = [...userIds.map((id) => members.get(id)?.name ?? 'Former member'), ...names];
+  if (all.length === 1) return all[0];
+  return names.length > 0 ? all.join(', ') : `${all.length} people`;
+}
+
+/**
  * Chooses who holds a role. A role for one person closes on the first pick;
- * one for several stays open so people can be ticked in turn.
+ * one for several stays open so people can be ticked in turn. A free-form role
+ * also takes whatever is typed, for someone with no account to pick from.
  */
 export function PeoplePicker({
   anchor,
   members,
   selected,
+  names = [],
   multiple,
+  freeForm = false,
   onChange,
+  onNamesChange,
   onClose,
 }: {
   anchor: HTMLElement;
   members: WorkspaceMember[];
   selected: string[];
+  /** The names already typed in, for a free-form role. */
+  names?: string[];
   multiple: boolean;
+  /** Whether a name can be typed in as well as a member picked. */
+  freeForm?: boolean;
   onChange: (userIds: string[]) => void;
+  onNamesChange?: (names: string[]) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLowerCase();
+  const typed = query.trim();
+  const needle = typed.toLowerCase();
   const matches = members.filter(
     (m) => !needle || m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle),
   );
+  const nameMatches = names.filter((n) => !needle || n.toLowerCase().includes(needle));
+  // What is already on the item is offered as itself, not as something to add again.
+  const canAdd = freeForm && typed.length > 0 && !names.some((n) => n.toLowerCase() === needle);
+
+  /** Both halves of a role's holders move together, so one pick can clear the other. */
+  function set(userIds: string[], nextNames: string[]) {
+    onChange(userIds);
+    onNamesChange?.(nextNames);
+  }
 
   function toggle(userId: string) {
     if (!multiple) {
-      onChange(selected.includes(userId) ? [] : [userId]);
+      set(selected.includes(userId) ? [] : [userId], []);
       onClose();
       return;
     }
-    onChange(selected.includes(userId) ? selected.filter((id) => id !== userId) : [...selected, userId]);
+    set(selected.includes(userId) ? selected.filter((id) => id !== userId) : [...selected, userId], names);
+  }
+
+  function addName() {
+    if (!canAdd) return;
+    if (!multiple) {
+      set([], [typed]);
+      onClose();
+      return;
+    }
+    set(selected, [...names, typed]);
+    setQuery('');
+  }
+
+  function removeName(name: string) {
+    set(selected, names.filter((n) => n !== name));
+    if (!multiple) onClose();
   }
 
   return (
@@ -184,20 +244,25 @@ export function PeoplePicker({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && matches[0]) {
+            if (e.key !== 'Enter') return;
+            // Someone here comes first; a name is what you meant when nobody matched.
+            if (matches[0]) {
               e.preventDefault();
               toggle(matches[0].userId);
+            } else if (canAdd) {
+              e.preventDefault();
+              addName();
             }
           }}
-          placeholder="Find someone…"
+          placeholder={freeForm ? 'Find someone, or type a name…' : 'Find someone…'}
           className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]"
         />
       </div>
       <div className="scroll-thin max-h-64 overflow-y-auto py-1">
-        {selected.length > 0 && !multiple && (
+        {(selected.length > 0 || names.length > 0) && !multiple && (
           <button
             onClick={() => {
-              onChange([]);
+              set([], []);
               onClose();
             }}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface)]"
@@ -205,6 +270,32 @@ export function PeoplePicker({
             <Icon name="x-lg" className="w-5 text-center text-xs" /> Nobody
           </button>
         )}
+        {canAdd && (
+          <button
+            onClick={addName}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-[var(--color-surface)]"
+          >
+            <Icon name="plus-lg" className="w-5 text-center text-xs text-[var(--color-accent)]" />
+            <span className="min-w-0 flex-1 truncate">
+              Use &ldquo;{typed}&rdquo;
+              <span className="text-xs text-[var(--color-muted)]"> — no account needed</span>
+            </span>
+          </button>
+        )}
+        {nameMatches.map((name) => (
+          <button
+            key={`name:${name}`}
+            onClick={() => removeName(name)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-medium hover:bg-[var(--color-surface)]"
+          >
+            <Avatar name={name} seed={name} size="sm" />
+            <span className="min-w-0 flex-1 truncate">
+              {name}
+              <span className="text-xs font-normal text-[var(--color-muted)]"> (typed in)</span>
+            </span>
+            <Icon name="check-lg" className="text-[var(--color-accent)]" />
+          </button>
+        ))}
         {matches.map((member) => {
           const on = selected.includes(member.userId);
           return (
@@ -225,7 +316,9 @@ export function PeoplePicker({
             </button>
           );
         })}
-        {matches.length === 0 && <p className="px-3 py-2 text-xs text-[var(--color-muted)]">Nobody by that name</p>}
+        {matches.length === 0 && nameMatches.length === 0 && !canAdd && (
+          <p className="px-3 py-2 text-xs text-[var(--color-muted)]">Nobody by that name</p>
+        )}
       </div>
     </Popover>
   );

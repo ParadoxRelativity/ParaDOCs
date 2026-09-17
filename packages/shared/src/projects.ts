@@ -84,6 +84,11 @@ export interface ProjectRole {
   name: string;
   /** Whether several people can hold it on one item, as reviewers can. */
   multiple: boolean;
+  /**
+   * Whether a name can be typed into it as well as a member chosen, for
+   * whoever the item is about but has no account here — a queue's customer.
+   */
+  freeForm: boolean;
   position: number;
 }
 
@@ -142,6 +147,11 @@ export interface WorkItemSummary {
   estimate: number | null;
   /** Who holds each role, keyed by role id. Roles nobody holds are left out. */
   roles: Record<string, string[]>;
+  /**
+   * The names typed into each free-form role, keyed by role id, alongside
+   * whatever members `roles` gives it. Roles with none are left out.
+   */
+  roleNames: Record<string, string[]>;
   commentCount: number;
   createdAt: string;
   updatedAt: string;
@@ -388,11 +398,13 @@ export const deleteStatusSchema = z.object({
 export const createRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40),
   multiple: z.boolean().default(false),
+  freeForm: z.boolean().default(false),
 });
 
 export const updateRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40).optional(),
   multiple: z.boolean().optional(),
+  freeForm: z.boolean().optional(),
   position: z.number().finite().optional(),
 });
 
@@ -421,6 +433,10 @@ export const setTypeWorkflowSchema = z.object({
 
 export const MAX_ROLE_HOLDERS = 20;
 
+/** A name typed into a free-form role: a person, a company, a ticket number. */
+export const roleNameSchema = z.string().trim().min(1).max(80);
+const roleNamesSchema = z.array(roleNameSchema).max(MAX_ROLE_HOLDERS);
+
 const estimateSchema = z.number().finite().min(0).max(100_000);
 
 export const createWorkItemSchema = z.object({
@@ -434,6 +450,8 @@ export const createWorkItemSchema = z.object({
   estimate: estimateSchema.nullish(),
   /** Who holds which role from the start, keyed by role id. */
   roles: z.record(uuid, z.array(uuid).max(MAX_ROLE_HOLDERS)).optional(),
+  /** Names typed into free-form roles from the start, keyed by role id. */
+  roleNames: z.record(uuid, roleNamesSchema).optional(),
 });
 
 export const updateWorkItemSchema = z.object({
@@ -454,8 +472,11 @@ export const moveWorkItemsSchema = z.object({
   statusId: uuid,
 });
 
+/** Everyone and everything holding one role, replacing whoever held it before. */
 export const setWorkItemRoleSchema = z.object({
   userIds: z.array(uuid).max(MAX_ROLE_HOLDERS),
+  /** Only a free-form role takes these. */
+  names: roleNamesSchema.default([]),
 });
 
 export const workItemCommentSchema = z.object({

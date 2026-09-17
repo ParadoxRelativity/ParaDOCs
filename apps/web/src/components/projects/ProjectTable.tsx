@@ -152,7 +152,11 @@ export default function ProjectTable({
                   <PriorityIcon priority={item.priority} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <PeopleStack userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []} members={memberMap} />
+                  <PeopleStack
+                    userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []}
+                    names={primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : []}
+                    members={memberMap}
+                  />
                 </td>
                 <td className={cx('whitespace-nowrap px-2 py-1.5 text-xs', isOverdue(item.dueDate, done) ? 'text-red-500' : 'text-[var(--color-muted)]')}>
                   {item.dueDate ? formatDue(item.dueDate) : ''}
