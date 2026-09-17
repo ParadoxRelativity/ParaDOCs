@@ -7,7 +7,7 @@ import type {
   WorkItemType,
   WorkspaceMember,
 } from '@paradocs/shared';
-import { cx } from '../../lib/util';
+import { cx, todayISO, toISODate } from '../../lib/util';
 import Avatar from '../Avatar';
 import Icon, { type IconName } from '../Icon';
 import { Popover } from '../Popover';
@@ -228,5 +228,124 @@ export function PeoplePicker({
         {matches.length === 0 && <p className="px-3 py-2 text-xs text-[var(--color-muted)]">Nobody by that name</p>}
       </div>
     </Popover>
+  );
+}
+
+/**
+ * A due date, chosen from a month calendar that opens under the field. It
+ * shows the date as the rest of Projects writes it, and can be cleared.
+ */
+export function DueDatePicker({
+  value,
+  onChange,
+  disabled,
+  overdue,
+  placeholder = 'mm/dd/yyyy',
+  className,
+}: {
+  /** YYYY-MM-DD, or null for none. */
+  value: string | null;
+  onChange: (value: string | null) => void;
+  disabled?: boolean;
+  overdue?: boolean;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}
+        aria-label="Due date"
+        className={cx(
+          'flex items-center gap-1.5 text-left disabled:cursor-default',
+          className,
+          overdue && 'text-red-500',
+        )}
+      >
+        <Icon name="calendar-event" className={cx('text-xs', !overdue && 'text-[var(--color-muted)]')} />
+        {value ? (
+          <span className="truncate">{formatDue(value)}</span>
+        ) : (
+          <span className="truncate text-[var(--color-muted)]">{placeholder}</span>
+        )}
+      </button>
+      {anchor && (
+        <Popover anchor={anchor} placement="below" onClose={() => setAnchor(null)} className="w-64 p-2">
+          <MonthCalendar
+            value={value}
+            onPick={(date) => {
+              onChange(date);
+              setAnchor(null);
+            }}
+          />
+        </Popover>
+      )}
+    </>
+  );
+}
+
+function MonthCalendar({ value, onPick }: { value: string | null; onPick: (date: string | null) => void }) {
+  const today = todayISO();
+  const [cursor, setCursor] = useState(() => {
+    const shown = new Date(`${value ?? today}T00:00:00`);
+    return new Date(shown.getFullYear(), shown.getMonth(), 1);
+  });
+  // Six weeks from the Sunday on or before the first, so the grid never jumps in height.
+  const start = new Date(cursor.getFullYear(), cursor.getMonth(), 1 - cursor.getDay());
+  const days = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+  const step = (months: number) => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + months, 1));
+  const nav = 'grid h-7 w-7 place-items-center rounded-md text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-ink)]';
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <button type="button" aria-label="Previous month" onClick={() => step(-1)} className={nav}>
+          <Icon name="chevron-left" />
+        </button>
+        <span className="text-sm font-medium">{cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span>
+        <button type="button" aria-label="Next month" onClick={() => step(1)} className={nav}>
+          <Icon name="chevron-right" />
+        </button>
+      </div>
+      <div className="mb-1 grid grid-cols-7 text-center text-[10px] font-medium text-[var(--color-muted)]">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          <span key={i}>{d}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">
+        {days.map((date) => {
+          const iso = toISODate(date);
+          const inMonth = date.getMonth() === cursor.getMonth();
+          return (
+            <button
+              key={iso}
+              type="button"
+              onClick={() => onPick(iso)}
+              className={cx(
+                'aspect-square rounded text-xs',
+                !inMonth && 'text-[var(--color-muted)] opacity-50',
+                iso === value ? 'bg-[var(--color-accent)] font-semibold text-white' : 'hover:bg-[var(--color-surface)]',
+                iso === today && iso !== value && 'font-semibold text-[var(--color-accent)]',
+              )}
+            >
+              {date.getDate()}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex justify-between border-t border-[var(--color-line)] pt-2 text-xs">
+        <button type="button" onClick={() => onPick(today)} className="rounded px-2 py-1 text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]">
+          Today
+        </button>
+        {value && (
+          <button type="button" onClick={() => onPick(null)} className="rounded px-2 py-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)]">
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

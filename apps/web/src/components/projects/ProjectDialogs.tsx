@@ -16,7 +16,7 @@ import { Modal } from '../Modal';
 import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
-import { ITEM_TYPE, PRIORITY, PROJECT_KIND, PeoplePicker, PeopleStack, useMemberMap } from './projectUi';
+import { DueDatePicker, ITEM_TYPE, PRIORITY, PROJECT_KIND, PeoplePicker, PeopleStack, useMemberMap } from './projectUi';
 
 export function NewProjectDialog({
   workspaceId,
@@ -253,10 +253,14 @@ export function NewWorkItemDialog({
               ))}
             </select>
           </label>
-          <label className="text-xs text-[var(--color-muted)]">
-            Due
-            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={cx(FIELD, 'mt-1')} />
-          </label>
+          <div className="text-xs text-[var(--color-muted)]" title="When the work is expected to be finished and delivered">
+            Due date
+            <DueDatePicker
+              value={dueDate || null}
+              onChange={(date) => setDueDate(date ?? '')}
+              className={cx(FIELD, 'mt-1 text-[var(--color-ink)]')}
+            />
+          </div>
           <label className="text-xs text-[var(--color-muted)]">
             Estimate
             <input

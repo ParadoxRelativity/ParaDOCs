@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { cx } from '../lib/util';
 import { Button } from './ui';
 
@@ -14,8 +14,6 @@ interface ModalProps {
 
 /** In-app dialog used wherever a window.confirm or window.prompt used to be. */
 export function Modal({ title, description, children, footer, onClose, wide }: ModalProps) {
-  const panel = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -31,13 +29,14 @@ export function Modal({ title, description, children, footer, onClose, wide }: M
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onMouseDown={(e) => {
-        // Only a click that starts on the backdrop closes, so a drag out of a
-        // text field does not dismiss the dialog.
-        if (!panel.current?.contains(e.target as Node)) onClose();
+        // Only a click that starts on the backdrop itself closes, so a drag out
+        // of a text field does not dismiss the dialog, and neither does a press
+        // in a popover the dialog opened: those are portalled elsewhere in the
+        // page but still bubble here through React.
+        if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={title}

@@ -57,7 +57,10 @@ export function Popover({
       close.current();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close.current();
+      if (event.key !== 'Escape') return;
+      // Escape closes only the popover, not a dialog it was opened from.
+      event.stopPropagation();
+      close.current();
     };
     document.addEventListener('mousedown', onPointer);
     document.addEventListener('keydown', onKey);

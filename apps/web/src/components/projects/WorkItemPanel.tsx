@@ -31,6 +31,7 @@ import { useToast } from '../Toast';
 import { EmptyState, IconButton, Spinner } from '../ui';
 import ReferenceEditor from './ReferenceEditor';
 import {
+  DueDatePicker,
   ITEM_TYPE,
   PRIORITY,
   PeoplePicker,
@@ -279,14 +280,14 @@ function ItemDetail({
               canEdit={canEdit}
             />
           ))}
-          <Property label="Due">
-            <input
-              type="date"
-              value={item.dueDate ?? ''}
+          <Property label="Due date">
+            <DueDatePicker
+              value={item.dueDate}
               disabled={!canEdit}
-              onChange={(e) => patch({ dueDate: e.target.value || null })}
-              className={cx(FIELD, isOverdue(item.dueDate, done) && 'text-red-500')}
-              aria-label="Due date"
+              overdue={isOverdue(item.dueDate, done)}
+              placeholder={canEdit ? 'mm/dd/yyyy' : 'None'}
+              onChange={(dueDate) => patch({ dueDate })}
+              className={FIELD}
             />
           </Property>
           <Property label="Estimate">
