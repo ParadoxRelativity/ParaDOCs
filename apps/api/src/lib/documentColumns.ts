@@ -1,4 +1,4 @@
-import { documentLevelSql, permissionSql } from './access.js';
+import { documentLevelSql, permissionSql, spreadsheetLevelSql } from './access.js';
 
 /**
  * The column list every document read shares, so the wire shape stays
@@ -23,4 +23,15 @@ export function documentSummaryColumns(user: string, role: string): string {
        FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
       WHERE dt.document_id = d.id),
     '[]'::json) AS tags`;
+}
+
+/**
+ * The same for a spreadsheet, whose table must be aliased `s`. Shared by the
+ * spreadsheet routes and the Sheets tree.
+ */
+export function spreadsheetSummaryColumns(user: string, role: string): string {
+  return `
+  s.id, s.workspace_id AS "workspaceId", s.folder_id AS "folderId", s.title, s.icon,
+  s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.archived_at AS "archivedAt",
+  s.access, ${permissionSql(spreadsheetLevelSql(user, role))} AS permission`;
 }

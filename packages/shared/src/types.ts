@@ -1,6 +1,8 @@
 /** Shared domain types. The API returns these shapes verbatim. */
 
 import type { DocumentMode } from './canvas.js';
+import type { WorkItemNotification } from './projects.js';
+import type { SpreadsheetSummary } from './sheet.js';
 import type { ReleaseInfo } from './version.js';
 
 export interface User {
@@ -58,6 +60,16 @@ export interface AccessSettings {
   inheritedFrom: { id: string; name: string; access: AccessMode } | null;
 }
 
+/**
+ * The apps a workspace can turn on and off. Access is not among them: it is
+ * where membership is managed, so every workspace has it.
+ */
+export const WORKSPACE_APPS = ['docs', 'sheets', 'chat', 'projects'] as const;
+export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
+
+/** Which app a folder belongs to. Each app that files things has a tree of its own. */
+export type FolderApp = Extract<WorkspaceApp, 'docs' | 'sheets'>;
+
 export interface Workspace {
   id: string;
   name: string;
@@ -65,6 +77,8 @@ export interface Workspace {
   icon: string | null;
   /** Served path of the workspace picture, which takes the place of the icon. */
   avatarUrl: string | null;
+  /** The apps turned on, in WORKSPACE_APPS order. Never empty. */
+  apps: WorkspaceApp[];
   createdAt: string;
 }
 
@@ -106,6 +120,8 @@ export interface InvitePreview {
 export interface Folder {
   id: string;
   workspaceId: string;
+  /** Which tree it is in: documents, or spreadsheets. */
+  app: FolderApp;
   parentId: string | null;
   name: string;
   /** Optional. Folders without one render no icon at all. */
@@ -125,6 +141,12 @@ export interface FolderNode extends Folder {
   permission: Permission;
   children: FolderNode[];
   documents: DocumentSummary[];
+}
+
+/** A folder in the spreadsheets tree, with the spreadsheets filed in it. */
+export interface SheetFolderNode extends Omit<FolderNode, 'children' | 'documents'> {
+  children: SheetFolderNode[];
+  spreadsheets: SpreadsheetSummary[];
 }
 
 export interface Tag {
@@ -195,6 +217,20 @@ export interface SheetSearchHit {
   updatedAt: string;
   /** Highlighted snippet from the cells, with <mark> around matches. */
   snippet: string;
+  rank: number;
+}
+
+/** A work item that matched a search. */
+export interface WorkItemSearchHit {
+  id: string;
+  projectId: string;
+  key: string;
+  title: string;
+  projectName: string;
+  statusName: string;
+  statusCategory: 'backlog' | 'todo' | 'active' | 'done';
+  statusColor: string;
+  updatedAt: string;
   rank: number;
 }
 
@@ -299,6 +335,8 @@ export interface Notifications {
   invites: InviteNotification[];
   messages: MessageNotification[];
   mentions: MentionNotification[];
+  /** Work items you were given a role on or named in. Absent from older servers. */
+  workItems?: WorkItemNotification[];
   /** Null when there is none, or for anyone but a server administrator. Absent from older servers. */
   serverUpdate?: ServerUpdateNotification | null;
 }

@@ -7,12 +7,14 @@ import type {
   MessageNotification,
   Notifications,
   ServerUpdateNotification,
+  WorkItemNotification,
 } from '@paradocs/shared';
 import {
   useAcceptInvite,
   useDeclineInvite,
   useMarkMentionsRead,
   useMarkNotificationsRead,
+  useMarkWorkItemsRead,
   useNotifications,
   useServerVersion,
 } from '../api/hooks';
@@ -49,6 +51,8 @@ interface Actions {
   openChannel: (message: MessageNotification, newTab: boolean) => void;
   /** Opens the document or canvas someone tagged you in, and clears the tag. */
   openMention: (mention: MentionNotification, newTab: boolean) => void;
+  /** Opens a work item you were given a role on or named in. */
+  openWorkItem: (item: WorkItemNotification, newTab: boolean) => void;
   accept: (invite: InviteNotification) => Promise<void>;
   decline: (invite: InviteNotification) => Promise<void>;
   markAllRead: () => Promise<void>;
@@ -70,6 +74,7 @@ function countOf(notifications: Notifications): number {
     notifications.invites.length +
     notifications.messages.length +
     (notifications.mentions?.length ?? 0) +
+    (notifications.workItems?.length ?? 0) +
     (notifications.serverUpdate ? 1 : 0)
   );
 }
@@ -159,6 +164,7 @@ export default function NotificationsMenu() {
   const declineInvite = useDeclineInvite();
   const markRead = useMarkNotificationsRead();
   const markMentionsRead = useMarkMentionsRead();
+  const markWorkItemsRead = useMarkWorkItemsRead();
   const dismissed = useDismissedUpdates();
   const update = useClientUpdate();
   const clientUpdate = update && !dismissed.isDismissed(update.key) ? update : null;
@@ -219,6 +225,13 @@ export default function NotificationsMenu() {
           // Going to look at it is what answers the tag.
           markMentionsRead.mutate([mention.documentId]);
         },
+        openWorkItem: (item, newTab) => {
+          close();
+          const path = `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`;
+          if (newTab) openTab(path, item.key);
+          else navigate(path);
+          markWorkItemsRead.mutate([item.workItemId]);
+        },
         accept: async (invite) => {
           try {
             const result = await acceptInvite.mutateAsync(invite.token);
@@ -238,7 +251,11 @@ export default function NotificationsMenu() {
         },
         markAllRead: async () => {
           try {
-            await Promise.all([markRead.mutateAsync(undefined), markMentionsRead.mutateAsync(undefined)]);
+            await Promise.all([
+              markRead.mutateAsync(undefined),
+              markMentionsRead.mutateAsync(undefined),
+              markWorkItemsRead.mutateAsync(undefined),
+            ]);
           } catch (err) {
             report(err, 'Could not mark everything as read');
           }
@@ -274,6 +291,13 @@ export default function NotificationsMenu() {
           void settle(bridge.notifications.markMentionsRead(connection.id, [mention.documentId]));
           void settle(bridge.connections.open(connection.id, `/w/${mention.workspace.id}/d/${mention.documentId}`));
         },
+        // Opening it there is what marks it read, as it is here.
+        openWorkItem: (item) => {
+          close();
+          void settle(
+            bridge.connections.open(connection.id, `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`),
+          );
+        },
         // Joining happens on that server's own invitation page, which the
         // window switches to.
         accept: async (invite) => {
@@ -299,6 +323,7 @@ export default function NotificationsMenu() {
     (group) =>
       group.notifications.invites.length > 0 ||
       (group.notifications.mentions?.length ?? 0) > 0 ||
+      (group.notifications.workItems?.length ?? 0) > 0 ||
       group.notifications.messages.some((m) => m.mentions > 0 || m.direct),
   );
 
@@ -359,9 +384,10 @@ export default function NotificationsMenu() {
 function NotificationGroup({ group, labelled }: { group: Group; labelled: boolean }) {
   const { invites, messages } = group.notifications;
   const mentions = group.notifications.mentions ?? [];
+  const workItems = group.notifications.workItems ?? [];
   const serverUpdate = group.notifications.serverUpdate ?? null;
   if (countOf(group.notifications) === 0) return null;
-  const unread = messages.length > 0 || mentions.length > 0;
+  const unread = messages.length > 0 || mentions.length > 0 || workItems.length > 0;
   const heading = labelled && group.connection ? group.connection.label : unread ? 'Unread' : null;
 
   return (
@@ -391,6 +417,13 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
           key={mention.documentId}
           mention={mention}
           onOpen={(newTab) => group.actions.openMention(mention, newTab)}
+        />
+      ))}
+      {workItems.map((item) => (
+        <WorkItemRow
+          key={item.workItemId}
+          item={item}
+          onOpen={(newTab) => group.actions.openWorkItem(item, newTab)}
         />
       ))}
       {messages.map((message) => (
@@ -517,6 +550,39 @@ function MentionRow({ mention, onOpen }: { mention: MentionNotification; onOpen:
         <p className="mt-1">
           <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
             Mentioned you
+          </span>
+        </p>
+      </div>
+    </button>
+  );
+}
+
+/** A work item handed to you, or naming you. */
+function WorkItemRow({ item, onOpen }: { item: WorkItemNotification; onOpen: (newTab: boolean) => void }) {
+  return (
+    <button onClick={(event) => onOpen(wantsNewTab(event))} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]">
+      <Avatar name={item.by?.name ?? '?'} url={item.by?.avatarUrl} seed={item.by?.id} size="lg" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
+          <span className="truncate font-medium text-[var(--color-ink)]">
+            <Icon name="kanban" /> {item.key}
+          </span>
+          <span className="truncate">{item.workspace.name}</span>
+          <span className="ml-auto shrink-0">{formatRelative(item.createdAt)}</span>
+        </div>
+        <p className="mt-0.5 line-clamp-2 text-sm">
+          <span className="font-medium">{item.by?.name ?? 'Someone'}</span>{' '}
+          {item.reason === 'role' ? `made you ${item.role ?? 'part of'}` : 'mentioned you in'}{' '}
+          <span className="font-medium">{item.title}</span>
+        </p>
+        <p className="mt-1">
+          <span
+            className={cx(
+              'rounded-full px-1.5 text-[11px] font-semibold text-white',
+              item.reason === 'role' ? 'bg-[var(--color-accent)]' : 'bg-amber-500',
+            )}
+          >
+            {item.reason === 'role' ? (item.role ?? 'Assigned') : 'Mentioned you'}
           </span>
         </p>
       </div>

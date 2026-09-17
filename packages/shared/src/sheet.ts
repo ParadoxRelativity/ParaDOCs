@@ -19,6 +19,8 @@
  * goes stale the moment someone else edits a cell it depended on.
  */
 
+import type { AccessMode, Permission } from './types.js';
+
 /**
  * The collaboration server serves documents and spreadsheets over one socket,
  * and tells them apart by this prefix on the name. Neither app has to know the
@@ -39,11 +41,17 @@ export function sheetIdFromCollabName(name: string): string | null {
 export interface SpreadsheetSummary {
   id: string;
   workspaceId: string;
+  /** The spreadsheets folder it is filed in, or null for none. */
+  folderId: string | null;
   title: string;
   icon: string | null;
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  /** Its own setting; see AccessMode. */
+  access: AccessMode;
+  /** What the signed-in person may do with it: `view` or `edit`. */
+  permission: Permission;
 }
 
 export const SHEET_CELLS = 'sheet-cells';

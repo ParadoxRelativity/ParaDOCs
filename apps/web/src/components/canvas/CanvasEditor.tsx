@@ -25,7 +25,7 @@ import { boundsOf, useCanvasElements } from '../../lib/canvasStore';
 import { peerPointer, usePublishPointer } from '../../lib/canvasPresence';
 import { cx, useAutosave } from '../../lib/util';
 import { claimNewDocument } from '../../lib/newDocuments';
-import { useAllDocuments, useCreateDocument, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
+import { useAllDocuments, useAppEnabled, useCreateDocument, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
 import { useToast } from '../Toast';
 import CanvasSurface, { type Viewport } from './CanvasSurface';
 import PresentMode from './PresentMode';
@@ -35,6 +35,7 @@ import { Button, Tooltip } from '../ui';
 import Avatar from '../Avatar';
 import Icon, { type IconName } from '../Icon';
 import SheetRefPicker from '../sheet/SheetRefPicker';
+import { WorkItemPicker } from '../projects/WorkItemRefs';
 import { withCachedSheetValues } from '../../lib/sheetRefs';
 
 interface Props {
@@ -109,6 +110,9 @@ export default function CanvasEditor({
   const [editRequestId, setEditRequestId] = useState<string | null>(null);
   const [inserting, setInserting] = useState<Inserting>(null);
   const [sheetInserting, setSheetInserting] = useState<'cell' | 'chart' | null>(null);
+  const sheetsOn = useAppEnabled(workspaceId, 'sheets');
+  const projectsOn = useAppEnabled(workspaceId, 'projects');
+  const [itemInserting, setItemInserting] = useState(false);
 
   /**
    * Copying with elements selected, and no text selected, copies what they say
@@ -440,20 +444,35 @@ export default function CanvasEditor({
             <ToolButton label="Video — by URL or upload" active={placing?.tool === 'video'} onClick={() => openInsert('video')}>
               <Icon name="film" />
             </ToolButton>
-            <ToolButton
-              label="Spreadsheet cell — shows its current value"
-              active={placing?.tool === 'sheetCell'}
-              onClick={() => (placing?.tool === 'sheetCell' ? setPlacing(null) : (setPlacing(null), setSheetInserting('cell')))}
-            >
-              <Icon name="table" />
-            </ToolButton>
-            <ToolButton
-              label="Spreadsheet chart — drawn from the spreadsheet's current data"
-              active={placing?.tool === 'sheetChart'}
-              onClick={() => (placing?.tool === 'sheetChart' ? setPlacing(null) : (setPlacing(null), setSheetInserting('chart')))}
-            >
-              <Icon name="bar-chart" />
-            </ToolButton>
+            {/* Nothing to point at in a workspace with Sheets off. */}
+            {sheetsOn && (
+              <>
+                <ToolButton
+                  label="Spreadsheet cell — shows its current value"
+                  active={placing?.tool === 'sheetCell'}
+                  onClick={() => (placing?.tool === 'sheetCell' ? setPlacing(null) : (setPlacing(null), setSheetInserting('cell')))}
+                >
+                  <Icon name="table" />
+                </ToolButton>
+                <ToolButton
+                  label="Spreadsheet chart — drawn from the spreadsheet's current data"
+                  active={placing?.tool === 'sheetChart'}
+                  onClick={() => (placing?.tool === 'sheetChart' ? setPlacing(null) : (setPlacing(null), setSheetInserting('chart')))}
+                >
+                  <Icon name="bar-chart" />
+                </ToolButton>
+              </>
+            )}
+            {/* Nothing to point at in a workspace with Projects off. */}
+            {projectsOn && (
+              <ToolButton
+                label="Work item — shows its status as it changes"
+                active={placing?.tool === 'workItem'}
+                onClick={() => (placing?.tool === 'workItem' ? setPlacing(null) : (setPlacing(null), setItemInserting(true)))}
+              >
+                <Icon name="kanban" />
+              </ToolButton>
+            )}
             <ToolButton
               label="Mind map — click the board to place a root node you can branch from"
               active={placing?.tool === 'node'}
@@ -752,6 +771,24 @@ export default function CanvasEditor({
               type: elementTypeFor(file) ?? type,
               label: INSERT_LABELS[type],
               place: (point) => void handleFiles([file], point),
+            });
+          }}
+        />
+      )}
+
+      {itemInserting && (
+        <WorkItemPicker
+          workspaceId={workspaceId}
+          confirmLabel="Add to canvas"
+          onCancel={() => setItemInserting(false)}
+          onPick={(item) => {
+            setItemInserting(false);
+            const extra = { itemId: item.id, label: `${item.key} ${item.title}` } as Partial<CanvasElement>;
+            startPlacing({
+              tool: 'workItem',
+              type: 'workItem',
+              label: 'work item',
+              place: (point) => addElement('workItem', point, extra),
             });
           }}
         />

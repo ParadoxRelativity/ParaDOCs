@@ -12,8 +12,11 @@ import {
   DEFAULT_SHEET_NAME,
   MAIN_SHEET_ID,
   SHEET_INFO,
+  blockWorkItems,
   canvasSearchText,
+  canvasWorkItems,
   normalizeBlocks,
+  sheetCollabName,
   sheetIdFromCollabName,
   sheetMapName,
   workbookSearchText,
@@ -23,6 +26,7 @@ import { query } from '../db/pool.js';
 import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions } from '../lib/documentMentions.js';
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
 import { setLiveDocumentLookup } from '../lib/liveDocuments.js';
+import { syncWorkItemMentions } from '../lib/workItems.js';
 import { documentSchema } from './documentSchema.js';
 import { SESSION_COOKIE, documentAccessForUser, resolveSession, type SessionUser } from '../plugins/session.js';
 import { UUID } from '../lib/access.js';
@@ -179,9 +183,10 @@ export function createCollabServer(log: FastifyBaseLogger) {
         return;
       }
 
-      const { rows } = await query<{ mode: string }>('SELECT mode FROM documents WHERE id = $1', [
-        documentName,
-      ]);
+      const { rows } = await query<{ mode: string; workspace_id: string }>(
+        'SELECT mode, workspace_id FROM documents WHERE id = $1',
+        [documentName],
+      );
       const mode = rows[0]?.mode ?? 'page';
 
       // Derive the searchable representations. If conversion fails we still keep
@@ -190,8 +195,10 @@ export function createCollabServer(log: FastifyBaseLogger) {
       let markdown: string | null = null;
 
       // Who has been tagged by name, gathered here and recorded after the
-      // document itself is saved.
+      // document itself is saved. Likewise the work items it points at, whose
+      // own pages list where they are mentioned.
       let mentioned: string[] = [];
+      let workItems: string[] | null = null;
 
       if (mode === 'canvas') {
         // A canvas has no blocks. Its text digest is what search indexes.
@@ -199,6 +206,7 @@ export function createCollabServer(log: FastifyBaseLogger) {
           .map((value) => (value instanceof Y.Map ? (value.toJSON() as CanvasElement) : null))
           .filter((el): el is CanvasElement => Boolean(el && el.type));
         mentioned = mentionsInCanvas(elements);
+        workItems = canvasWorkItems(elements);
         // A board stores a tag as an id, so the names have to be looked up
         // before its text can be indexed as something people would search for.
         markdown = canvasSearchText(elements, await namesFor(mentioned));
@@ -214,6 +222,7 @@ export function createCollabServer(log: FastifyBaseLogger) {
           body = serverEditor.yDocToBlocks(snapshot, COLLAB_FRAGMENT);
           markdown = await serverEditor.blocksToMarkdownLossy(body as never);
           mentioned = mentionsInBlocks(body);
+          workItems = blockWorkItems(body);
           snapshot.destroy();
         } catch (err) {
           log.error({ err, documentName }, 'could not derive blocks from collaborative document');
@@ -240,6 +249,15 @@ export function createCollabServer(log: FastifyBaseLogger) {
           log.warn({ err, documentName }, 'could not record document mentions');
         }
       }
+      // Null when the body could not be read, which is no reason to forget
+      // what it was last known to mention.
+      if (workItems && rows[0]) {
+        try {
+          await syncWorkItemMentions({ kind: 'document', id: documentName }, rows[0].workspace_id, workItems);
+        } catch (err) {
+          log.warn({ err, documentName }, 'could not record work item mentions');
+        }
+      }
     },
   });
 
@@ -252,15 +270,20 @@ export function createCollabServer(log: FastifyBaseLogger) {
   // their connections. Every client reconnects straight away, and reconnecting
   // goes through onConnect again: someone locked out is refused, and someone
   // cut down to viewing comes back read-only.
+  // Spreadsheets are locked the same way, so theirs drop too.
   const stopAccess = onAccessChanged((workspaceId) => {
-    const open = [...hocuspocus.documents.keys()].filter((name) => UUID.test(name));
-    if (open.length === 0) return;
-    query<{ id: string }>('SELECT id FROM documents WHERE workspace_id = $1 AND id = ANY($2::uuid[])', [
-      workspaceId,
-      open,
-    ])
+    const names = [...hocuspocus.documents.keys()];
+    const documents = names.filter((name) => UUID.test(name));
+    const sheets = names.map((name) => sheetIdFromCollabName(name)).filter((id): id is string => Boolean(id && UUID.test(id)));
+    if (documents.length === 0 && sheets.length === 0) return;
+    query<{ name: string }>(
+      `SELECT id::text AS name FROM documents WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+       UNION ALL
+       SELECT $4 || id::text FROM spreadsheets WHERE workspace_id = $1 AND id = ANY($3::uuid[])`,
+      [workspaceId, documents, sheets, sheetCollabName('')],
+    )
       .then(({ rows }) => {
-        for (const row of rows) hocuspocus.closeConnections(row.id);
+        for (const row of rows) hocuspocus.closeConnections(row.name);
       })
       .catch((err) => log.warn({ err, workspaceId }, 'could not recheck access to open documents'));
   });

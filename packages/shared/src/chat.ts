@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { PresenceStatus } from './presence.js';
+import type { StatusCategory } from './projects.js';
 import type { AccessMode, Permission } from './types.js';
 
 /**
@@ -244,12 +245,29 @@ export interface MemberReference {
   email: string;
 }
 
+/**
+ * A work item as a link to it shows it: its key and title, and where it has
+ * got to, so a mention in chat says whether the thing is done without a click.
+ */
+export interface WorkItemReference {
+  id: string;
+  projectId: string;
+  /** The project's key and the item's number: `ENG-12`. */
+  key: string;
+  title: string;
+  statusName: string;
+  statusCategory: StatusCategory;
+  statusColor: string;
+}
+
 /** What a page of messages points at, resolved once. */
 export interface MessageReferences {
   documents: DocumentReference[];
   spreadsheets: SpreadsheetReference[];
   channels: ChannelReference[];
   members: MemberReference[];
+  /** Absent from servers that predate Projects. */
+  workItems?: WorkItemReference[];
 }
 
 /**
@@ -300,6 +318,12 @@ export type WorkspaceEvent =
   | { type: 'members.changed'; workspaceId: string }
   /** Who can see what has changed: a lock, a team, or someone's role. Refetch what is shown. */
   | { type: 'access.changed'; workspaceId: string }
+  /**
+   * Something in a project changed: the project itself, or one of its items
+   * when `itemId` is given. Carries ids only, so it is safe to send to everyone
+   * in the workspace; whoever cares asks for what they are allowed to see.
+   */
+  | { type: 'projects.changed'; workspaceId: string; projectId: string; itemId?: string }
   /** Everyone now in a voice channel; an empty list means it has emptied. */
   | { type: 'voice.changed'; workspaceId: string; channelId: string; occupants: VoiceOccupant[] };
 
@@ -383,8 +407,9 @@ export const RING_TIMEOUT_MS = 45_000;
 // --- references -------------------------------------------------------------
 
 /**
- * Documents, spreadsheets, channels and people are referenced by id inside a
- * message, not by name: `<doc:uuid>`, `<sheet:uuid>`, `<#uuid>` and `<@uuid>`.
+ * Documents, spreadsheets, work items, channels and people are referenced by
+ * id inside a message, not by name: `<doc:uuid>`, `<sheet:uuid>`,
+ * `<item:uuid>`, `<#uuid>` and `<@uuid>`.
  * `<!here>` addresses everyone who can read the channel it is posted in.
  * Rendering resolves them, so someone changing their display name updates every
  * message that mentions them instead of leaving a stale name scattered through
@@ -396,12 +421,13 @@ export const RING_TIMEOUT_MS = 45_000;
  * token covering both would have to carry which it meant anyway.
  */
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here))>`, 'g');
+const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here)|item:(${UUID}))>`, 'g');
 
 export type MessageSegment =
   | { type: 'text'; value: string }
   | { type: 'document'; id: string }
   | { type: 'spreadsheet'; id: string }
+  | { type: 'workItem'; id: string }
   | { type: 'channel'; id: string }
   | { type: 'member'; id: string }
   | { type: 'here' };
@@ -415,6 +441,10 @@ export function documentRef(id: string): string {
 
 export function spreadsheetRef(id: string): string {
   return `<sheet:${id}>`;
+}
+
+export function workItemRef(id: string): string {
+  return `<item:${id}>`;
 }
 
 export function channelRef(id: string): string {
@@ -439,6 +469,7 @@ export function parseMessage(body: string): MessageSegment[] {
     else if (match[3]) segments.push({ type: 'channel', id: match[3].toLowerCase() });
     else if (match[4]) segments.push({ type: 'member', id: match[4].toLowerCase() });
     else if (match[5]) segments.push({ type: 'here' });
+    else if (match[6]) segments.push({ type: 'workItem', id: match[6].toLowerCase() });
     index = match.index + match[0].length;
   }
   if (index < body.length) segments.push({ type: 'text', value: body.slice(index) });
@@ -449,17 +480,20 @@ export function parseMessage(body: string): MessageSegment[] {
 export function collectReferences(bodies: string[]): {
   documentIds: string[];
   spreadsheetIds: string[];
+  workItemIds: string[];
   channelIds: string[];
   userIds: string[];
 } {
   const documentIds = new Set<string>();
   const spreadsheetIds = new Set<string>();
+  const workItemIds = new Set<string>();
   const channelIds = new Set<string>();
   const userIds = new Set<string>();
   for (const body of bodies) {
     for (const segment of parseMessage(body)) {
       if (segment.type === 'document') documentIds.add(segment.id);
       if (segment.type === 'spreadsheet') spreadsheetIds.add(segment.id);
+      if (segment.type === 'workItem') workItemIds.add(segment.id);
       if (segment.type === 'channel') channelIds.add(segment.id);
       if (segment.type === 'member') userIds.add(segment.id);
     }
@@ -467,6 +501,7 @@ export function collectReferences(bodies: string[]): {
   return {
     documentIds: [...documentIds],
     spreadsheetIds: [...spreadsheetIds],
+    workItemIds: [...workItemIds],
     channelIds: [...channelIds],
     userIds: [...userIds],
   };
@@ -479,6 +514,7 @@ export function collectReferences(bodies: string[]): {
 export function messagePreview(body: string, references: MessageReferences): string {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
+  const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
 
@@ -488,6 +524,10 @@ export function messagePreview(body: string, references: MessageReferences): str
       if (segment.type === 'here') return '@here';
       if (segment.type === 'document') return documents.get(segment.id)?.title ?? 'a document';
       if (segment.type === 'spreadsheet') return spreadsheets.get(segment.id)?.title ?? 'a spreadsheet';
+      if (segment.type === 'workItem') {
+        const item = workItems.get(segment.id);
+        return item ? `${item.key} ${item.title}` : 'a work item';
+      }
       if (segment.type === 'channel') {
         const channel = channels.get(segment.id);
         return channel ? `#${channel.name}` : 'a channel';

@@ -39,15 +39,18 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
   const spreadsheets = new Map(a.spreadsheets.map((s) => [s.id, s]));
   const channels = new Map(a.channels.map((c) => [c.id, c]));
   const members = new Map(a.members.map((m) => [m.id, m]));
+  const workItems = new Map((a.workItems ?? []).map((i) => [i.id, i]));
   for (const d of b.documents) documents.set(d.id, d);
   for (const s of b.spreadsheets) spreadsheets.set(s.id, s);
   for (const c of b.channels) channels.set(c.id, c);
   for (const m of b.members) members.set(m.id, m);
+  for (const i of b.workItems ?? []) workItems.set(i.id, i);
   return {
     documents: [...documents.values()],
     spreadsheets: [...spreadsheets.values()],
     channels: [...channels.values()],
     members: [...members.values()],
+    workItems: [...workItems.values()],
   };
 }
 
@@ -138,6 +141,8 @@ export function useChatEvents({
         const linked = collectReferences([event.message.body]);
         const unnamed =
           linked.documentIds.some((id) => !event.references.documents.some((d) => d.id === id)) ||
+          linked.spreadsheetIds.some((id) => !event.references.spreadsheets.some((s) => s.id === id)) ||
+          linked.workItemIds.some((id) => !(event.references.workItems ?? []).some((i) => i.id === id)) ||
           linked.channelIds.some((id) => !event.references.channels.some((c) => c.id === id));
         if (unnamed) {
           void api
@@ -228,6 +233,24 @@ export function useChatEvents({
           return;
         case 'access.changed':
           void refetchAfterAccessChange(qc);
+          return;
+        case 'projects.changed':
+          // Ids only: whatever is showing the project or item asks again, and
+          // the server decides what this person may see of it.
+          void qc.invalidateQueries({ queryKey: ['projects', event.workspaceId] });
+          void qc.invalidateQueries({ queryKey: keys.project(event.projectId) });
+          void qc.invalidateQueries({ queryKey: keys.workItems(event.projectId) });
+          void qc.invalidateQueries({ queryKey: ['workItemListing', event.workspaceId] });
+          if (event.itemId) {
+            void qc.invalidateQueries({ queryKey: keys.workItem(event.itemId) });
+            void qc.invalidateQueries({ queryKey: keys.workItemTimeline(event.itemId) });
+            void qc.invalidateQueries({ queryKey: keys.workItemBacklinks(event.itemId) });
+            void qc.invalidateQueries({ queryKey: ['workItemRef', event.itemId] });
+          } else {
+            // A status renamed or recoloured changes every chip in the project.
+            void qc.invalidateQueries({ queryKey: ['workItemRef'] });
+          }
+          void qc.invalidateQueries({ queryKey: keys.notifications });
           return;
         case 'voice.changed':
           qc.setQueryData<Record<string, VoiceOccupant[]>>(keys.voiceParticipants(event.workspaceId), (current) => {

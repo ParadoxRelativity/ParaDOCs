@@ -5,7 +5,7 @@ import { filterSuggestionItems } from '@blocknote/core';
 import { withCollaboration } from '@blocknote/core/yjs';
 import { syntaxHighlighter } from '@blocknote/code-block';
 import { mentionHref, mentionLabel, type Doc } from '@paradocs/shared';
-import { useChannels, useMembers, useUploadFile, type DocumentPatch } from '../api/hooks';
+import { useAppEnabled, useChannels, useMembers, useUploadFile, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
 import { claimNewDocument } from '../lib/newDocuments';
 import { useCollaboration, type CollabSession, type Peer } from '../lib/collaboration';
@@ -15,6 +15,7 @@ import { Spinner } from './ui';
 import Avatar from './Avatar';
 import { documentSchema } from './documentSchema';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
+import { WorkItemPicker } from './projects/WorkItemRefs';
 import { copyEditorSelection } from '../lib/documentClipboard';
 
 interface Props {
@@ -123,7 +124,12 @@ function EditorSurface({
   // Typing `#` in a document offers the workspace's channels, the same way it
   // does in chat, and inserts a link that opens the channel in place. `@` does
   // the same for people.
-  const channels = useChannels(workspaceId);
+  // Only where the workspace has those apps on.
+  const chatOn = useAppEnabled(workspaceId, 'chat');
+  const sheetsOn = useAppEnabled(workspaceId, 'sheets');
+  const projectsOn = useAppEnabled(workspaceId, 'projects');
+  const [itemPicker, setItemPicker] = useState(false);
+  const channels = useChannels(chatOn ? workspaceId : undefined);
   const members = useMembers(workspaceId);
 
   // The slash menu's spreadsheet items ask which cell or chart first.
@@ -253,22 +259,39 @@ function EditorSurface({
                 filterSuggestionItems(
                   [
                     ...getDefaultReactSlashMenuItems(editor),
-                    {
-                      title: 'Spreadsheet cell',
-                      subtext: 'Show a cell’s current value from a spreadsheet',
-                      aliases: ['sheet', 'cell', 'value', 'spreadsheet', 'number'],
-                      group: 'Spreadsheets',
-                      icon: <span aria-hidden>▦</span>,
-                      onItemClick: () => setSheetPicker('cell'),
-                    },
-                    {
-                      title: 'Spreadsheet chart',
-                      subtext: 'Show a chart from a spreadsheet, kept up to date',
-                      aliases: ['sheet', 'chart', 'graph', 'spreadsheet', 'plot'],
-                      group: 'Spreadsheets',
-                      icon: <span aria-hidden>📊</span>,
-                      onItemClick: () => setSheetPicker('chart'),
-                    },
+                    // Nothing to point at in a workspace with Sheets off.
+                    ...(sheetsOn
+                      ? [
+                          {
+                            title: 'Spreadsheet cell',
+                            subtext: 'Show a cell’s current value from a spreadsheet',
+                            aliases: ['sheet', 'cell', 'value', 'spreadsheet', 'number'],
+                            group: 'Spreadsheets',
+                            icon: <span aria-hidden>▦</span>,
+                            onItemClick: () => setSheetPicker('cell'),
+                          },
+                          {
+                            title: 'Spreadsheet chart',
+                            subtext: 'Show a chart from a spreadsheet, kept up to date',
+                            aliases: ['sheet', 'chart', 'graph', 'spreadsheet', 'plot'],
+                            group: 'Spreadsheets',
+                            icon: <span aria-hidden>📊</span>,
+                            onItemClick: () => setSheetPicker('chart'),
+                          },
+                        ]
+                      : []),
+                    ...(projectsOn
+                      ? [
+                          {
+                            title: 'Work item',
+                            subtext: 'Link a work item, showing where it stands',
+                            aliases: ['issue', 'task', 'ticket', 'item', 'project', 'bug', 'jira'],
+                            group: 'Projects',
+                            icon: <span aria-hidden>▤</span>,
+                            onItemClick: () => setItemPicker(true),
+                          },
+                        ]
+                      : []),
                   ],
                   queryText,
                 )
@@ -328,6 +351,24 @@ function EditorSurface({
             />
           </BlockNoteView>
         </div>
+        {itemPicker && (
+          <WorkItemPicker
+            workspaceId={workspaceId}
+            confirmLabel="Insert"
+            onCancel={() => {
+              setItemPicker(false);
+              editor.focus();
+            }}
+            onPick={(item) => {
+              setItemPicker(false);
+              editor.focus();
+              editor.insertInlineContent([
+                { type: 'workItem', props: { itemId: item.id, label: `${item.key} ${item.title}` } },
+                ' ',
+              ]);
+            }}
+          />
+        )}
         {sheetPicker && (
           <SheetRefPicker
             kind={sheetPicker}

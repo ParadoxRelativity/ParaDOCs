@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { SearchHit, SheetSearchHit } from '@paradocs/shared';
-import { useSearch, useTags } from '../api/hooks';
+import type { SearchHit, SheetSearchHit, WorkItemSearchHit } from '@paradocs/shared';
+import { useAppEnabled, useSearch, useTags } from '../api/hooks';
 import { cx, formatRelative, plainSnippet, useDebounced } from '../lib/util';
 import { TagChip } from './ui';
 import Icon, { DocumentIcon } from './Icon';
@@ -11,13 +11,25 @@ interface Props {
   onSelect: (documentId: string) => void;
   /** Spreadsheets are their own app, so opening one goes somewhere else. */
   onSelectSheet: (spreadsheetId: string) => void;
+  /** And a work item opens in its project. */
+  onSelectWorkItem?: (hit: WorkItemSearchHit) => void;
   initialTagIds?: string[];
 }
 
-/** One row of results: documents first, then spreadsheets, walked as one list. */
-type Result = { kind: 'document'; hit: SearchHit } | { kind: 'sheet'; hit: SheetSearchHit };
+/** One row of results: documents, then spreadsheets, then work items, walked as one list. */
+type Result =
+  | { kind: 'document'; hit: SearchHit }
+  | { kind: 'sheet'; hit: SheetSearchHit }
+  | { kind: 'workItem'; hit: WorkItemSearchHit };
 
-export default function SearchPalette({ workspaceId, onClose, onSelect, onSelectSheet, initialTagIds = [] }: Props) {
+export default function SearchPalette({
+  workspaceId,
+  onClose,
+  onSelect,
+  onSelectSheet,
+  onSelectWorkItem,
+  initialTagIds = [],
+}: Props) {
   const [text, setText] = useState('');
   const [tagIds, setTagIds] = useState<string[]>(initialTagIds);
   const [from, setFrom] = useState('');
@@ -26,7 +38,8 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, onSelect
   const [filtersOpen, setFiltersOpen] = useState(initialTagIds.length > 0);
 
   const debounced = useDebounced(text, 180);
-  const tags = useTags(workspaceId);
+  // Tags belong to Docs, so a workspace without it has none to filter by.
+  const tags = useTags(useAppEnabled(workspaceId, 'docs') ? workspaceId : undefined);
   const hasFilters = tagIds.length > 0 || Boolean(from) || Boolean(to);
   const search = useSearch(
     workspaceId,
@@ -36,11 +49,18 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, onSelect
 
   const hits = search.data?.hits ?? [];
   const sheets = search.data?.sheets ?? [];
+  const workItems = onSelectWorkItem ? (search.data?.workItems ?? []) : [];
   const results: Result[] = [
     ...hits.map((hit): Result => ({ kind: 'document', hit })),
     ...sheets.map((hit): Result => ({ kind: 'sheet', hit })),
+    ...workItems.map((hit): Result => ({ kind: 'workItem', hit })),
   ];
-  const open = (result: Result) => (result.kind === 'document' ? onSelect(result.hit.id) : onSelectSheet(result.hit.id));
+  const open = (result: Result) =>
+    result.kind === 'document'
+      ? onSelect(result.hit.id)
+      : result.kind === 'sheet'
+        ? onSelectSheet(result.hit.id)
+        : onSelectWorkItem?.(result.hit);
 
   useEffect(() => setCursor(0), [debounced, tagIds, from, to]);
 
@@ -79,7 +99,7 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, onSelect
             autoFocus
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Search documents and spreadsheets…"
+            placeholder={onSelectWorkItem ? 'Search documents, spreadsheets and work items…' : 'Search documents and spreadsheets…'}
             className="flex-1 bg-transparent py-3 text-sm outline-none"
           />
           <button
@@ -135,7 +155,7 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, onSelect
 
         <div className="scroll-thin max-h-[45vh] overflow-y-auto">
           {(debounced || hasFilters) && results.length === 0 && !search.isFetching && (
-            <p className="p-6 text-center text-xs text-[var(--color-muted)]">No matching documents or spreadsheets.</p>
+            <p className="p-6 text-center text-xs text-[var(--color-muted)]">Nothing matches.</p>
           )}
           {hits.map((hit, index) => (
             <button
@@ -205,6 +225,37 @@ export default function SearchPalette({ workspaceId, onClose, onSelect, onSelect
                     dangerouslySetInnerHTML={{ __html: highlightSafely(hit.snippet) }}
                   />
                 )}
+              </button>
+            );
+          })}
+          {workItems.length > 0 && (
+            <div className="border-b border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Work items
+            </div>
+          )}
+          {workItems.map((hit, offset) => {
+            const index = hits.length + sheets.length + offset;
+            return (
+              <button
+                key={`item-${hit.id}`}
+                onMouseEnter={() => setCursor(index)}
+                onClick={() => {
+                  onSelectWorkItem?.(hit);
+                  onClose();
+                }}
+                className={cx(
+                  'flex w-full items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5 text-left last:border-0',
+                  index === cursor && 'bg-[var(--color-surface)]',
+                )}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: hit.statusColor }} title={hit.statusName} />
+                <span className="shrink-0 text-xs text-[var(--color-muted)]">{hit.key}</span>
+                <span className={cx('min-w-0 flex-1 truncate text-sm font-medium', hit.statusCategory === 'done' && 'text-[var(--color-muted)] line-through')}>
+                  {hit.title}
+                </span>
+                <span className="shrink-0 text-[10px] text-[var(--color-muted)]">
+                  {hit.projectName} · {hit.statusName}
+                </span>
               </button>
             );
           })}

@@ -5,7 +5,7 @@ import {
   defaultBlockSpecs,
   defaultInlineContentSpecs,
 } from '@blocknote/core';
-import { SHEET_CELL_INLINE, SHEET_CHART_BLOCK, sheetRefUrl } from '@paradocs/shared';
+import { SHEET_CELL_INLINE, SHEET_CHART_BLOCK, WORK_ITEM_INLINE, sheetRefUrl } from '@paradocs/shared';
 
 /**
  * The document schema as the server reads it.
@@ -52,7 +52,18 @@ const sheetChart = createBlockSpec(SHEET_CHART_BLOCK, {
   },
 });
 
+// A work item reads as its key and title, which is what search and an export
+// should find. Its status is not written down: that changes without the
+// document being saved, and a stale one would be worse than none.
+const workItem = createInlineContentSpec(WORK_ITEM_INLINE, {
+  render: (inline) => {
+    const span = dom().createElement('span');
+    span.textContent = inline.props.label || 'Work item';
+    return { dom: span as never };
+  },
+});
+
 export const documentSchema = BlockNoteSchema.create({
   blockSpecs: { ...defaultBlockSpecs, sheetChart: sheetChart() },
-  inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell },
+  inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell, workItem },
 });

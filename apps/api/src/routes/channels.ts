@@ -11,6 +11,7 @@ import {
   type Message,
   type MessageAttachment,
   type MessageReferences,
+  textWorkItems,
 } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
@@ -20,6 +21,7 @@ import { channelAccessFor, mentionsUserSql, publishChannelEvent, type ChannelAcc
 import { channelLevelSql, permissionSql } from '../lib/access.js';
 import { removeStoredFile, removeStoredFiles, storeUpload, uploadLimits, uploadUrlSql } from '../lib/storage.js';
 import { publishToWorkspace } from '../chat/hub.js';
+import { syncWorkItemMentions } from '../lib/workItems.js';
 
 const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind,
   c.position, c.created_at AS "createdAt", c.access`;
@@ -52,7 +54,20 @@ const MESSAGE_COLUMNS = `m.id, m.channel_id AS "channelId", m.body,
       ) r
   ), '[]'::json) AS reactions`;
 
-const NO_REFERENCES: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [] };
+/**
+ * Keeps the work items a message mentions listed on those items. A direct
+ * conversation's messages are recorded too; an item only ever lists the
+ * conversations its reader is in.
+ */
+async function recordItemMentions(req: FastifyRequest, messageId: string, workspaceId: string, body: string) {
+  try {
+    await syncWorkItemMentions({ kind: 'message', id: messageId }, workspaceId, textWorkItems([body]));
+  } catch (err) {
+    req.log.warn({ err, messageId }, 'could not record work item mentions');
+  }
+}
+
+const NO_REFERENCES: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [] };
 
 type Queryable = { query: typeof query };
 
@@ -104,7 +119,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   // --- channels ------------------------------------------------------------
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/channels', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'chat');
     // Direct conversations are listed on their own, and only to the people in
     // them. A channel locked away from someone is not listed to them at all.
     const { rows } = await query<Channel>(
@@ -131,7 +146,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/channels', async (req, reply) => {
     // Adding and removing channels is an owner/admin job, as asked.
-    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    await assertWorkspaceAccess(req, req.params.id, 'admin', 'chat');
     const input = parse(createChannelSchema, req.body);
 
     const { rows: clash } = await query(
@@ -286,6 +301,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     // Everyone in the channel is sent the same copy, so it names only what is
     // open to all of them; each reader fills in the rest (GET references).
     const references = await resolveReferences([message.body], access.workspaceId, null);
+    await recordItemMentions(req, message.id, access.workspaceId, message.body);
 
     // Posting is also reading: the author's own message must not come back as
     // unread the moment they send it.
@@ -320,6 +336,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     await query('UPDATE messages SET body = $2, edited_at = now() WHERE id = $1', [req.params.id, input.body]);
     const message = await selectMessage({ query }, req.params.id);
     const references = await resolveReferences([message.body], access.workspaceId, null);
+    await recordItemMentions(req, message.id, access.workspaceId, message.body);
     await publishChannelEvent(found.channel_id, access.kind, {
       type: 'message.updated',
       workspaceId: access.workspaceId,
@@ -353,6 +370,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
       return rows.map((r) => r.storage_key);
     });
     await removeStoredFiles(files, req.log);
+    await recordItemMentions(req, req.params.id, access.workspaceId, '');
 
     await publishChannelEvent(found.channel_id, access.kind, {
       type: 'message.deleted',

@@ -68,6 +68,10 @@ function plainText(fragment: Fragment): string {
         );
         return false;
       }
+      case 'workItem':
+        // Its key and title, as they were when it was linked.
+        line += (node.attrs as { label: string }).label || 'Work item';
+        return false;
       case 'hardBreak':
         line += '\n';
         return false;

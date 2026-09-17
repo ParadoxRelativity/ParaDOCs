@@ -65,10 +65,19 @@ function fitPermission(permission: Permission, mode: 'allow' | 'deny'): Permissi
   return permission === 'edit' ? 'none' : permission;
 }
 
-const KIND_NOUN = { folder: 'folder', document: 'document', channel: 'channel' } as const;
+const KIND_NOUN = {
+  folder: 'folder',
+  document: 'document',
+  spreadsheet: 'spreadsheet',
+  channel: 'channel',
+  project: 'project',
+} as const;
+
+/** Channels and projects are not filed in folders, so there is nothing for them to follow. */
+const inherits = (kind: NamedAccessTarget['kind']) => kind !== 'channel' && kind !== 'project';
 
 /**
- * Who can reach a folder, document or channel. Owners and admins set it here;
+ * Who can reach a folder, document, spreadsheet, channel or project. Owners and admins set it here;
  * nobody else sees the controls.
  *
  * The choice is between leaving it open, following its folder, or keeping a
@@ -90,7 +99,7 @@ export function AccessDialog({
   const update = useUpdateAccess(target);
   const toast = useToast();
 
-  const [mode, setMode] = useState<AccessMode>(target.kind === 'channel' ? 'open' : 'inherit');
+  const [mode, setMode] = useState<AccessMode>(inherits(target.kind) ? 'inherit' : 'open');
   const [lines, setLines] = useState<Line[]>([]);
   // Filled from the server once; after that the dialog holds the draft.
   const loaded = useRef(false);
@@ -112,7 +121,7 @@ export function AccessDialog({
   const inherited = settings.data?.inheritedFrom ?? null;
 
   const modes: { id: AccessMode; label: string; hint: string }[] = [
-    ...(target.kind === 'channel'
+    ...(!inherits(target.kind)
       ? []
       : [
           {

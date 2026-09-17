@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { directName, isGroupDirect, mentions, type Channel, type Message, type MessageReferences } from '@paradocs/shared';
+import {
+  directName,
+  isGroupDirect,
+  mentions,
+  type Channel,
+  type Message,
+  type MessageReferences,
+  type WorkItemReference,
+} from '@paradocs/shared';
 import { api } from '../../api/client';
 import {
   keys,
@@ -55,6 +63,7 @@ export function ChatView({
   onOpenDocument,
   onOpenSpreadsheet,
   onOpenChannel,
+  onOpenWorkItem,
   onTyping,
 }: {
   workspaceId: string;
@@ -78,6 +87,7 @@ export function ChatView({
   onOpenDocument: (id: string) => void;
   onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
+  onOpenWorkItem?: (item: WorkItemReference) => void;
   /** Tells everyone else in a channel that you are typing there, or have stopped. */
   onTyping?: (channelId: string, typing: boolean) => void;
 }) {
@@ -279,6 +289,7 @@ export function ChatView({
                 onOpenDocument={onOpenDocument}
                 onOpenSpreadsheet={onOpenSpreadsheet}
                 onOpenChannel={onOpenChannel}
+                onOpenWorkItem={onOpenWorkItem}
               />
             ))}
           </>
@@ -362,6 +373,7 @@ function Row({
   onOpenDocument,
   onOpenSpreadsheet,
   onOpenChannel,
+  onOpenWorkItem,
 }: {
   message: Message;
   previous: Message | undefined;
@@ -377,6 +389,7 @@ function Row({
   onOpenDocument: (id: string) => void;
   onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
+  onOpenWorkItem?: (item: WorkItemReference) => void;
 }) {
   const mentionsMe = !message.deletedAt && mentions(message.body, selfId);
   // A server that predates files and reactions sends neither.
@@ -434,6 +447,7 @@ function Row({
               onOpenDocument={onOpenDocument}
               onOpenSpreadsheet={onOpenSpreadsheet}
               onOpenChannel={onOpenChannel}
+              onOpenWorkItem={onOpenWorkItem}
             />
             {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}
           </div>

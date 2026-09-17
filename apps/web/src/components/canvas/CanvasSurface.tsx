@@ -739,7 +739,8 @@ export default function CanvasSurface(props: Props) {
                   element.type === 'shape' ||
                   element.type === 'node' ||
                   element.type === 'frame' ||
-                  element.type === 'link'
+                  element.type === 'link' ||
+                  element.type === 'workItem'
                 ) {
                   setEditingId(element.id);
                 }

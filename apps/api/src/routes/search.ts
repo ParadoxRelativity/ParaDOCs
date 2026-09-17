@@ -2,7 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import { searchQuerySchema } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { parse } from '../lib/http.js';
-import { documentLevelSql } from '../lib/access.js';
+import { documentLevelSql, projectLevelSql, spreadsheetLevelSql } from '../lib/access.js';
+import { appEnabled } from '../lib/apps.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
 /**
@@ -30,17 +31,19 @@ const SHEET_LIMIT = 20;
  * folders and tags that a spreadsheet does not have.
  *
  * A search narrowed by tag or folder has already said it wants documents, and
- * no spreadsheet can satisfy either filter, so none are returned for it.
+ * no spreadsheet can satisfy either filter, so none are returned for it. As
+ * with documents, nothing locked away from the reader turns up.
  */
 async function searchSpreadsheets(
   workspaceId: string,
+  reader: { userId: string; role: string },
   input: { q?: string; tags?: string[]; folderId?: string; from?: string; to?: string; includeArchived?: boolean },
   tsquery: string | null,
 ) {
   if (input.tags?.length || input.folderId) return [];
 
-  const params: unknown[] = [workspaceId];
-  const where: string[] = ['s.workspace_id = $1'];
+  const params: unknown[] = [workspaceId, reader.userId, reader.role];
+  const where: string[] = ['s.workspace_id = $1', `${spreadsheetLevelSql('$2', '$3')} > 0`];
   if (!input.includeArchived) where.push('s.archived_at IS NULL');
 
   let rankExpr = '0';
@@ -77,6 +80,43 @@ async function searchSpreadsheets(
   return rows;
 }
 
+/** How many work items a search returns beside its documents. */
+const ITEM_LIMIT = 20;
+
+/**
+ * Work items that match, by title, by key (`ENG-12`) or by description, in
+ * projects the reader may see. Like spreadsheets, they have no folders or
+ * tags, so a search narrowed by either returns none.
+ */
+async function searchWorkItems(
+  workspaceId: string,
+  reader: { userId: string; role: string },
+  input: { q?: string; tags?: string[]; folderId?: string; includeArchived?: boolean },
+  tsquery: string | null,
+) {
+  if (input.tags?.length || input.folderId || !input.q) return [];
+  const params: unknown[] = [workspaceId, reader.userId, reader.role, input.q, tsquery];
+  const { rows } = await query(
+    `SELECT i.id, i.project_id AS "projectId", p.key || '-' || i.number AS key, i.title,
+            p.name AS "projectName", st.name AS "statusName", st.category AS "statusCategory", st.color AS "statusColor",
+            i.updated_at AS "updatedAt",
+            CASE WHEN $5::text IS NULL THEN 0 ELSE ts_rank(i.search, to_tsquery('english', $5)) END AS rank
+       FROM work_items i
+       JOIN projects p ON p.id = i.project_id
+       JOIN project_statuses st ON st.id = i.status_id
+      WHERE i.workspace_id = $1
+        AND ${projectLevelSql('$2', '$3')} > 0
+        ${input.includeArchived ? '' : 'AND p.archived_at IS NULL'}
+        AND (i.title ILIKE '%' || $4 || '%'
+             OR (p.key || '-' || i.number) ILIKE $4 || '%'
+             OR ($5::text IS NOT NULL AND i.search @@ to_tsquery('english', $5)))
+      ORDER BY (st.category = 'done'), rank DESC, i.updated_at DESC
+      LIMIT ${ITEM_LIMIT}`,
+    params,
+  );
+  return rows;
+}
+
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
@@ -84,6 +124,12 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
     '/workspaces/:id/search',
     async (req) => {
       const role = await assertWorkspaceAccess(req, req.params.id);
+      // Each half answers only for an app the workspace has on.
+      const [docsOn, sheetsOn, projectsOn] = await Promise.all([
+        appEnabled(req.params.id, 'docs'),
+        appEnabled(req.params.id, 'sheets'),
+        appEnabled(req.params.id, 'projects'),
+      ]);
       const raw = req.query;
       const input = parse(searchQuerySchema, {
         ...raw,
@@ -145,7 +191,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       const limitParam = `$${params.length - 1}`;
       const offsetParam = `$${params.length}`;
 
-      const { rows } = await query(
+      const { rows } = !docsOn ? { rows: [] } : await query(
         `SELECT d.id, d.title, d.icon, d.mode, d.folder_id AS "folderId",
                 d.updated_at AS "updatedAt", d.is_journal AS "isJournal",
                 ${rankExpr} AS rank,
@@ -174,7 +220,13 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         params,
       );
 
-      return { hits: rows, sheets: await searchSpreadsheets(req.params.id, input, tsquery), query: input.q ?? '' };
+      const sheets = sheetsOn
+        ? await searchSpreadsheets(req.params.id, { userId: req.user!.id, role }, input, tsquery)
+        : [];
+      const workItems = projectsOn
+        ? await searchWorkItems(req.params.id, { userId: req.user!.id, role }, input, tsquery)
+        : [];
+      return { hits: rows, sheets, workItems, query: input.q ?? '' };
     },
   );
 };

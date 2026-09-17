@@ -11,7 +11,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/tags', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
     // Counts only what the reader may see, so a tag's number matches what
     // following it turns up.
     const { rows } = await query(
@@ -29,7 +29,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/tags', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor');
+    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
     const input = parse(createTagSchema, req.body);
     const name = input.name.trim();
 
@@ -60,7 +60,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       req.params.id,
     ]);
     if (!found[0]) throw notFound('Tag not found');
-    await assertWorkspaceAccess(req, found[0].workspace_id, 'editor');
+    await assertWorkspaceAccess(req, found[0].workspace_id, 'editor', 'docs');
     const input = parse(updateTagSchema, req.body);
     const { rows } = await query(
       `UPDATE tags SET name = COALESCE($2, name), color = COALESCE($3, color)
@@ -76,7 +76,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       req.params.id,
     ]);
     if (!rows[0]) throw notFound('Tag not found');
-    await assertWorkspaceAccess(req, rows[0].workspace_id, 'editor');
+    await assertWorkspaceAccess(req, rows[0].workspace_id, 'editor', 'docs');
     await query('DELETE FROM tags WHERE id = $1', [req.params.id]);
     reply.status(204);
   });

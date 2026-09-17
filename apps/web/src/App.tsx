@@ -9,6 +9,7 @@ import {
   type Channel,
   type PresenceStatus,
   type User,
+  type WorkspaceApp,
 } from '@paradocs/shared';
 import {
   useDeleteDocument,
@@ -24,7 +25,9 @@ import {
   useNotifications,
   useOpenDirect,
   usePresence,
+  useProject,
   useSpreadsheet,
+  useWorkItemListing,
   usePresenceSettings,
   useVoiceConfig,
   useVoiceParticipants,
@@ -70,7 +73,8 @@ import {
 import { useToast } from './components/Toast';
 import PopoutWindow from './components/PopoutWindow';
 import SpreadsheetView from './components/sheet/SpreadsheetView';
-import PeopleApp, { isPeopleSection } from './components/PeopleApp';
+import AccessApp, { isAccessSection } from './components/AccessApp';
+import ProjectsApp from './components/projects/ProjectsApp';
 import { Button, EmptyState, IconButton, Spinner } from './components/ui';
 import Icon from './components/Icon';
 
@@ -104,10 +108,16 @@ export default function App() {
           <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
           <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
           <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
+          <Route path="/w/:workspaceId/c" element={<Workspace user={me.data.user} chat />} />
           <Route path="/w/:workspaceId/s/:sheetId" element={<Workspace user={me.data.user} sheets />} />
           <Route path="/w/:workspaceId/s" element={<Workspace user={me.data.user} sheets />} />
-          <Route path="/w/:workspaceId/people/:peopleSection" element={<Workspace user={me.data.user} people />} />
-          <Route path="/w/:workspaceId/people" element={<Workspace user={me.data.user} people />} />
+          <Route path="/w/:workspaceId/p/:projectId/:itemId" element={<Workspace user={me.data.user} projects />} />
+          <Route path="/w/:workspaceId/p/:projectId" element={<Workspace user={me.data.user} projects />} />
+          <Route path="/w/:workspaceId/p" element={<Workspace user={me.data.user} projects />} />
+          <Route path="/w/:workspaceId/access/:accessSection" element={<Workspace user={me.data.user} access />} />
+          <Route path="/w/:workspaceId/access" element={<Workspace user={me.data.user} access />} />
+          {/* Access was once called People; links and tabs from then still land. */}
+          <Route path="/w/:workspaceId/people/*" element={<RenamedToAccess />} />
           <Route path="/w/:workspaceId" element={<Workspace user={me.data.user} />} />
           <Route path="*" element={<FirstWorkspaceRedirect />} />
         </Routes>
@@ -193,6 +203,25 @@ function FirstWorkspaceRedirect() {
   return <Navigate to={`/w/${first.id}`} replace />;
 }
 
+function RenamedToAccess() {
+  const { workspaceId = '', '*': rest = '' } = useParams();
+  return <Navigate to={`/w/${workspaceId}/access${rest ? `/${rest}` : ''}`} replace />;
+}
+
+/**
+ * Where an app starts. Docs has the workspace's front door; Chat lands on its
+ * first channel once it knows which that is.
+ */
+function appHome(workspaceId: string, app: WorkspaceApp): string {
+  return app === 'sheets'
+    ? `/w/${workspaceId}/s`
+    : app === 'chat'
+      ? `/w/${workspaceId}/c`
+      : app === 'projects'
+        ? `/w/${workspaceId}/p`
+        : `/w/${workspaceId}`;
+}
+
 /** A channel's name, or for a direct conversation, the other people's. */
 function conversationName(channel: Channel): string {
   return channel.kind === 'direct' ? directName(channel) : channel.name;
@@ -203,19 +232,22 @@ function Workspace({
   allDocuments = false,
   chat = false,
   sheets = false,
-  people = false,
+  projects = false,
+  access = false,
 }: {
   user: User;
   allDocuments?: boolean;
   chat?: boolean;
   /** The Sheets app: a list of spreadsheets, or one open. */
   sheets?: boolean;
-  /** The People app: the workspace's members, and the teams they are on. */
-  people?: boolean;
+  /** The Projects app: your work, or a project and perhaps one of its items. */
+  projects?: boolean;
+  /** The Access app: the workspace's members and teams, and its own settings. */
+  access?: boolean;
 }) {
   const userId = user.id;
-  const { workspaceId = '', documentId, channelId, sheetId, peopleSection: peopleParam } = useParams();
-  const peopleSection = isPeopleSection(peopleParam) ? peopleParam : 'members';
+  const { workspaceId = '', documentId, channelId, sheetId, projectId, itemId, accessSection: accessParam } = useParams();
+  const accessSection = isAccessSection(accessParam) ? accessParam : 'members';
   // Spreadsheets are their own records, fetched here only to name the header
   // and the tab; the grid itself loads inside the Sheets view.
   const openSheet = useSpreadsheet(sheets ? sheetId : undefined);
@@ -229,10 +261,25 @@ function Workspace({
   const canEdit = workspace ? workspace.role !== 'viewer' : false;
   // Owners and admins manage channels; everyone else just reads and posts.
   const canManageChannels = workspace ? workspace.role === 'owner' || workspace.role === 'admin' : false;
-  const channels = useChannels(workspaceId);
+  // The apps this workspace has on. Nothing belonging to one that is off is
+  // asked for, since the server would refuse it.
+  const appOn = (app: WorkspaceApp) => workspace?.apps.includes(app) ?? false;
+  const section: WorkspaceApp | 'access' = chat
+    ? 'chat'
+    : sheets
+      ? 'sheets'
+      : projects
+        ? 'projects'
+        : access
+          ? 'access'
+          : 'docs';
+  const openProject = useProject(projects ? projectId : undefined);
+  // Counted for the sidebar while Projects is open, and only then.
+  const myWork = useWorkItemListing(projects && appOn('projects') ? workspaceId : undefined, { mine: true, open: true, limit: 200 });
+  const channels = useChannels(appOn('chat') ? workspaceId : undefined);
   const channelList = channels.data ?? [];
   // Direct conversations are channels too, listed apart and only to the people in them.
-  const directs = useDirectConversations(workspaceId);
+  const directs = useDirectConversations(appOn('chat') ? workspaceId : undefined);
   const directList = directs.data ?? [];
   const findConversation = (id: string | null | undefined) =>
     id ? (channelList.find((c) => c.id === id) ?? directList.find((c) => c.id === id)) : undefined;
@@ -321,7 +368,7 @@ function Workspace({
   const [journalDate, setJournalDate] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
 
-  const journal = useJournal(workspaceId, journalDate ?? todayISO(), journalDate !== null);
+  const journal = useJournal(workspaceId, journalDate ?? todayISO(), journalDate !== null && appOn('docs'));
 
   /**
    * Opening a document you were tagged in answers the tag, however you got
@@ -423,19 +470,25 @@ function Workspace({
       ? sheetId
         ? (openSheet.data?.title ?? '')
         : 'Spreadsheets'
-      : people
-        ? 'People'
-        : allDocuments
-          ? 'All documents'
-          : documentId
-            ? (openDoc?.title ?? '')
-            : (workspace?.name ?? '');
+      : projects
+        ? projectId
+          ? (openProject.data?.name ?? '')
+          : 'My work'
+        : access
+          ? 'Access'
+          : allDocuments
+            ? 'All documents'
+            : documentId
+              ? (openDoc?.title ?? '')
+              : (workspace?.name ?? '');
   const tabKind: TabKind = chat
     ? 'chat'
     : sheets
       ? 'sheet'
-      : people
-        ? 'people'
+      : projects
+        ? 'project'
+        : access
+          ? 'access'
         : allDocuments
           ? 'all'
           : documentId
@@ -443,6 +496,8 @@ function Workspace({
             : 'home';
   const tabEmoji = sheets
     ? (openSheet.data?.icon ?? undefined)
+    : projects
+      ? (openProject.data?.icon ?? undefined)
     : !chat && !allDocuments && documentId
       ? (openDoc?.icon ?? undefined)
       : undefined;
@@ -529,11 +584,22 @@ function Workspace({
   }
 
   // Where the chat tab lands when the URL names no channel.
-  const firstChannelPath = channelList[0] ? `/w/${workspaceId}/c/${channelList[0].id}` : `/w/${workspaceId}`;
+  const firstChannelPath = channelList[0] ? `/w/${workspaceId}/c/${channelList[0].id}` : `/w/${workspaceId}/c`;
+
+  // Chat with no channel named opens the first one, once the list says which.
+  const firstChannelId = channelList[0]?.id;
+  useEffect(() => {
+    if (chat && !channelId && firstChannelId) navigate(`/w/${workspaceId}/c/${firstChannelId}`, { replace: true });
+  }, [chat, channelId, firstChannelId, workspaceId, navigate]);
 
   if (workspaces.isLoading) return <Spinner />;
-  if (workspaces.data && !workspaces.data.some((w) => w.id === workspaceId)) {
+  if (workspaces.data && !workspace) {
     return <Navigate to="/" replace />;
+  }
+  // An app turned off — while someone was in it, or in a tab or link from
+  // before — gives way to the first one still on.
+  if (workspace && section !== 'access' && !appOn(section)) {
+    return <Navigate to={appHome(workspaceId, workspace.apps[0] ?? 'docs')} replace />;
   }
 
   const direct = activeChannel?.kind === 'direct' ? activeChannel : null;
@@ -577,15 +643,20 @@ function Workspace({
             onSignOut={() => logout.mutate()}
             onOpenSettings={setSettingsSection}
             onConnectServer={desktop ? () => setConnectOpen(true) : undefined}
-            section={chat ? 'chat' : sheets ? 'sheets' : people ? 'people' : 'docs'}
+            section={section}
             onSelectSection={(next) => {
               if (next === 'docs') navigate(`/w/${workspaceId}`);
               else if (next === 'sheets') navigate(sheetId ? `/w/${workspaceId}/s/${sheetId}` : `/w/${workspaceId}/s`);
-              else if (next === 'people') navigate(`/w/${workspaceId}/people`);
+              else if (next === 'projects') navigate(projectId ? `/w/${workspaceId}/p/${projectId}` : `/w/${workspaceId}/p`);
+              else if (next === 'access') navigate(`/w/${workspaceId}/access`);
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}
-            activePeopleSection={peopleSection}
-            onSelectPeopleSection={(next) => navigate(`/w/${workspaceId}/people/${next}`)}
+            activeProjectId={projects ? (projectId ?? null) : null}
+            onSelectProject={(id) => navigate(`/w/${workspaceId}/p/${id}`)}
+            onOpenMyWork={() => navigate(`/w/${workspaceId}/p`)}
+            myWorkCount={myWork.data?.length}
+            activeAccessSection={accessSection}
+            onSelectAccessSection={(next) => navigate(`/w/${workspaceId}/access/${next}`)}
             activeSheetId={sheetId ?? null}
             onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
             onSheetDeleted={(id) => {
@@ -663,8 +734,12 @@ function Workspace({
                 ? sheetId
                   ? (openSheet.data?.title ?? '')
                   : 'Spreadsheets'
-                : people
-                  ? 'People'
+                : projects
+                  ? projectId
+                    ? `Projects / ${openProject.data?.name ?? ''}`
+                    : 'Projects'
+                  : access
+                  ? 'Access'
                   : allDocuments
                     ? 'All documents'
                     : (document.data?.title ?? '')}
@@ -672,7 +747,7 @@ function Workspace({
           {/* Writing and drawing are two views of one document, so moving
               between them belongs beside the document rather than inside a
               panel. A journal entry is a dated page and has nowhere to slide. */}
-          {!chat && !sheets && !people && !allDocuments && document.data && !document.data.isJournal && (
+          {!chat && !sheets && !projects && !access && !allDocuments && document.data && !document.data.isJournal && (
             <ModeSwitch
               mode={document.data.mode}
               disabled={!canEdit || document.data.permission !== 'edit'}
@@ -689,7 +764,7 @@ function Workspace({
             >
               <Icon name="people" />
             </IconButton>
-          ) : sheets || people ? null : (
+          ) : sheets || projects || access ? null : (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
                 <Icon name="search" />
@@ -783,15 +858,42 @@ function Workspace({
                 onOpenDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
                 onOpenSpreadsheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
                 onOpenChannel={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
+                onOpenWorkItem={(item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
               />
             ) : channelId && directs.isLoading ? (
               <Spinner />
             ) : (
               <EmptyState icon="chat-dots" title="No channel open" />
             )
-          ) : people ? (
+          ) : projects ? (
             workspace ? (
-              <PeopleApp workspace={workspace} section={peopleSection} />
+              <ProjectsApp
+                workspace={workspace}
+                user={user}
+                projectId={projectId ?? null}
+                itemId={itemId ?? null}
+                navigation={{
+                  onOpenDocument: (id) => navigate(`/w/${workspaceId}/d/${id}`),
+                  onOpenSpreadsheet: (id) => navigate(`/w/${workspaceId}/s/${id}`),
+                  onOpenChannel: (id) => navigate(`/w/${workspaceId}/c/${id}`),
+                  onOpenWorkItem: (item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`),
+                }}
+                onOpenProject={(id) => navigate(`/w/${workspaceId}/p/${id}`)}
+                onOpenItem={(project, item) => navigate(`/w/${workspaceId}/p/${project}/${item}`)}
+                onCloseItem={() => navigate(`/w/${workspaceId}/p/${projectId}`)}
+                onProjectDeleted={() => navigate(`/w/${workspaceId}/p`)}
+              />
+            ) : (
+              <Spinner />
+            )
+          ) : access ? (
+            workspace ? (
+              <AccessApp
+                workspace={workspace}
+                section={accessSection}
+                onWorkspaceDeleted={() => navigate('/')}
+                onOpenDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
+              />
             ) : (
               <Spinner />
             )
@@ -802,7 +904,8 @@ function Workspace({
                 workspaceId={workspaceId}
                 sheetId={sheetId}
                 self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
-                canEdit={canEdit}
+                // The workspace role, and then any lock on this spreadsheet.
+                canEdit={canEdit && openSheet.data?.permission === 'edit'}
               />
             ) : (
               <EmptyState icon="table" title="No spreadsheet open" />
@@ -863,7 +966,7 @@ function Workspace({
             />
           </div>
         </aside>
-      ) : sheets || people ? null : (
+      ) : sheets || projects || access ? null : (
         <aside
           className={cx(
             'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
@@ -890,23 +993,14 @@ function Workspace({
         </aside>
       )}
 
-      {settingsSection && workspace && (
+      {settingsSection && (
         <SettingsDialog
           section={settingsSection}
           onSectionChange={setSettingsSection}
           user={user}
-          workspace={workspace}
           theme={theme}
           onThemeChange={setTheme}
           onClose={() => setSettingsSection(null)}
-          onWorkspaceDeleted={() => {
-            setSettingsSection(null);
-            navigate('/');
-          }}
-          onOpenDocument={(id) => {
-            setSettingsSection(null);
-            navigate(`/w/${workspaceId}/d/${id}`);
-          }}
         />
       )}
 
@@ -922,6 +1016,9 @@ function Workspace({
           }}
           onSelect={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
           onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
+          onSelectWorkItem={
+            appOn('projects') ? (hit) => navigate(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
+          }
         />
       )}
 

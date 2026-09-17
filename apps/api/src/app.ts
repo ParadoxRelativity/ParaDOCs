@@ -29,6 +29,7 @@ import { oidcRoutes } from './routes/oidc.js';
 import { directRoutes } from './routes/direct.js';
 import { presenceRoutes } from './routes/presence.js';
 import { accessRoutes } from './routes/access.js';
+import { projectRoutes } from './routes/projects.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -100,6 +101,7 @@ export async function buildApp() {
     workspaceRoutes,
     documentRoutes,
     spreadsheetRoutes,
+    projectRoutes,
     searchRoutes,
     tagRoutes,
     commentRoutes,

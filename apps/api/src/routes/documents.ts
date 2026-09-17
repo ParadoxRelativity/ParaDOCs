@@ -61,7 +61,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     Params: { id: string };
     Querystring: { limit?: string; offset?: string; sort?: string; archived?: string; unfiled?: string };
   }>('/workspaces/:id/documents', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
     const limit = Math.min(Math.max(Number(req.query.limit ?? 100) || 100, 1), 200);
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
     const archived = req.query.archived === 'true';
@@ -92,10 +92,10 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/documents', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor');
+    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
     const input = parse(createDocumentSchema, req.body);
     // Filing into a folder takes being allowed to change what is in it.
-    if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id);
+    if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id, 'docs');
     const body = input.body ?? [];
     const bodyMd = blocksToMarkdown(body);
 
@@ -132,7 +132,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     const input = parse(updateDocumentSchema, req.body);
 
     if (input.folderId !== undefined) {
-      if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', workspaceId);
+      if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', workspaceId, 'docs');
       const { rows: current } = await query<{ access: string; folder_id: string | null }>(
         'SELECT access, folder_id FROM documents WHERE id = $1',
         [req.params.id],
@@ -226,7 +226,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
    */
   app.get<{ Params: { id: string; date: string } }>('/workspaces/:id/journal/:date', async (req) => {
     // Opening a journal creates it on first visit, so this needs write access.
-    await assertWorkspaceAccess(req, req.params.id, 'editor');
+    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
     const date = parse(isoDate, req.params.date);
 
     const existing = await query<{ id: string }>(
@@ -241,7 +241,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         // Journal entries land in a "Journal" folder, created once per workspace.
         const { rows: folder } = await client.query<{ id: string }>(
           `WITH existing AS (
-             SELECT id FROM folders WHERE workspace_id = $1 AND parent_id IS NULL AND name = 'Journal' LIMIT 1
+             SELECT id FROM folders WHERE workspace_id = $1 AND app = 'docs' AND parent_id IS NULL AND name = 'Journal' LIMIT 1
            ), created AS (
              INSERT INTO folders (workspace_id, name, position)
              SELECT $1, 'Journal', 0 WHERE NOT EXISTS (SELECT 1 FROM existing)
@@ -279,7 +279,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>(
     '/workspaces/:id/activity',
     async (req) => {
-      const role = await assertWorkspaceAccess(req, req.params.id);
+      const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
       const from = parse(isoDate, req.query.from ?? new Date().toISOString().slice(0, 8) + '01');
       const to = parse(isoDate, req.query.to ?? from);
       // Only documents this reader may see leave a dot: a day of work on a

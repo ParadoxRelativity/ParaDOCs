@@ -16,12 +16,20 @@ import {
   documentRef,
   memberRef,
   spreadsheetRef,
+  workItemRef,
   type AttachmentKind,
   type Channel,
   type MessageAttachment,
 } from '@paradocs/shared';
 import { api } from '../../api/client';
-import { useAllDocuments, useMembers, useSpreadsheets, useUploadConfig } from '../../api/hooks';
+import {
+  useAllDocuments,
+  useAppEnabled,
+  useMembers,
+  useSpreadsheets,
+  useUploadConfig,
+  useWorkItemListing,
+} from '../../api/hooks';
 import { uploadChatFile } from '../../lib/chatFiles';
 import { useTypingReporter } from '../../lib/typing';
 import { replaceShortcodes, searchEmoji, type EmojiOption } from '../../lib/emoji';
@@ -37,7 +45,8 @@ import { fileIcon } from './MessageAttachments';
  * the files going out with the message.
  *
  * Typing `#` offers channels, `@` people (and `@here`, for everyone in the
- * channel) and `[[` documents and spreadsheets.
+ * channel), `[[` documents and spreadsheets, and `\\` work items — by key or
+ * by title.
  * What gets inserted is the id token, not the name — so the rendered link
  * follows a rename — while what you typed to find it never appears in the
  * message.
@@ -52,7 +61,7 @@ import { fileIcon } from './MessageAttachments';
  */
 
 interface Trigger {
-  kind: 'channel' | 'document' | 'member' | 'emoji';
+  kind: 'channel' | 'document' | 'workItem' | 'member' | 'emoji';
   /** Index of the trigger character(s) in the textarea value. */
   start: number;
   query: string;
@@ -64,7 +73,14 @@ const HERE = 'here';
 /** How many rows a picker offers before you are better off narrowing the query. */
 const PICKER_LIMIT = 6;
 
+/** What starts a work item reference: two backslashes, so a lone one in a path is left alone. */
+export const WORK_ITEM_TRIGGER = '\\\\';
+
+/** An inserted work item, followed by what was typed after it: the search is over. */
+const INSERTED_KEY = /^[A-Z][A-Z0-9]*-\d+\s/;
+
 const TRIGGERS: { kind: Trigger['kind']; token: string }[] = [
+  { kind: 'workItem', token: WORK_ITEM_TRIGGER },
   { kind: 'document', token: '[[' },
   { kind: 'channel', token: '#' },
   { kind: 'member', token: '@' },
@@ -79,8 +95,10 @@ function findTrigger(value: string, caret: number): Trigger | null {
     // A channel or document trigger ends at whitespace: "#general " is
     // finished, not a live search. A person's name has spaces in it, so a
     // mention stays open for one word and gives up after that.
-    const limit = kind === 'member' ? /\s\S*\s/ : /\s/;
+    // A work item's title can be searched by a few words.
+    const limit = kind === 'member' ? /\s\S*\s/ : kind === 'workItem' ? /\n|\s\S*\s\S*\s/ : /\s/;
     if (limit.test(query)) continue;
+    if (kind === 'workItem' && INSERTED_KEY.test(query)) continue;
     // `#`, `@` and `:` only start a mention at a word boundary, so "C#", an
     // email address and "12:30" are left alone.
     if (kind !== 'document' && start > 0 && !/\s/.test(value[start - 1])) continue;
@@ -146,12 +164,22 @@ export const MessageComposer = forwardRef<
   pendingRef.current = pending;
 
   // Only fetched once the matching mention is actually being typed.
-  const documents = useAllDocuments(trigger?.kind === 'document' ? workspaceId : undefined, {
+  // And only from the apps the workspace has on.
+  const docsOn = useAppEnabled(workspaceId, 'docs');
+  const sheetsOn = useAppEnabled(workspaceId, 'sheets');
+  const documents = useAllDocuments(trigger?.kind === 'document' && docsOn ? workspaceId : undefined, {
     sort: 'updated',
     archived: false,
     limit: 200,
   });
-  const spreadsheets = useSpreadsheets(trigger?.kind === 'document' ? workspaceId : undefined);
+  const spreadsheets = useSpreadsheets(trigger?.kind === 'document' && sheetsOn ? workspaceId : undefined);
+  // Work items are searched on the server, since a workspace can have thousands:
+  // by title, or by key, so `[[ENG-12` finds the one meant.
+  const projectsOn = useAppEnabled(workspaceId, 'projects');
+  const workItems = useWorkItemListing(trigger?.kind === 'workItem' && projectsOn ? workspaceId : undefined, {
+    q: trigger?.kind === 'workItem' ? trigger.query || undefined : undefined,
+    limit: PICKER_LIMIT,
+  });
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
 
   const emojiQuery = trigger?.kind === 'emoji' ? trigger.query : null;
@@ -203,6 +231,17 @@ export const MessageComposer = forwardRef<
         }));
       return [...here, ...people];
     }
+    if (trigger.kind === 'workItem') {
+      // Already matched on the server, by key or title.
+      return (workItems.data ?? []).map((item) => ({
+        id: item.id,
+        icon: <Icon name="kanban" />,
+        label: `${item.key} ${item.title}`,
+        hint: item.status.name,
+        insert: `${WORK_ITEM_TRIGGER}${item.key}`,
+        token: workItemRef(item.id),
+      }));
+    }
     // Both lists arrive newest-first, so interleaving by title would bury a
     // sheet someone just touched under documents they have not opened in
     // months. They are matched separately and concatenated, documents first.
@@ -235,7 +274,7 @@ export const MessageComposer = forwardRef<
       ...documentOptions.slice(0, documentShare),
       ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
     ];
-  }, [trigger, channels, direct, documents.data, spreadsheets.data, members.data, emojiOptions]);
+  }, [trigger, channels, direct, documents.data, spreadsheets.data, workItems.data, members.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {

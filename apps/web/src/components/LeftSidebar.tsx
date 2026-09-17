@@ -8,11 +8,13 @@ import type {
   Tag,
   User,
   VoiceOccupant,
+  WorkspaceApp,
 } from '@paradocs/shared';
 import { AppLauncher, type AppEntry } from './AppLauncher';
 import { Popover } from './Popover';
 import { PresenceAvatar, STATUS_LABEL, StatusMenu } from './Presence';
 import {
+  useAppEnabled,
   useCreateDocument,
   useCreateFolder,
   useCreateWorkspace,
@@ -37,17 +39,19 @@ import Icon, { DocumentIcon, type IconName } from './Icon';
 import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
 import type { SettingsSection } from './SettingsDialog';
-import type { PeopleSection } from './PeopleApp';
+import { managesWorkspace, type AccessSection } from './AccessApp';
 import WorkspaceIcon from './WorkspaceIcon';
 import { MODIFIER, asksForNewTab, openTab } from '../lib/tabs';
 import { useToast } from './Toast';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
+import { ProjectList } from './projects/ProjectList';
 import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
 import SheetContextMenu, { type SheetMenuItem } from './sheet/SheetContextMenu';
+import DeleteFolderDialog, { DOCUMENT_NOUN } from './DeleteFolderDialog';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
-export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'people';
+export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'projects' | 'access';
 
 interface Props {
   /** The signed-in account, shown at the foot of the sidebar. */
@@ -74,7 +78,7 @@ interface Props {
   onOpenSettings: (section: SettingsSection) => void;
   /** Desktop app only: opens the dialog for adding a server. */
   onConnectServer?: () => void;
-  /** Which app the sidebar is showing: the knowledge base, chat, spreadsheets, or the people in the workspace. */
+  /** Which app the sidebar is showing: the knowledge base, chat, spreadsheets, or the workspace's access and settings. */
   section: SidebarSection;
   onSelectSection: (section: SidebarSection) => void;
   /** The spreadsheet open in the Sheets app, if any. */
@@ -82,9 +86,15 @@ interface Props {
   onSelectSheet: (id: string) => void;
   /** A spreadsheet was deleted from the list, so anything showing it must move off. */
   onSheetDeleted: (id: string) => void;
-  /** The page open in the People app. */
-  activePeopleSection: PeopleSection;
-  onSelectPeopleSection: (section: PeopleSection) => void;
+  /** The project open in the Projects app, or null for My work. */
+  activeProjectId: string | null;
+  onSelectProject: (id: string) => void;
+  onOpenMyWork: () => void;
+  /** Open work items the signed-in person holds a role on. */
+  myWorkCount?: number;
+  /** The page open in the Access app. */
+  activeAccessSection: AccessSection;
+  onSelectAccessSection: (section: AccessSection) => void;
   channels: Channel[];
   /** The signed-in person's direct conversations, most recent first. */
   directs: Channel[];
@@ -126,10 +136,11 @@ interface Props {
 
 export default function LeftSidebar(props: Props) {
   const { workspaceId, workspaces, onSelectWorkspace } = props;
-  const tree = useTree(workspaceId);
-  const tags = useTags(workspaceId);
-  // Only counted for the People app's navigation.
-  const teams = useTeams(props.section === 'people' ? workspaceId : undefined);
+  const docsOn = useAppEnabled(workspaceId, 'docs');
+  const tree = useTree(docsOn ? workspaceId : undefined);
+  const tags = useTags(docsOn ? workspaceId : undefined);
+  // Only counted for the Access app's navigation.
+  const teams = useTeams(props.section === 'access' ? workspaceId : undefined);
   const createFolder = useCreateFolder(workspaceId);
   const createDocument = useCreateDocument(workspaceId);
   const createWorkspace = useCreateWorkspace();
@@ -248,10 +259,11 @@ export default function LeftSidebar(props: Props) {
       </div>
 
       {/* Which app the sidebar is showing. Adding one to this list is all it
-          takes: the launcher lays out however many there are. */}
+          takes: the launcher lays out however many there are. Apps the
+          workspace has turned off are left out; Access is always there. */}
       <div className="border-b border-[var(--color-line)] p-2">
         <AppLauncher
-          apps={
+          apps={(
             [
               { id: 'docs', label: 'Docs', icon: 'journals' },
               {
@@ -262,9 +274,10 @@ export default function LeftSidebar(props: Props) {
                 mentions: props.mentionTotal,
               },
               { id: 'sheets', label: 'Sheets', icon: 'table' },
-              { id: 'people', label: 'People', icon: 'people' },
+              { id: 'projects', label: 'Projects', icon: 'kanban' },
+              { id: 'access', label: 'Access', icon: 'shield-lock' },
             ] satisfies AppEntry[]
-          }
+          ).filter((app) => app.id === 'access' || (current?.apps ?? []).includes(app.id as WorkspaceApp))}
           currentId={props.section}
           onSelect={(id) => props.onSelectSection(id as SidebarSection)}
         />
@@ -285,28 +298,64 @@ export default function LeftSidebar(props: Props) {
           onSelect={props.onSelectChannel}
           onManageAccess={setSecuring}
         />
-      ) : props.section === 'people' ? (
+      ) : props.section === 'access' ? (
         <div className="scroll-thin min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
           <SidebarAction
             icon="person-lines-fill"
             label="Members"
             hint={current ? String(current.memberCount) : undefined}
-            active={props.activePeopleSection === 'members'}
-            onClick={() => props.onSelectPeopleSection('members')}
+            active={props.activeAccessSection === 'members'}
+            onClick={() => props.onSelectAccessSection('members')}
           />
           <SidebarAction
             icon="diagram-3"
             label="Teams"
             hint={teams.data ? String(teams.data.length) : undefined}
-            active={props.activePeopleSection === 'teams'}
-            onClick={() => props.onSelectPeopleSection('teams')}
+            active={props.activeAccessSection === 'teams'}
+            onClick={() => props.onSelectAccessSection('teams')}
           />
+          <div className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            Workspace
+          </div>
+          <SidebarAction
+            icon="briefcase"
+            label="General"
+            active={props.activeAccessSection === 'workspace'}
+            onClick={() => props.onSelectAccessSection('workspace')}
+          />
+          <SidebarAction
+            icon="grid-3x3-gap"
+            label="Apps"
+            hint={current ? String(current.apps.length) : undefined}
+            active={props.activeAccessSection === 'apps'}
+            onClick={() => props.onSelectAccessSection('apps')}
+          />
+          {/* Storage housekeeping is an owner's or admin's job, so nobody else sees it. */}
+          {current && managesWorkspace(current) && (
+            <SidebarAction
+              icon="paperclip"
+              label="Uploads"
+              active={props.activeAccessSection === 'uploads'}
+              onClick={() => props.onSelectAccessSection('uploads')}
+            />
+          )}
         </div>
+      ) : props.section === 'projects' ? (
+        <ProjectList
+          workspaceId={workspaceId}
+          activeProjectId={props.activeProjectId}
+          canEdit={props.canEdit}
+          canManageAccess={props.canManageAccess}
+          myWorkCount={props.myWorkCount}
+          onOpenMyWork={props.onOpenMyWork}
+          onSelect={props.onSelectProject}
+        />
       ) : props.section === 'sheets' ? (
         <SheetList
           workspaceId={workspaceId}
           activeSheetId={props.activeSheetId}
           canEdit={props.canEdit}
+          canManageAccess={props.canManageAccess}
           onSelect={props.onSelectSheet}
           onDeleted={props.onSheetDeleted}
         />
@@ -329,7 +378,7 @@ export default function LeftSidebar(props: Props) {
           icon="people"
           label="Members"
           hint={current ? String(current.memberCount) : undefined}
-          onClick={() => props.onSelectPeopleSection('members')}
+          onClick={() => props.onSelectAccessSection('members')}
         />
       </div>
 
@@ -584,94 +633,6 @@ function documentIdsDeep(folder: FolderNode): string[] {
   return [...folder.documents.map((d) => d.id), ...folder.children.flatMap(documentIdsDeep)];
 }
 
-/**
- * Deleting a folder always takes its subfolders with it. What becomes of the
- * documents inside is asked each time: keeping them is the safe answer, and
- * deleting them is the one that cannot be taken back, so keeping is selected.
- */
-function DeleteFolderDialog({
-  folder,
-  onCancel,
-  onConfirm,
-}: {
-  folder: FolderNode;
-  onCancel: () => void;
-  onConfirm: (deleteDocuments: boolean) => void;
-}) {
-  const count = documentIdsDeep(folder).length;
-  const documents = `${count} ${count === 1 ? 'document' : 'documents'}`;
-  const [deleteDocuments, setDeleteDocuments] = useState(false);
-  const deleting = count > 0 && deleteDocuments;
-
-  const options = [
-    {
-      value: false,
-      label: 'Keep the documents',
-      hint: 'They move to All Documents, unfiled, and keep who can see them.',
-    },
-    {
-      value: true,
-      label: 'Delete the documents too',
-      hint: `Permanently removes ${documents}, with their comments and history. This cannot be undone.`,
-    },
-  ];
-
-  return (
-    <Modal
-      title={`Delete "${folder.name}"?`}
-      description={
-        count > 0
-          ? `The folder and any subfolders are deleted. They hold ${documents}.`
-          : 'The folder and any subfolders are deleted. There are no documents in it.'
-      }
-      onClose={onCancel}
-      footer={
-        <>
-          <Button variant="subtle" className="text-xs" onClick={onCancel}>
-            Cancel
-          </Button>
-          <button
-            autoFocus
-            onClick={() => onConfirm(deleting)}
-            className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500"
-          >
-            {deleting ? `Delete folder and ${documents}` : 'Delete folder'}
-          </button>
-        </>
-      }
-    >
-      {count > 0 && (
-        <div role="radiogroup" aria-label="The documents inside" className="space-y-2">
-          {options.map((option) => {
-            const selected = deleteDocuments === option.value;
-            return (
-              <button
-                key={option.label}
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setDeleteDocuments(option.value)}
-                className={cx(
-                  'block w-full rounded-lg border px-3 py-2 text-left transition-colors',
-                  selected
-                    ? option.value
-                      ? 'border-red-500 bg-red-500/10'
-                      : 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
-                    : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]',
-                )}
-              >
-                <span className={cx('block text-sm font-medium', selected && option.value && 'text-red-500')}>
-                  {option.label}
-                </span>
-                <span className="mt-0.5 block text-xs text-[var(--color-muted)]">{option.hint}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
 function FolderRow({
   folder,
   depth,
@@ -883,13 +844,15 @@ function FolderRow({
 
       {confirmingDelete && (
         <DeleteFolderDialog
-          folder={folder}
+          name={folder.name}
+          count={documentIdsDeep(folder).length}
+          noun={DOCUMENT_NOUN}
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={(deleteDocuments) => {
             setConfirmingDelete(false);
             const documentIds = documentIdsDeep(folder);
             remove.mutate(
-              { id: folder.id, deleteDocuments },
+              { id: folder.id, deleteContents: deleteDocuments },
               {
                 onSuccess: () => {
                   toast(deleteDocuments ? `Deleted "${folder.name}" and its documents` : `Deleted "${folder.name}"`);

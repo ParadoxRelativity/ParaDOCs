@@ -9,6 +9,7 @@ import type {
   DocumentMode,
   DocumentSummary,
   Folder,
+  FolderApp,
   FolderNode,
   InvitePreview,
   Message,
@@ -18,6 +19,7 @@ import type {
   PresenceStatus,
   Role,
   SearchHit,
+  SheetFolderNode,
   SheetSearchHit,
   SpreadsheetSummary,
   Tag,
@@ -27,9 +29,25 @@ import type {
   User,
   VoiceOccupant,
   Workspace,
+  WorkspaceApp,
   WorkspaceInvite,
   WorkspaceMember,
+  CreateProjectInput,
+  CreateWorkItemInput,
+  Project,
+  ProjectRole,
+  ProjectStatus,
+  ProjectSummary,
+  StatusCategory,
+  UpdateWorkItemInput,
+  WorkItem,
+  WorkItemBacklinks,
+  WorkItemListing,
+  WorkItemSearchHit,
+  WorkItemSummary,
+  WorkItemTimeline,
 } from '@paradocs/shared';
+import { WORKSPACE_APPS } from '@paradocs/shared';
 import { formatBytes } from '../lib/util';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
@@ -46,6 +64,12 @@ export interface Tree {
   folders: FolderNode[];
 }
 
+/** The Sheets app's tree, which does include the spreadsheets in no folder. */
+export interface SheetTree {
+  folders: SheetFolderNode[];
+  unfiled: SpreadsheetSummary[];
+}
+
 export type DocumentSort = 'updated' | 'created' | 'title';
 
 export interface DocumentList {
@@ -57,6 +81,7 @@ export const keys = {
   me: ['me'] as const,
   workspaces: ['workspaces'] as const,
   tree: (ws: string) => ['tree', ws] as const,
+  sheetTree: (ws: string) => ['sheetTree', ws] as const,
   documents: (ws: string) => ['documents', ws] as const,
   document: (id: string) => ['document', id] as const,
   tags: (ws: string) => ['tags', ws] as const,
@@ -75,6 +100,12 @@ export const keys = {
   spreadsheets: (ws: string) => ['spreadsheets', ws] as const,
   spreadsheet: (id: string) => ['spreadsheet', id] as const,
   teams: (ws: string) => ['teams', ws] as const,
+  projects: (ws: string, archived = false) => ['projects', ws, archived] as const,
+  project: (id: string) => ['project', id] as const,
+  workItems: (projectId: string) => ['workItems', projectId] as const,
+  workItem: (id: string) => ['workItem', id] as const,
+  workItemTimeline: (id: string) => ['workItemTimeline', id] as const,
+  workItemBacklinks: (id: string) => ['workItemBacklinks', id] as const,
   access: (kind: string, id: string) => ['access', kind, id] as const,
 };
 
@@ -153,7 +184,24 @@ export function useLogout() {
 // --- workspaces and tree ---------------------------------------------------
 
 export function useWorkspaces() {
-  return useQuery({ queryKey: keys.workspaces, queryFn: () => api.get<WorkspaceSummary[]>('/workspaces') });
+  return useQuery({
+    queryKey: keys.workspaces,
+    queryFn: async () =>
+      (await api.get<WorkspaceSummary[]>('/workspaces')).map((w) => ({
+        ...w,
+        // A server from before apps could be turned off has every app on.
+        apps: w.apps ?? [...WORKSPACE_APPS],
+      })),
+  });
+}
+
+/**
+ * Whether a workspace has an app turned on. False until the workspace list has
+ * loaded, so nothing asks an app's routes for data the server may refuse.
+ */
+export function useAppEnabled(workspaceId: string | undefined, app: WorkspaceApp): boolean {
+  const workspaces = useWorkspaces();
+  return workspaces.data?.find((w) => w.id === workspaceId)?.apps.includes(app) ?? false;
 }
 
 export function useCreateWorkspace() {
@@ -168,7 +216,7 @@ export function useCreateWorkspace() {
 export function useUpdateWorkspace(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name?: string; icon?: string | null }) =>
+    mutationFn: (input: { name?: string; icon?: string | null; apps?: WorkspaceApp[] }) =>
       api.patch<Workspace>(`/workspaces/${workspaceId}`, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.workspaces }),
   });
@@ -202,32 +250,51 @@ export function useTree(workspaceId: string | undefined) {
   });
 }
 
-export function useCreateFolder(workspaceId: string) {
+/** The Sheets app's folders, the spreadsheets in each, and those in none. */
+export function useSheetTree(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.sheetTree(workspaceId ?? ''),
+    queryFn: () => api.get<SheetTree>(`/workspaces/${workspaceId}/sheet-tree`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+/** The tree a folder belongs to, which is what changes when it does. */
+function folderTreeKey(workspaceId: string, app: FolderApp) {
+  return app === 'sheets' ? keys.sheetTree(workspaceId) : keys.tree(workspaceId);
+}
+
+/** Folders in the documents tree, unless `app` says the spreadsheets one. */
+export function useCreateFolder(workspaceId: string, app: FolderApp = 'docs') {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { name: string; icon?: string | null; parentId?: string | null }) =>
-      api.post<Folder>(`/workspaces/${workspaceId}/folders`, input),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.tree(workspaceId) }),
+      api.post<Folder>(`/workspaces/${workspaceId}/folders`, { ...input, app }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: folderTreeKey(workspaceId, app) }),
   });
 }
 
-export function useUpdateFolder(workspaceId: string) {
+export function useUpdateFolder(workspaceId: string, app: FolderApp = 'docs') {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: string; name?: string; icon?: string | null }) =>
+    mutationFn: ({ id, ...patch }: { id: string; name?: string; icon?: string | null; parentId?: string | null }) =>
       api.patch<Folder>(`/folders/${id}`, patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.tree(workspaceId) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: folderTreeKey(workspaceId, app) }),
   });
 }
 
-export function useDeleteFolder(workspaceId: string) {
+export function useDeleteFolder(workspaceId: string, app: FolderApp = 'docs') {
   const qc = useQueryClient();
   return useMutation({
-    /** The documents inside are kept, unfiled, unless `deleteDocuments` says to delete them too. */
-    mutationFn: ({ id, deleteDocuments }: { id: string; deleteDocuments: boolean }) =>
-      api.delete(`/folders/${id}${deleteDocuments ? '?documents=delete' : ''}`),
+    /** What is inside is kept, unfiled, unless `deleteContents` says to delete it too. */
+    mutationFn: ({ id, deleteContents }: { id: string; deleteContents: boolean }) =>
+      api.delete(`/folders/${id}${deleteContents ? '?contents=delete' : ''}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
+      qc.invalidateQueries({ queryKey: folderTreeKey(workspaceId, app) });
+      if (app === 'sheets') {
+        qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
+        return;
+      }
       // Documents either became unfiled or are gone, which the flat listing and
       // the workspace's document count both show.
       qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
@@ -240,11 +307,17 @@ export function useDeleteFolder(workspaceId: string) {
 
 /** Something that can be locked. */
 export interface AccessTarget {
-  kind: 'folder' | 'document' | 'channel';
+  kind: 'folder' | 'document' | 'spreadsheet' | 'channel' | 'project';
   id: string;
 }
 
-const ACCESS_PATHS = { folder: 'folders', document: 'documents', channel: 'channels' } as const;
+const ACCESS_PATHS = {
+  folder: 'folders',
+  document: 'documents',
+  spreadsheet: 'spreadsheets',
+  channel: 'channels',
+  project: 'projects',
+} as const;
 
 /**
  * After who can see what changes, anything on screen may be showing too much
@@ -512,11 +585,12 @@ export function useSpreadsheet(id: string | undefined) {
 export function useCreateSpreadsheet(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { title?: string } = {}) =>
+    mutationFn: (input: { title?: string; folderId?: string | null } = {}) =>
       api.post<SpreadsheetSummary>(`/workspaces/${workspaceId}/spreadsheets`, input),
     onSuccess: (sheet) => {
       qc.setQueryData(keys.spreadsheet(sheet.id), sheet);
       void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
+      void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
       // The same "open on the name, selected" welcome a new document gets.
       rememberNewDocument(sheet.id);
     },
@@ -526,11 +600,21 @@ export function useCreateSpreadsheet(workspaceId: string) {
 export function useUpdateSpreadsheet(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: string; title?: string; icon?: string | null; archived?: boolean }) =>
-      api.patch<SpreadsheetSummary>(`/spreadsheets/${id}`, patch),
+    mutationFn: ({
+      id,
+      ...patch
+    }: {
+      id: string;
+      title?: string;
+      icon?: string | null;
+      archived?: boolean;
+      /** Null takes it out of its folder. */
+      folderId?: string | null;
+    }) => api.patch<SpreadsheetSummary>(`/spreadsheets/${id}`, patch),
     onSuccess: (sheet) => {
       qc.setQueryData(keys.spreadsheet(sheet.id), sheet);
       void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
+      void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
     },
   });
 }
@@ -539,7 +623,273 @@ export function useDeleteSpreadsheet(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete(`/spreadsheets/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
+      return qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
+    },
+  });
+}
+
+// --- projects ------------------------------------------------------------------
+// Projects, queues and their work items. Everyone looking at a project hears
+// about changes to it over the chat socket (see chatEvents.ts), which
+// invalidates these, so a mutation only has to settle its own view.
+
+export function useProjects(workspaceId: string | undefined, archived = false) {
+  return useQuery({
+    queryKey: keys.projects(workspaceId ?? '', archived),
+    queryFn: () => api.get<ProjectSummary[]>(`/workspaces/${workspaceId}/projects${archived ? '?archived=true' : ''}`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useProject(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.project(id ?? ''),
+    queryFn: () => api.get<Project>(`/projects/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+/** Everything that shows a project's shape: its record, and the lists naming it. */
+function invalidateProject(qc: QueryClient, workspaceId: string, projectId: string) {
+  void qc.invalidateQueries({ queryKey: ['projects', workspaceId] });
+  void qc.invalidateQueries({ queryKey: keys.project(projectId) });
+}
+
+export function useCreateProject(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Partial<CreateProjectInput> & { name: string; key: string }) =>
+      api.post<Project>(`/workspaces/${workspaceId}/projects`, input),
+    onSuccess: (project) => {
+      qc.setQueryData(keys.project(project.id), project);
+      invalidateProject(qc, workspaceId, project.id);
+    },
+  });
+}
+
+export function useUpdateProject(workspaceId: string, projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: { name?: string; key?: string; description?: string; icon?: string | null; archived?: boolean }) =>
+      api.patch<Project>(`/projects/${projectId}`, patch),
+    onSuccess: (project) => {
+      qc.setQueryData(keys.project(project.id), project);
+      invalidateProject(qc, workspaceId, project.id);
+      // Every item's key starts with the project's.
+      void qc.invalidateQueries({ queryKey: keys.workItems(projectId) });
+    },
+  });
+}
+
+export function useDeleteProject(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) => api.delete(`/projects/${projectId}`),
+    onSuccess: (_result, projectId) => {
+      qc.removeQueries({ queryKey: keys.project(projectId) });
+      void qc.invalidateQueries({ queryKey: ['projects', workspaceId] });
+    },
+  });
+}
+
+/** Adding, changing and removing a project's statuses and roles. */
+export function useProjectSetup(workspaceId: string, projectId: string) {
+  const qc = useQueryClient();
+  const settle = () => {
+    invalidateProject(qc, workspaceId, projectId);
+    void qc.invalidateQueries({ queryKey: keys.workItems(projectId) });
+  };
+  return {
+    addStatus: useMutation({
+      mutationFn: (input: { name: string; category: StatusCategory; color?: string }) =>
+        api.post<ProjectStatus>(`/projects/${projectId}/statuses`, input),
+      onSuccess: settle,
+    }),
+    updateStatus: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; category?: StatusCategory; color?: string; position?: number }) =>
+        api.patch<ProjectStatus>(`/project-statuses/${id}`, patch),
+      onSuccess: settle,
+    }),
+    deleteStatus: useMutation({
+      mutationFn: ({ id, moveTo }: { id: string; moveTo?: string }) =>
+        api.delete(`/project-statuses/${id}${qs({ moveTo })}`),
+      onSuccess: settle,
+    }),
+    addRole: useMutation({
+      mutationFn: (input: { name: string; multiple: boolean }) => api.post<ProjectRole>(`/projects/${projectId}/roles`, input),
+      onSuccess: settle,
+    }),
+    updateRole: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; multiple?: boolean; position?: number }) =>
+        api.patch<ProjectRole>(`/project-roles/${id}`, patch),
+      onSuccess: settle,
+    }),
+    deleteRole: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-roles/${id}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
+export function useWorkItems(projectId: string | undefined) {
+  return useQuery({
+    queryKey: keys.workItems(projectId ?? ''),
+    queryFn: () => api.get<WorkItemSummary[]>(`/projects/${projectId}/items`),
+    enabled: Boolean(projectId),
+  });
+}
+
+export function useWorkItem(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.workItem(id ?? ''),
+    queryFn: () => api.get<WorkItem>(`/work-items/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+/** Work items across a workspace: your own, or those matching a search. */
+export function useWorkItemListing(
+  workspaceId: string | undefined,
+  options: { q?: string; mine?: boolean; open?: boolean; limit?: number },
+) {
+  const query = qs({ q: options.q, mine: options.mine, open: options.open, limit: options.limit });
+  return useQuery({
+    queryKey: ['workItemListing', workspaceId ?? '', query],
+    queryFn: () => api.get<WorkItemListing[]>(`/workspaces/${workspaceId}/work-items${query}`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+/** What changed about one item: the item, its project's list, and anything listing it elsewhere. */
+function settleItem(qc: QueryClient, projectId: string, item?: WorkItem) {
+  if (item) qc.setQueryData(keys.workItem(item.id), item);
+  void qc.invalidateQueries({ queryKey: keys.workItems(projectId) });
+  void qc.invalidateQueries({ queryKey: ['workItemListing'] });
+  void qc.invalidateQueries({ queryKey: ['projects'] });
+  if (item) {
+    void qc.invalidateQueries({ queryKey: keys.workItemTimeline(item.id) });
+    void qc.invalidateQueries({ queryKey: ['workItemRef', item.id] });
+  }
+}
+
+export function useCreateWorkItem(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateWorkItemInput) => api.post<WorkItem>(`/projects/${projectId}/items`, input),
+    onSuccess: (item) => settleItem(qc, projectId, item),
+  });
+}
+
+/**
+ * Changes a work item. The project's list is updated before the server
+ * answers, so a card dragged to another column stays where it was dropped.
+ */
+export function useUpdateWorkItem(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: UpdateWorkItemInput & { id: string }) => api.patch<WorkItem>(`/work-items/${id}`, patch),
+    onMutate: async ({ id, ...patch }) => {
+      await qc.cancelQueries({ queryKey: keys.workItems(projectId) });
+      const previous = qc.getQueryData<WorkItemSummary[]>(keys.workItems(projectId));
+      if (previous) {
+        qc.setQueryData<WorkItemSummary[]>(
+          keys.workItems(projectId),
+          previous.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  ...Object.fromEntries(Object.entries(patch).filter(([key]) => key !== 'description')),
+                }
+              : item,
+          ),
+        );
+      }
+      return { previous };
+    },
+    onError: (_err, _patch, context) => {
+      if (context?.previous) qc.setQueryData(keys.workItems(projectId), context.previous);
+    },
+    onSuccess: (item) => settleItem(qc, projectId, item),
+  });
+}
+
+/** Moves several items into one status, in the order given — such as from the backlog onto the board. */
+export function useMoveWorkItems(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { itemIds: string[]; statusId: string }) =>
+      api.post<{ moved: number }>(`/projects/${projectId}/items/move`, input),
+    onSuccess: () => settleItem(qc, projectId),
+    // Each moved item's chips and history changed too.
+    onSettled: () => qc.invalidateQueries({ queryKey: ['workItem'] }),
+  });
+}
+
+export function useSetWorkItemRole(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ itemId, roleId, userIds }: { itemId: string; roleId: string; userIds: string[] }) =>
+      api.put<WorkItem>(`/work-items/${itemId}/roles/${roleId}`, { userIds }),
+    onSuccess: (item) => settleItem(qc, projectId, item),
+  });
+}
+
+export function useDeleteWorkItem(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/work-items/${id}`),
+    onSuccess: (_result, id) => {
+      qc.removeQueries({ queryKey: keys.workItem(id) });
+      settleItem(qc, projectId);
+    },
+  });
+}
+
+export function useWorkItemTimeline(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.workItemTimeline(id ?? ''),
+    queryFn: () => api.get<WorkItemTimeline>(`/work-items/${id}/timeline`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useWorkItemBacklinks(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.workItemBacklinks(id ?? ''),
+    queryFn: () => api.get<WorkItemBacklinks>(`/work-items/${id}/backlinks`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useWorkItemComments(itemId: string, projectId: string) {
+  const qc = useQueryClient();
+  const settle = () => {
+    void qc.invalidateQueries({ queryKey: keys.workItemTimeline(itemId) });
+    void qc.invalidateQueries({ queryKey: keys.workItems(projectId) });
+  };
+  return {
+    add: useMutation({
+      mutationFn: (body: string) => api.post(`/work-items/${itemId}/comments`, { body }),
+      onSuccess: settle,
+    }),
+    edit: useMutation({
+      mutationFn: ({ id, body }: { id: string; body: string }) => api.patch(`/work-item-comments/${id}`, { body }),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/work-item-comments/${id}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
+export function useMarkWorkItemsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (itemIds?: string[]) => api.post('/notifications/work-items/read', itemIds ? { itemIds } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
   });
 }
 
@@ -704,10 +1054,11 @@ export interface SearchFilters {
   folderId?: string;
 }
 
-/** Documents and spreadsheets that match. A server older than spreadsheets sends no `sheets`. */
+/** Documents, spreadsheets and work items that match. Older servers send neither of the last two. */
 export interface SearchResults {
   hits: SearchHit[];
   sheets?: SheetSearchHit[];
+  workItems?: WorkItemSearchHit[];
   query: string;
 }
 

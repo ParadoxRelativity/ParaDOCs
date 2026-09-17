@@ -152,7 +152,7 @@ export function DirectMessageDialog({
             {alone
               ? excludeIds.length > 0
                 ? 'Everyone in this workspace is already in the conversation.'
-                : 'No one else is in this workspace yet. Invite people from Settings → Members.'
+                : 'No one else is in this workspace yet. Invite people from Access → Members.'
               : 'No one matches that.'}
           </p>
         ) : (

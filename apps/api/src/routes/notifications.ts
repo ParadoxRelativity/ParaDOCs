@@ -9,11 +9,13 @@ import {
   type NotificationWorkspace,
   type Notifications,
   type Role,
+  type WorkItemNotification,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelLevelSql, documentLevelSql } from '../lib/access.js';
+import { channelLevelSql, documentLevelSql, projectLevelSql } from '../lib/access.js';
+import { appEnabledSql } from '../lib/apps.js';
 import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { availableServerUpdate } from '../lib/releases.js';
@@ -32,6 +34,24 @@ const readMentionsSchema = z.object({
 });
 
 const MAX_MENTIONS = 50;
+
+const readWorkItemsSchema = z.object({
+  /** Omit to clear every work item notification. */
+  itemIds: z.array(z.string().uuid()).max(500).optional(),
+});
+
+interface WorkItemRow extends WorkspaceColumns {
+  work_item_id: string;
+  project_id: string;
+  key: string;
+  title: string;
+  reason: 'role' | 'mention';
+  detail: string | null;
+  created_at: string;
+  author_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
+}
 
 interface WorkspaceColumns {
   workspace_id: string;
@@ -121,7 +141,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
   app.get('/notifications', async (req): Promise<Notifications> => {
     const user = req.user!;
 
-    const [{ rows: inviteRows }, { rows: channelRows }, { rows: mentionRows }] = await Promise.all([
+    const [{ rows: inviteRows }, { rows: channelRows }, { rows: mentionRows }, { rows: workItemRows }] = await Promise.all([
       query<InviteRow>(
         `SELECT i.id, i.token, i.role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
            FROM workspace_invites i
@@ -154,6 +174,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
            FROM workspace_members wm
            JOIN workspaces w ON w.id = wm.workspace_id
            JOIN channels c ON c.workspace_id = w.id AND ${readableChannel('wm.role')}
+                          AND ${appEnabledSql('w.id', 'chat')}
            LEFT JOIN LATERAL (
              SELECT string_agg(u.name, ', ' ORDER BY lower(u.name), u.id) AS names
                FROM channel_members other
@@ -206,8 +227,32 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
             AND dm.read_at IS NULL
             -- An archived document is off the shelf; a tag in one is not news.
             AND d.archived_at IS NULL
+            AND ${appEnabledSql('d.workspace_id', 'docs')}
             AND ${documentLevelSql('$1', 'wm.role')} > 0
           ORDER BY dm.created_at DESC
+          LIMIT ${MAX_MENTIONS}`,
+        [user.id],
+      ),
+      // Work items given to this person or naming them. As with tags, whether
+      // they can still open the project is asked now, not when it was written.
+      query<WorkItemRow>(
+        `SELECT n.work_item_id, i.project_id, p.key || '-' || i.number AS key, i.title,
+                n.reason, n.detail, n.created_at,
+                ${WORKSPACE_SELECT},
+                author.id AS author_id, author.name AS author_name,
+                ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+           FROM work_item_notifications n
+           JOIN work_items i ON i.id = n.work_item_id
+           JOIN projects p ON p.id = i.project_id
+           JOIN workspaces w ON w.id = p.workspace_id
+           JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
+           LEFT JOIN users author ON author.id = n.created_by
+          WHERE n.user_id = $1
+            AND n.read_at IS NULL
+            AND p.archived_at IS NULL
+            AND ${appEnabledSql('p.workspace_id', 'projects')}
+            AND ${projectLevelSql('$1', 'wm.role')} > 0
+          ORDER BY n.created_at DESC
           LIMIT ${MAX_MENTIONS}`,
         [user.id],
       ),
@@ -266,8 +311,37 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           createdAt: row.created_at,
         }),
       ),
+      workItems: workItemRows.map(
+        (row): WorkItemNotification => ({
+          workItemId: row.work_item_id,
+          projectId: row.project_id,
+          key: row.key,
+          title: row.title,
+          reason: row.reason,
+          role: row.detail,
+          workspace: workspaceOf(row),
+          by: row.author_id
+            ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+            : null,
+          createdAt: row.created_at,
+        }),
+      ),
       serverUpdate,
     };
+  });
+
+  /** Clears work item notifications — the ones given, or all of them. Opening the item is what normally calls this. */
+  app.post('/notifications/work-items/read', async (req, reply) => {
+    const input = parse(readWorkItemsSchema, req.body ?? {});
+    await query(
+      `UPDATE work_item_notifications
+          SET read_at = now()
+        WHERE user_id = $1
+          AND read_at IS NULL
+          AND ($2::uuid[] IS NULL OR work_item_id = ANY($2::uuid[]))`,
+      [req.user!.id, input.itemIds ?? null],
+    );
+    reply.status(204);
   });
 
   /** Marks channels read — the ones given, or every channel the person can read. */

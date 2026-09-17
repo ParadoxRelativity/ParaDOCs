@@ -4,7 +4,9 @@ import { createSpreadsheetSchema, updateSpreadsheetSchema } from '@paradocs/shar
 import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
-import { assertSpreadsheetAccess, spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
+import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
+import { assertFolderAccess, assertMoveKeepsAccess, assertSpreadsheetAccess, roleSql, spreadsheetLevelSql } from '../lib/access.js';
+import { spreadsheetSummaryColumns } from '../lib/documentColumns.js';
 import { loadWorkbook, resolveInWorkbook, type Workbook } from '../lib/workbook.js';
 import { isValidSheetRef, sheetRefKey, type ResolvedSheetRef, type SheetRef } from '@paradocs/shared';
 
@@ -48,17 +50,19 @@ export async function resolveSheetRefs(userId: string, refs: SheetRef[]): Promis
 /**
  * Spreadsheets, as their own application.
  *
- * Deliberately a smaller surface than documents: no folders, no tags, no
- * comments. A spreadsheet is a grid with a name, and the content lives in the
- * Y.Doc that the collaboration server owns — so there is no body to PATCH here
- * and nothing that writes cells over REST.
+ * A smaller surface than documents: no tags and no comments. A spreadsheet is a
+ * grid with a name, filed in the Sheets app's own folders and locked the way a
+ * document is. The content lives in the Y.Doc that the collaboration server
+ * owns — so there is no body to PATCH here and nothing that writes cells over
+ * REST.
  */
 
-const SUMMARY = `s.id, s.workspace_id AS "workspaceId", s.title, s.icon,
-  s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.archived_at AS "archivedAt"`;
-
-async function fetchSheet(id: string) {
-  const { rows } = await query(`SELECT ${SUMMARY} FROM spreadsheets s WHERE s.id = $1`, [id]);
+/** A spreadsheet as `user` sees it. */
+async function fetchSheet(id: string, userId: string) {
+  const { rows } = await query(
+    `SELECT ${spreadsheetSummaryColumns('$2', roleSql('$2', 's.workspace_id'))} FROM spreadsheets s WHERE s.id = $1`,
+    [id, userId],
+  );
   if (!rows[0]) throw notFound('Spreadsheet not found');
   return rows[0];
 }
@@ -69,44 +73,55 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { archived?: string } }>(
     '/workspaces/:id/spreadsheets',
     async (req) => {
-      await assertWorkspaceAccess(req, req.params.id);
+      const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'sheets');
       const archived = req.query.archived === 'true';
+      // Only what the reader may see is listed.
       const { rows } = await query(
-        `SELECT ${SUMMARY}
+        `SELECT ${spreadsheetSummaryColumns('$3', '$4')}
            FROM spreadsheets s
           WHERE s.workspace_id = $1
             AND (s.archived_at IS NOT NULL) = $2
+            AND ${spreadsheetLevelSql('$3', '$4')} > 0
           ORDER BY s.updated_at DESC
           LIMIT 500`,
-        [req.params.id, archived],
+        [req.params.id, archived, req.user!.id, role],
       );
       return rows;
     },
   );
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/spreadsheets', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor');
+    await assertWorkspaceAccess(req, req.params.id, 'editor', 'sheets');
     const input = parse(createSpreadsheetSchema, req.body ?? {});
-    // Aliased so the shared column list, which is written against `s`, can be
-    // returned from the insert as well as selected everywhere else.
-    const { rows } = await query(
-      `INSERT INTO spreadsheets AS s (workspace_id, title, icon, created_by)
-       VALUES ($1, $2, $3, $4)
-       RETURNING ${SUMMARY}`,
-      [req.params.id, input.title || 'Untitled', input.icon ?? null, req.user!.id],
+    // Filing into a folder takes being allowed to change what is in it.
+    if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id, 'sheets');
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO spreadsheets (workspace_id, folder_id, title, icon, created_by)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [req.params.id, input.folderId ?? null, input.title || 'Untitled', input.icon ?? null, req.user!.id],
     );
     reply.status(201);
-    return rows[0];
+    return fetchSheet(rows[0].id, req.user!.id);
   });
 
   app.get<{ Params: { id: string } }>('/spreadsheets/:id', async (req) => {
     await assertSpreadsheetAccess(req, req.params.id);
-    return fetchSheet(req.params.id);
+    return fetchSheet(req.params.id, req.user!.id);
   });
 
   app.patch<{ Params: { id: string } }>('/spreadsheets/:id', async (req) => {
-    await assertSpreadsheetAccess(req, req.params.id, 'editor');
+    const { workspaceId, role } = await assertSpreadsheetAccess(req, req.params.id, 'edit');
     const input = parse(updateSpreadsheetSchema, req.body ?? {});
+
+    if (input.folderId !== undefined) {
+      if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', workspaceId, 'sheets');
+      const { rows: current } = await query<{ access: string; folder_id: string | null }>(
+        'SELECT access, folder_id FROM spreadsheets WHERE id = $1',
+        [req.params.id],
+      );
+      await assertMoveKeepsAccess(role, { access: current[0].access, folderId: current[0].folder_id }, input.folderId ?? null);
+    }
 
     await query(
       `UPDATE spreadsheets
@@ -117,7 +132,10 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
                 WHEN $5::boolean THEN COALESCE(archived_at, now())
                 ELSE NULL
               END,
-              updated_at = now()
+              folder_id = CASE WHEN $6::boolean THEN $7::uuid ELSE folder_id END,
+              -- Filing it somewhere is not an edit to the grid.
+              updated_at = CASE WHEN $2::text IS NULL AND NOT $3::boolean AND $5::boolean IS NULL
+                                THEN updated_at ELSE now() END
         WHERE id = $1`,
       [
         req.params.id,
@@ -125,13 +143,15 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
         input.icon !== undefined,
         input.icon ?? null,
         input.archived ?? null,
+        input.folderId !== undefined,
+        input.folderId ?? null,
       ],
     );
-    return fetchSheet(req.params.id);
+    return fetchSheet(req.params.id, req.user!.id);
   });
 
   app.delete<{ Params: { id: string } }>('/spreadsheets/:id', async (req, reply) => {
-    await assertSpreadsheetAccess(req, req.params.id, 'editor');
+    await assertSpreadsheetAccess(req, req.params.id, 'edit');
     await query('DELETE FROM spreadsheets WHERE id = $1', [req.params.id]);
     reply.status(204);
   });

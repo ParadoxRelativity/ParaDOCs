@@ -27,7 +27,8 @@ export type CanvasElementType =
   | 'frame'
   | 'connector'
   | 'sheetCell'
-  | 'sheetChart';
+  | 'sheetChart'
+  | 'workItem';
 
 export type ShapeKind = 'rectangle' | 'ellipse' | 'diamond' | 'triangle';
 
@@ -171,6 +172,14 @@ export interface SheetChartElement extends CanvasElementBase {
   label?: string;
 }
 
+/** A work item as a card: its key, title, status and who is on it, as they are now. */
+export interface WorkItemElement extends CanvasElementBase {
+  type: 'workItem';
+  itemId: string;
+  /** What it was called when placed, for when it cannot be looked up. */
+  label?: string;
+}
+
 export type CanvasElement =
   | NoteElement
   | TextElement
@@ -184,7 +193,8 @@ export type CanvasElement =
   | FrameElement
   | ConnectorElement
   | SheetCellElement
-  | SheetChartElement;
+  | SheetChartElement
+  | WorkItemElement;
 
 export const NOTE_COLORS = ['#fde68a', '#bbf7d0', '#bfdbfe', '#fbcfe8', '#e9d5ff', '#fed7aa'];
 
@@ -204,6 +214,7 @@ export const DEFAULT_SIZE: Record<CanvasElementType, { width: number; height: nu
   connector: { width: 0, height: 0 },
   sheetCell: { width: 220, height: 96 },
   sheetChart: { width: 440, height: 300 },
+  workItem: { width: 280, height: 120 },
 };
 
 /**
@@ -483,6 +494,9 @@ export function canvasSearchText(elements: CanvasElement[], names: Map<string, s
         break;
       case 'sheetChart':
         lines.push(sheetRefMarkdown({ kind: 'chart', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, chartId: el.chartId }, el.label ?? 'Chart'));
+        break;
+      case 'workItem':
+        if (el.label) lines.push(el.label);
         break;
     }
   }

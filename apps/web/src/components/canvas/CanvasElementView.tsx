@@ -11,6 +11,7 @@ import type { WorkspaceMember } from '@paradocs/shared';
 import { cx } from '../../lib/util';
 import EmbeddedDocument from './EmbeddedDocument';
 import { SheetCellCard, SheetChartCard } from '../sheet/SheetRefViews';
+import { WorkItemCard } from '../projects/WorkItemRefs';
 import {
   MentionPicker,
   applyMention,
@@ -135,6 +136,9 @@ export default function CanvasElementView({
           label={element.label}
         />
       );
+
+    case 'workItem':
+      return <WorkItemCard itemId={element.itemId} label={element.label} interactive={editing} />;
 
     case 'sheetChart':
       return (

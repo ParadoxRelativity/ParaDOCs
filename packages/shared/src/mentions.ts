@@ -46,6 +46,7 @@ export function mentionLabel(name: string): string {
 interface InlineNode {
   type?: string;
   href?: string;
+  props?: Record<string, unknown>;
   content?: unknown;
 }
 
@@ -55,13 +56,11 @@ interface BlockNode {
 }
 
 /**
- * Every person tagged in a document body, found by walking the blocks rather
- * than the derived markdown: markdown is lossy by design, and a tag inside a
- * table cell or a nested list has no reason to be missed.
+ * Visits every inline node in a document body — including those inside table
+ * cells, links and nested blocks — so each kind of reference can be found by
+ * walking the blocks rather than the derived markdown, which is lossy by design.
  */
-export function blockMentions(blocks: unknown): string[] {
-  const found = new Set<string>();
-
+export function walkInlineNodes(blocks: unknown, visit: (node: InlineNode) => void): void {
   const walkInline = (content: unknown): void => {
     if (!Array.isArray(content)) {
       // A table carries its rows in an object rather than an inline array.
@@ -72,10 +71,7 @@ export function blockMentions(blocks: unknown): string[] {
     for (const raw of content) {
       if (!raw || typeof raw !== 'object') continue;
       const node = raw as InlineNode;
-      if (node.type === 'link' && typeof node.href === 'string') {
-        const mention = parseMentionHref(node.href);
-        if (mention) found.add(mention.userId);
-      }
+      visit(node);
       if (node.content) walkInline(node.content);
     }
   };
@@ -91,11 +87,21 @@ export function blockMentions(blocks: unknown): string[] {
   };
 
   walkBlocks(blocks);
+}
+
+/** Every person tagged in a document body. */
+export function blockMentions(blocks: unknown): string[] {
+  const found = new Set<string>();
+  walkInlineNodes(blocks, (node) => {
+    if (node.type !== 'link' || typeof node.href !== 'string') return;
+    const mention = parseMentionHref(node.href);
+    if (mention) found.add(mention.userId);
+  });
   return [...found];
 }
 
 /** Every text field a canvas element can hold a tag in. */
-function textOf(element: CanvasElement): string[] {
+export function canvasTextOf(element: CanvasElement): string[] {
   switch (element.type) {
     case 'note':
     case 'text':
@@ -116,7 +122,7 @@ function textOf(element: CanvasElement): string[] {
 export function canvasMentions(elements: CanvasElement[]): string[] {
   const found = new Set<string>();
   for (const element of elements) {
-    for (const text of textOf(element)) {
+    for (const text of canvasTextOf(element)) {
       if (!text.includes('<@')) continue;
       for (const segment of parseMessage(text)) {
         if (segment.type === 'member') found.add(segment.id);

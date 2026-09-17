@@ -29,7 +29,7 @@ interface Props {
   myRole: Role;
 }
 
-/** Member list, team designations and invite management. Rendered in the People app. */
+/** Member list, team designations and invite management. Rendered in the Access app. */
 export default function MembersPanel({ workspaceId, myRole }: Props) {
   const canManage = myRole === 'owner' || myRole === 'admin';
   const members = useMembers(workspaceId);

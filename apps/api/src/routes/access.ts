@@ -17,19 +17,22 @@ import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
 /**
- * Teams, and the locks on folders, documents and channels.
+ * Teams, and the locks on folders, documents, spreadsheets, channels and projects.
  *
  * Anyone in a workspace can see its teams, since they are how access is
  * described. Changing a team or a lock is for owners and admins, who no lock
  * keeps out — so whatever they set up, they can always see and undo.
  */
 
-/** The three kinds of thing that can be locked, and where each keeps its setting. */
+/** The kinds of thing that can be locked, and where each keeps its setting. */
 const TARGETS = {
   folders: { table: 'folders', column: 'folder_id', parent: 'parent_id', label: 'Folder' },
   documents: { table: 'documents', column: 'document_id', parent: 'folder_id', label: 'Document' },
+  spreadsheets: { table: 'spreadsheets', column: 'spreadsheet_id', parent: 'folder_id', label: 'Spreadsheet' },
   // A channel has no folder, so nothing for it to inherit from.
   channels: { table: 'channels', column: 'channel_id', parent: null, label: 'Channel' },
+  // Nor does a project.
+  projects: { table: 'projects', column: 'project_id', parent: null, label: 'Project' },
 } as const;
 
 type TargetKind = keyof typeof TARGETS;
@@ -258,7 +261,7 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
       await assertWorkspaceAccess(req, target.workspaceId, 'admin');
       const input = parse(updateAccessSchema, req.body);
       const { table, column, parent } = TARGETS[kind];
-      if (!parent && input.access === 'inherit') throw badRequest('A channel has no folder to inherit from');
+      if (!parent && input.access === 'inherit') throw badRequest(`A ${TARGETS[kind].label.toLowerCase()} has no folder to inherit from`);
 
       const listed = input.access === 'allow' || input.access === 'deny' ? (input.entries ?? []) : [];
       await assertTeams(target.workspaceId, listed.flatMap((e) => (e.teamId ? [e.teamId] : [])));

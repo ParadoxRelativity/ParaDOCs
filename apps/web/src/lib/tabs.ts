@@ -21,7 +21,7 @@ import { randomId } from './util';
  * it survives walking off to read a document.
  */
 
-export type TabKind = 'page' | 'canvas' | 'sheet' | 'chat' | 'all' | 'people' | 'home';
+export type TabKind = 'page' | 'canvas' | 'sheet' | 'chat' | 'project' | 'all' | 'access' | 'home';
 
 export interface Tab {
   id: string;
@@ -51,16 +51,19 @@ const STORAGE_KEY = 'paradocs.tabs';
 
 const UUID = '[0-9a-fA-F-]{36}';
 const WORKSPACE_PATH = new RegExp(
-  `^/w/(${UUID})(?:/(d|c|s|all)(?:/(${UUID}))?|/(people)(?:/(?:members|teams))?)?/?$`,
+  `^/w/(${UUID})(?:/(d|c|s|all)(?:/(${UUID}))?|/(access|people)(?:/[a-z]+)?|/(p)(?:/${UUID}(?:/${UUID})?)?)?/?$`,
 );
 
 /** What a path is, as far as a tab is concerned. Null for anything not tabbable. */
 export function describePath(path: string): { workspaceId: string; kind: TabKind } | null {
   const match = WORKSPACE_PATH.exec(path.split('?')[0]);
   if (!match) return null;
-  const [, workspaceId, section, , people] = match;
-  // The People app names its pages rather than numbering them.
-  if (people) return { workspaceId, kind: 'people' };
+  const [, workspaceId, section, , access, projects] = match;
+  // Projects, with a project and perhaps one of its items open.
+  if (projects) return { workspaceId, kind: 'project' };
+  // The Access app names its pages rather than numbering them. It was once
+  // called People, and a tab saved then still opens it.
+  if (access) return { workspaceId, kind: 'access' };
   if (section === 'd') return { workspaceId, kind: 'page' };
   if (section === 'c') return { workspaceId, kind: 'chat' };
   // Spreadsheets are their own app, under their own letter.
@@ -78,7 +81,13 @@ function load(): State {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<State>) : null;
-    const tabs = Array.isArray(parsed?.tabs) ? parsed!.tabs.filter(isTab).slice(0, MAX_TABS) : [];
+    const tabs = Array.isArray(parsed?.tabs)
+      ? parsed!.tabs
+          .filter(isTab)
+          .slice(0, MAX_TABS)
+          // A tab saved while Access was called People takes the new name.
+          .map((tab) => (describePath(tab.path)?.kind === 'access' ? { ...tab, kind: 'access' as const } : tab))
+      : [];
     const activeId = tabs.some((t) => t.id === parsed?.activeId) ? parsed!.activeId! : (tabs[0]?.id ?? null);
     return { tabs, activeId };
   } catch {

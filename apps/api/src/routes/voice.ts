@@ -147,7 +147,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
    * simply empty.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/voice/participants', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id);
+    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'chat');
     const occupancy: Record<string, VoiceOccupant[]> = {};
     if (!voiceEnabled()) return occupancy;
 

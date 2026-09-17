@@ -18,8 +18,9 @@ const KIND_ICON: Record<TabKind, IconName> = {
   canvas: 'easel',
   sheet: 'table',
   chat: 'chat-dots',
+  project: 'kanban',
   all: 'collection',
-  people: 'people',
+  access: 'shield-lock',
   home: 'house',
 };
 
@@ -28,8 +29,9 @@ const KIND_FALLBACK: Record<TabKind, string> = {
   canvas: 'Canvas',
   sheet: 'Spreadsheet',
   chat: 'Chat',
+  project: 'Projects',
   all: 'All documents',
-  people: 'People',
+  access: 'Access',
   home: 'Workspace',
 };
 

@@ -4,7 +4,9 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { forbidden, notFound, unauthorized } from '../lib/http.js';
 import { uploadUrlSql } from '../lib/storage.js';
+import type { WorkspaceApp } from '@paradocs/shared';
 import { documentAccess } from '../lib/access.js';
+import { assertAppEnabled } from '../lib/apps.js';
 
 export const SESSION_COOKIE = 'paradocs_session';
 
@@ -81,17 +83,20 @@ export async function workspaceRole(userId: string, workspaceId: string): Promis
 }
 
 /**
- * Confirms membership and, when given, a minimum role. Non-members get 404
- * rather than 403 so workspace ids stay unguessable.
+ * Confirms membership and, when given, a minimum role and an app the workspace
+ * must have turned on. Non-members get 404 rather than 403 so workspace ids
+ * stay unguessable.
  */
 export async function assertWorkspaceAccess(
   req: FastifyRequest,
   workspaceId: string,
   minimum: Role = 'viewer',
+  app?: WorkspaceApp,
 ): Promise<Role> {
   if (!req.user) throw unauthorized();
   const role = await workspaceRole(req.user.id, workspaceId);
   if (!role) throw notFound('Workspace not found');
+  if (app) await assertAppEnabled(workspaceId, app);
   if (!roleAtLeast(role, minimum)) {
     throw forbidden(`This action requires the ${minimum} role or higher`);
   }

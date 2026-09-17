@@ -233,6 +233,7 @@ export default function PopoutWindow({ user }: { user: User }) {
         onTyping={chatEvents.sendTyping}
         onOpenDocument={(id) => showInMain(`/w/${workspaceId}/d/${id}`)}
         onOpenSpreadsheet={(id) => showInMain(`/w/${workspaceId}/s/${id}`)}
+        onOpenWorkItem={(item) => showInMain(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
         onOpenChannel={(id) => showInMain(`/w/${workspaceId}/c/${id}`)}
       />
     </div>

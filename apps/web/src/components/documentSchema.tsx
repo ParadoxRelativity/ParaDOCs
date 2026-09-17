@@ -1,12 +1,13 @@
 import { BlockNoteSchema, createCodeBlockSpec, defaultBlockSpecs, defaultInlineContentSpecs } from '@blocknote/core';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { createReactBlockSpec, createReactInlineContentSpec } from '@blocknote/react';
-import { SHEET_CELL_INLINE, SHEET_CHART_BLOCK } from '@paradocs/shared';
+import { SHEET_CELL_INLINE, SHEET_CHART_BLOCK, WORK_ITEM_INLINE } from '@paradocs/shared';
 import { SheetCellChip, SheetChartCard, SheetChartTable } from './sheet/SheetRefViews';
+import { WorkItemInlineChip } from './projects/WorkItemRefs';
 
 /**
  * The document editor's schema: BlockNote's own blocks, plus references to
- * spreadsheet cells and charts. The server registers the same types under the
+ * spreadsheet cells and charts, and to work items. The server registers the same types under the
  * same names (apps/api/src/collab/documentSchema.ts) so that saving a document
  * keeps them.
  *
@@ -24,6 +25,12 @@ const sheetChart = createReactBlockSpec(SHEET_CHART_BLOCK, {
   toExternalHTML: ({ block }) => <SheetChartTable {...block.props} />,
 });
 
+// A work item reads as its key and title, with its status as it is now.
+const workItem = createReactInlineContentSpec(WORK_ITEM_INLINE, {
+  render: ({ inlineContent }) => <WorkItemInlineChip {...inlineContent.props} />,
+  toExternalHTML: ({ inlineContent }) => <span>{inlineContent.props.label}</span>,
+});
+
 export const documentSchema = BlockNoteSchema.create({
   blockSpecs: {
     ...defaultBlockSpecs,
@@ -32,7 +39,7 @@ export const documentSchema = BlockNoteSchema.create({
     codeBlock: createCodeBlockSpec(codeBlockOptions),
     sheetChart: sheetChart(),
   },
-  inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell },
+  inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell, workItem },
 });
 
 export type DocumentBlockEditor = typeof documentSchema.BlockNoteEditor;

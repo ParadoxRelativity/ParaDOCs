@@ -1,11 +1,12 @@
-import { parseMessage, type MessageReferences } from '@paradocs/shared';
+import { parseMessage, type MessageReferences, type WorkItemReference } from '@paradocs/shared';
 import { emojiOnly } from '../../lib/emoji';
 import { cx } from '../../lib/util';
-import { DocumentIcon, SpreadsheetIcon } from '../Icon';
+import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
 
 /**
- * Renders a message body, turning `<doc:…>`, `<sheet:…>` and `<#…>` tokens
- * into links, and `<@…>` and `<!here>` into mentions.
+ * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>` and `<#…>`
+ * tokens into links, and `<@…>` and `<!here>` into mentions. Work item
+ * descriptions and comments are written the same way and drawn with this too.
  *
  * References are resolved from the page's reference table rather than baked
  * into the text, so renaming a document updates every message that mentions it.
@@ -21,6 +22,7 @@ export function MessageBody({
   onOpenDocument,
   onOpenSpreadsheet,
   onOpenChannel,
+  onOpenWorkItem,
 }: {
   body: string;
   references: MessageReferences;
@@ -29,11 +31,14 @@ export function MessageBody({
   onOpenDocument: (id: string) => void;
   onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
+  /** Where a work item opens. Without it, one is shown but not clickable. */
+  onOpenWorkItem?: (item: WorkItemReference) => void;
 }) {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
+  const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
   // A message that is just a few emoji is shown large.
   const emojiCount = emojiOnly(body);
   const jumbo = emojiCount > 0 && emojiCount <= 6;
@@ -74,6 +79,12 @@ export function MessageBody({
               <SpreadsheetIcon sheet={sheet} /> {sheet.title || 'Untitled'}
             </Chip>
           );
+        }
+
+        if (segment.type === 'workItem') {
+          const item = workItems.get(segment.id);
+          if (!item) return <UnknownRef key={index} label="unknown work item" />;
+          return <WorkItemChip key={index} item={item} onClick={onOpenWorkItem && (() => onOpenWorkItem(item))} />;
         }
 
         if (segment.type === 'channel') {
@@ -121,6 +132,30 @@ function Chip({ children, onClick }: { children: React.ReactNode; onClick: () =>
       )}
     >
       {children}
+    </button>
+  );
+}
+
+/** A work item, with its status's colour so whether it is done reads at a glance. */
+export function WorkItemChip({ item, onClick }: { item: WorkItemReference; onClick?: () => void }) {
+  const done = item.statusCategory === 'done';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title={`${item.key} · ${item.statusName}`}
+      className={cx(
+        'mx-0.5 inline-flex max-w-full items-baseline gap-1 rounded px-1.5 py-0.5 align-baseline text-[13px] font-medium',
+        'bg-[var(--color-accent)]/15 text-[var(--color-accent)] enabled:hover:bg-[var(--color-accent)]/25',
+      )}
+    >
+      <Icon
+        name={done ? 'check-circle-fill' : item.statusCategory === 'active' ? 'circle-half' : 'circle'}
+        className="self-center text-[10px]"
+      />
+      <span className={cx('shrink-0', done && 'line-through opacity-70')}>{item.key}</span>
+      <span className="truncate">{item.title}</span>
     </button>
   );
 }

@@ -161,14 +161,14 @@ export const directRoutes: FastifyPluginAsync = async (app) => {
 
   /** The signed-in person's direct conversations in a workspace, most recent first. */
   app.get<{ Params: { id: string } }>('/workspaces/:id/direct', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
+    await assertWorkspaceAccess(req, req.params.id, 'viewer', 'chat');
     return listDirect(req.params.id, req.user!.id, null);
   });
 
   /** Opens the conversation with one or more other members, starting it if there is none yet. */
   app.post<{ Params: { id: string } }>('/workspaces/:id/direct', async (req) => {
     const workspaceId = req.params.id;
-    await assertWorkspaceAccess(req, workspaceId);
+    await assertWorkspaceAccess(req, workspaceId, 'viewer', 'chat');
     const input = parse(openDirectSchema, req.body);
     const self = req.user!.id;
     const others = [...new Set((input.userIds ?? [input.userId!]).map((id) => id.toLowerCase()))].filter(

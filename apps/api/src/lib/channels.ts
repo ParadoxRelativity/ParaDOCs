@@ -3,6 +3,7 @@ import { query } from '../db/pool.js';
 import type { Role } from '../plugins/session.js';
 import { publishToChannel, publishToUser } from '../chat/hub.js';
 import { UUID, channelLevelSql, type Level } from './access.js';
+import { appEnabledSql } from './apps.js';
 
 export { UUID };
 
@@ -29,7 +30,8 @@ export interface ChannelAccess {
 /**
  * What a person may do with a channel, or null when they may not see it at
  * all: it does not exist, they are not in its workspace, it is locked away from
- * them, or it is a direct conversation they are not part of. Those cases are
+ * them, it is a direct conversation they are not part of, or the workspace has
+ * Chat turned off. Those cases are
  * deliberately indistinguishable, so a conversation's id reveals nothing to an
  * outsider.
  */
@@ -51,7 +53,7 @@ export async function channelAccessFor(userId: string, channelId: string): Promi
             END AS level
        FROM channels c
        LEFT JOIN workspace_members m ON m.workspace_id = c.workspace_id AND m.user_id = $2
-      WHERE c.id = $1`,
+      WHERE c.id = $1 AND ${appEnabledSql('c.workspace_id', 'chat')}`,
     [channelId, userId],
   );
   const row = rows[0];

@@ -1,39 +1,26 @@
 import { useState } from 'react';
 import type { User } from '@paradocs/shared';
-import {
-  useChangePassword,
-  useDeleteWorkspace,
-  useSetAvatar,
-  useSetWorkspaceAvatar,
-  useUpdateProfile,
-  useUpdateWorkspace,
-  useVoiceConfig,
-  type WorkspaceSummary,
-} from '../api/hooks';
+import { useChangePassword, useSetAvatar, useUpdateProfile, useVoiceConfig } from '../api/hooks';
 import { squareImage } from '../lib/images';
 import { cx } from '../lib/util';
 import Avatar from './Avatar';
-import { ConfirmDialog, Modal } from './Modal';
+import { Modal } from './Modal';
 import { FIELD, PictureField, Section } from './SettingsParts';
 import { AwayAfterSelect, StatusChoices, useStatusControls } from './Presence';
 import { useToast } from './Toast';
 import { Button } from './ui';
 import Icon, { type IconName } from './Icon';
-import UploadsPanel from './UploadsPanel';
 import VoiceSettings from './VoiceSettings';
 import { desktop } from '../lib/desktop';
 import type { Theme } from '../lib/theme';
 import { useCallLayout, type CallLayout } from '../lib/callLayout';
 import { useOpenBehaviour, type OpenBehaviour } from '../lib/openBehaviour';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
-import WorkspaceIcon from './WorkspaceIcon';
 
 export const SETTINGS_SECTIONS = [
   'account',
   'appearance',
   'voice',
-  'workspace',
-  'uploads',
   'servers',
   'updates',
 ] as const;
@@ -48,17 +35,18 @@ interface Props {
   section: SettingsSection;
   onSectionChange: (section: SettingsSection) => void;
   user: User;
-  workspace: WorkspaceSummary;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
   onClose: () => void;
-  onWorkspaceDeleted: () => void;
-  onOpenDocument: (documentId: string) => void;
 }
 
+/**
+ * Your own settings: the account, how the app looks and sounds, and on the
+ * desktop the servers and updates. What belongs to a workspace — its name,
+ * apps, members and uploads — is in that workspace's Access app instead.
+ */
 export default function SettingsDialog(props: Props) {
-  const { section, onSectionChange, workspace } = props;
-  const canManageWorkspace = workspace.role === 'owner' || workspace.role === 'admin';
+  const { section, onSectionChange } = props;
   // Device settings are only worth showing on a server that can hold a call.
   const voiceEnabled = useVoiceConfig().data?.enabled ?? false;
 
@@ -66,10 +54,7 @@ export default function SettingsDialog(props: Props) {
     { id: 'account', label: 'Account', icon: 'person' },
     { id: 'appearance', label: 'Appearance', icon: 'palette' },
     ...(voiceEnabled ? [{ id: 'voice' as const, label: 'Voice & video', icon: 'headset' as const }] : []),
-    { id: 'workspace', label: 'Workspace', icon: 'briefcase' },
-    // Members and teams are managed in the People app, not here.
-    // Storage housekeeping is an admin job, so the section is hidden otherwise.
-    ...(canManageWorkspace ? [{ id: 'uploads' as const, label: 'Uploads', icon: 'paperclip' as const }] : []),
+    // The workspace's own settings are in the Access app, not here.
     // The desktop app's own settings, which mean nothing in a browser.
     ...(desktop
       ? [
@@ -119,21 +104,6 @@ export default function SettingsDialog(props: Props) {
             />
           )}
           {section === 'voice' && <VoiceSettings />}
-          {section === 'workspace' && (
-            <WorkspaceSection
-              workspace={workspace}
-              canManage={canManageWorkspace}
-              onDeleted={props.onWorkspaceDeleted}
-            />
-          )}
-          {section === 'uploads' &&
-            (canManageWorkspace ? (
-              <UploadsPanel workspaceId={workspace.id} onOpenDocument={props.onOpenDocument} />
-            ) : (
-              <p className="text-xs text-[var(--color-muted)]">
-                Only an owner or admin can manage uploads.
-              </p>
-            ))}
           {desktop && section === 'servers' && <ServersSection />}
           {desktop && section === 'updates' && <UpdatesSection />}
         </div>
@@ -406,160 +376,3 @@ function AppearanceSection({
     </>
   );
 }
-
-function WorkspaceSection({
-  workspace,
-  canManage,
-  onDeleted,
-}: {
-  workspace: WorkspaceSummary;
-  canManage: boolean;
-  onDeleted: () => void;
-}) {
-  const updateWorkspace = useUpdateWorkspace(workspace.id);
-  const deleteWorkspace = useDeleteWorkspace();
-  const setPicture = useSetWorkspaceAvatar(workspace.id);
-  const toast = useToast();
-
-  const [name, setName] = useState(workspace.name);
-  const [icon, setIcon] = useState(workspace.icon ?? '');
-  const [confirming, setConfirming] = useState(false);
-
-  const dirty = name.trim() !== workspace.name || icon.trim() !== (workspace.icon ?? '');
-
-  async function savePicture(file: File | null) {
-    try {
-      await setPicture.mutateAsync(file ? await squareImage(file) : null);
-      toast(file ? 'Workspace picture updated' : 'Workspace picture removed');
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not update the workspace picture', 'error');
-    }
-  }
-
-  function save(e: React.FormEvent) {
-    e.preventDefault();
-    updateWorkspace.mutate(
-      { name: name.trim(), icon: icon.trim() || null },
-      {
-        onSuccess: () => toast('Workspace updated'),
-        onError: (err) =>
-          toast(err instanceof Error ? err.message : 'Could not update workspace', 'error'),
-      },
-    );
-  }
-
-  return (
-    <>
-      <Section
-        title="Workspace"
-        hint={canManage ? undefined : 'Only an owner or admin can change these.'}
-      >
-        <div className="mb-3">
-          <PictureField
-            preview={
-              <WorkspaceIcon
-                name={name || workspace.name}
-                icon={icon.trim() || null}
-                avatarUrl={workspace.avatarUrl}
-                size="lg"
-              />
-            }
-            hasPicture={Boolean(workspace.avatarUrl)}
-            pending={setPicture.isPending}
-            disabled={!canManage}
-            onPick={(file) => void savePicture(file)}
-            onRemove={() => void savePicture(null)}
-          />
-        </div>
-        <form onSubmit={save} className="space-y-2">
-          <div className="flex gap-2">
-            <label className="block w-16">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Icon</span>
-              <input
-                className={cx(FIELD, 'text-center')}
-                value={icon}
-                maxLength={2}
-                disabled={!canManage}
-                onChange={(e) => setIcon(e.target.value)}
-                placeholder="—"
-                aria-label="Workspace icon (optional)"
-              />
-            </label>
-            <label className="block min-w-0 flex-1">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Name</span>
-              <input
-                className={FIELD}
-                value={name}
-                disabled={!canManage}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-            </label>
-          </div>
-          {canManage && (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="primary"
-                type="submit"
-                className="text-xs"
-                disabled={!dirty || updateWorkspace.isPending}
-              >
-                {updateWorkspace.isPending ? 'Saving…' : 'Save workspace'}
-              </Button>
-              {icon.trim() && (
-                <Button variant="ghost" type="button" className="text-xs" onClick={() => setIcon('')}>
-                  Remove icon
-                </Button>
-              )}
-            </div>
-          )}
-        </form>
-      </Section>
-
-      <Section title="Details">
-        <dl className="space-y-1 text-xs">
-          <Row label="Your role" value={workspace.role} />
-          <Row label="Documents" value={String(workspace.documentCount)} />
-          <Row label="Members" value={String(workspace.memberCount)} />
-          <Row label="Slug" value={workspace.slug} />
-        </dl>
-      </Section>
-
-      {/* Deleting is owner-only, and the API refuses your last workspace. */}
-      {workspace.role === 'owner' && (
-        <Section title="Danger zone">
-          <Button variant="danger" className="text-xs" onClick={() => setConfirming(true)}>
-            Delete this workspace
-          </Button>
-        </Section>
-      )}
-
-      {confirming && (
-        <ConfirmDialog
-          title={`Delete "${workspace.name}"?`}
-          description={`This permanently removes ${workspace.documentCount} document(s), every folder and tag, and revokes access for all ${workspace.memberCount} member(s). It cannot be undone.`}
-          confirmLabel="Delete workspace"
-          onCancel={() => setConfirming(false)}
-          onConfirm={() => {
-            setConfirming(false);
-            deleteWorkspace.mutate(workspace.id, {
-              onSuccess: () => {
-                toast(`Deleted "${workspace.name}"`);
-                onDeleted();
-              },
-              onError: (err) =>
-                toast(err instanceof Error ? err.message : 'Could not delete workspace', 'error'),
-            });
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-const Row = ({ label, value }: { label: string; value: string }) => (
-  <div className="flex justify-between gap-2">
-    <dt className="text-[var(--color-muted)]">{label}</dt>
-    <dd className="truncate">{value}</dd>
-  </div>
-);

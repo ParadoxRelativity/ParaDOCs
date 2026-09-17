@@ -36,10 +36,23 @@ export const createWorkspaceSchema = z.object({
   icon: z.string().max(16).nullish(),
 });
 
-export const updateWorkspaceSchema = createWorkspaceSchema.partial();
+export const workspaceAppSchema = z.enum(['docs', 'sheets', 'chat', 'projects']);
+
+export const updateWorkspaceSchema = createWorkspaceSchema.partial().extend({
+  /** The apps to have on. Anything left out is turned off; Access always stays on. */
+  apps: z
+    .array(workspaceAppSchema)
+    .min(1, 'Keep at least one app turned on')
+    .max(4)
+    .optional(),
+});
+
+export const folderAppSchema = z.enum(['docs', 'sheets']);
 
 export const createFolderSchema = z.object({
   name: z.string().min(1).max(120),
+  /** Which tree the folder goes in. Documents, unless it says otherwise. */
+  app: folderAppSchema.default('docs'),
   icon: z.string().max(16).nullish(),
   parentId: uuid.nullish(),
   position: z.number().int().nullish(),
@@ -200,10 +213,14 @@ export type UpdateAccessInput = z.infer<typeof updateAccessSchema>;
 export const createSpreadsheetSchema = z.object({
   title: z.string().trim().max(200).optional(),
   icon: z.string().trim().max(8).nullish(),
+  /** A spreadsheets folder to file it in. */
+  folderId: uuid.nullish(),
 });
 
 export const updateSpreadsheetSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   icon: z.string().trim().max(8).nullish(),
   archived: z.boolean().optional(),
+  /** Pass null to take it out of its folder; omit to leave it where it is. */
+  folderId: uuid.nullish(),
 });

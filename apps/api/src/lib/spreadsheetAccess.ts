@@ -1,44 +1,16 @@
-import type { FastifyRequest } from 'fastify';
 import type { Role } from '@paradocs/shared';
-import { query } from '../db/pool.js';
-import { notFound, unauthorized } from './http.js';
-import { assertWorkspaceAccess, roleAtLeast, workspaceRole } from '../plugins/session.js';
+import { spreadsheetAccess } from './access.js';
 
 /**
- * Who may open a spreadsheet: the same question documents answer, asked of a
- * different table. Permissions belong to the workspace, so a spreadsheet has no
- * sharing model of its own to get out of step with the rest of the app.
+ * Who may open a spreadsheet, without a request, for the collaboration
+ * handshake and for resolving references. The same rules as a document: the
+ * workspace role, then any lock on the spreadsheet or the folders above it.
+ * Routes use `assertSpreadsheetAccess` in access.ts.
  */
-export async function assertSpreadsheetAccess(
-  req: FastifyRequest,
-  spreadsheetId: string,
-  minimum: Role = 'viewer',
-): Promise<{ workspaceId: string; role: Role }> {
-  if (!req.user) throw unauthorized();
-  const workspaceId = await workspaceOf(spreadsheetId);
-  if (!workspaceId) throw notFound('Spreadsheet not found');
-  const role = await assertWorkspaceAccess(req, workspaceId, minimum);
-  return { workspaceId, role };
-}
-
-/** The same check without a request, for the collaboration handshake. */
 export async function spreadsheetAccessForUser(
   userId: string,
   spreadsheetId: string,
 ): Promise<{ workspaceId: string; role: Role; canEdit: boolean } | null> {
-  const workspaceId = await workspaceOf(spreadsheetId);
-  if (!workspaceId) return null;
-  const role = await workspaceRole(userId, workspaceId);
-  return role ? { workspaceId, role, canEdit: roleAtLeast(role, 'editor') } : null;
-}
-
-async function workspaceOf(spreadsheetId: string): Promise<string | null> {
-  // A malformed id would make Postgres raise on the uuid cast rather than
-  // simply not match, which would surface as a 500 instead of a 404.
-  if (!/^[0-9a-fA-F-]{36}$/.test(spreadsheetId)) return null;
-  const { rows } = await query<{ workspace_id: string }>(
-    'SELECT workspace_id FROM spreadsheets WHERE id = $1',
-    [spreadsheetId],
-  );
-  return rows[0]?.workspace_id ?? null;
+  const access = await spreadsheetAccess(userId, spreadsheetId);
+  return access ? { workspaceId: access.workspaceId, role: access.role, canEdit: access.level === 2 } : null;
 }
