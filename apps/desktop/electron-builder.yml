@@ -51,8 +51,12 @@ mac:
   gatekeeperAssess: false
   # Electron 39 and later require this for desktopCapturer, which the screen
   # share picker uses, even though system audio is only captured on Windows.
+  # The microphone and camera descriptions are what macOS shows in its prompt;
+  # without them access is refused silently, alongside the device entitlements.
   extendInfo:
     NSAudioCaptureUsageDescription: ParaDOCs shares your screen in calls when you choose to.
+    NSMicrophoneUsageDescription: ParaDOCs uses the microphone in voice channels.
+    NSCameraUsageDescription: ParaDOCs uses the camera in voice channels when you turn video on.
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}

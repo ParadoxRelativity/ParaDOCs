@@ -130,8 +130,8 @@ export default function ProjectBoard({
     if (!statusId) return;
     const column = byCell.get(cell.key) ?? [];
     const original = column.findIndex((item) => item.id === itemId);
-    // Dropped back where it already was.
-    if (original !== -1 && (original === index || original === index - 1)) return;
+    // Dropped back where it already was, as what it already was.
+    if (statusId === current.statusId && original !== -1 && (original === index || original === index - 1)) return;
     const others = column.filter((item) => item.id !== itemId);
     const target = original !== -1 && index > original ? index - 1 : index;
     const position = positionBetween(others[target - 1]?.position, others[target]?.position);
@@ -427,14 +427,15 @@ function CellHeading({ cell }: { cell: BoardCellView }) {
 const VEIL = 'color-mix(in srgb, var(--color-canvas) 88%, transparent)';
 
 /**
- * One box per status a merged column is offering the card in the air, drawn
- * over its cards while the drag is in flight. The card takes the status of
- * whichever box it is dropped in, so a workflow that allows two of the merged
- * statuses is answered by where the card is let go rather than guessed at.
+ * One box per status a column is offering the card in the air, drawn over its
+ * cards while the drag is in flight, so every drop shows the status it makes.
+ * The card takes the status of whichever box it is dropped in, so a workflow
+ * that allows two of a merged column's statuses is answered by where the card
+ * is let go rather than guessed at.
  *
- * The boxes stand side by side rather than stacked so the two things a drop
- * says stay on separate axes: across picks the status, down still picks the
- * place in the column, and a card can be reordered and reclassified at once.
+ * The boxes stack, so each spans the column's width. Down picks the status,
+ * and where the pointer sits within a box, as a fraction of its height, picks
+ * the place in the column: each box stands for the whole column in miniature.
  */
 function StatusBoxes({
   statuses,
@@ -445,11 +446,16 @@ function StatusBoxes({
   statuses: ProjectStatus[];
   /** The one the pointer is over, which is drawn as the one that would be taken. */
   active: string | null;
-  onOver: (statusId: string, clientY: number) => void;
-  onDrop: (statusId: string, clientY: number, itemId: string) => void;
+  /** `fraction` is how far down the box the pointer is, from 0 to 1. */
+  onOver: (statusId: string, fraction: number) => void;
+  onDrop: (statusId: string, fraction: number, itemId: string) => void;
 }) {
+  const fractionOf = (e: DragEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return rect.height > 0 ? Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)) : 1;
+  };
   return (
-    <div className="absolute inset-0 z-10 flex gap-1 p-1">
+    <div className="absolute inset-0 z-10 flex flex-col gap-1 p-1">
       {statuses.map((status) => {
         const chosen = active === status.id;
         return (
@@ -458,17 +464,17 @@ function StatusBoxes({
             onDragOver={(e) => {
               if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
               e.preventDefault();
-              onOver(status.id, e.clientY);
+              onOver(status.id, fractionOf(e));
             }}
             onDrop={(e) => {
               const id = e.dataTransfer.getData(DRAG_TYPE);
               if (!id) return;
               e.preventDefault();
               e.stopPropagation();
-              onDrop(status.id, e.clientY, id);
+              onDrop(status.id, fractionOf(e), id);
             }}
             className={cx(
-              'flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg border-2 border-dashed pt-2 transition-colors',
+              'flex min-h-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed transition-colors',
               chosen ? 'border-solid' : 'border-[var(--color-line)]',
             )}
             // Veiled rather than opaque: enough to read the label over whatever
@@ -558,10 +564,11 @@ function Column({
   const list = useRef<HTMLDivElement>(null);
 
   /**
-   * Whether the drop has to ask which status. A column offering exactly one
-   * needs no asking, and that is every unmerged column and most merged ones.
+   * Whether the status boxes are up: over every column that takes the card in
+   * the air, one box when there is only one status to land in and one per
+   * status when a merged column has to ask which.
    */
-  const asking = dragging !== null && takesDrop && offered.length > 1;
+  const boxed = canEdit && dragging !== null && takesDrop && offered.length > 0;
   const landing = offered.length === 1 ? offered[0] : undefined;
 
   // Above the drop boxes, which are drawn over the cards: where the card lands
@@ -569,11 +576,16 @@ function Column({
   const indicator = <div className="relative z-20 h-0.5 rounded-full bg-[var(--color-accent)]" />;
 
   /**
-   * Which gap in the column the pointer is in, counted the way the cards are
-   * drawn. The boxes cover the cards, so the cards' own handlers cannot say.
+   * Which gap in the column a box's pointer stands for, counted the way the
+   * cards are drawn: `fraction` of the way down the box is taken as that far
+   * down the visible column. The boxes cover the cards, so the cards' own
+   * handlers cannot say.
    */
-  function indexAt(clientY: number): number {
-    const cards = [...(list.current?.querySelectorAll('[data-card]') ?? [])];
+  function indexAt(fraction: number): number {
+    if (!list.current) return items.length;
+    const view = list.current.getBoundingClientRect();
+    const clientY = view.top + fraction * view.height;
+    const cards = [...list.current.querySelectorAll('[data-card]')];
     const found = cards.findIndex((card) => {
       const rect = card.getBoundingClientRect();
       return clientY < rect.top + rect.height / 2;
@@ -640,8 +652,8 @@ function Column({
         // Not preventing the default is what refuses the drop.
         if (!canEdit || !takesDrop || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
         e.preventDefault();
-        // The boxes take the drop when the column is asking which status.
-        if (asking) return;
+        // The boxes take the drop while they are up.
+        if (boxed) return;
         // Over the column but past its cards: the end of it.
         if ((e.target as HTMLElement).closest('[data-card]') === null) onDragOverIndex(items.length, null);
       }}
@@ -654,87 +666,90 @@ function Column({
     >
       {heading}
 
-      <div ref={list} className="scroll-thin relative min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 pb-2 pt-1">
-        {asking && (
+      {/* The boxes sit outside the scrolling list so they cover what is in view. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={list} className="scroll-thin min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 pb-2 pt-1">
+          {items.map((item, index) => {
+            const holders = primaryRole ? (item.roles[primaryRole.id] ?? []) : [];
+            const holderNames = primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : [];
+            const status = cell.statuses.find((s) => s.id === item.statusId) ?? cell.statuses[0];
+            const overdue = isOverdue(item.dueDate, status.category === 'done');
+            return (
+              <div key={item.id}>
+                {dropIndex === index && dragging !== item.id && indicator}
+                <button
+                  data-card
+                  draggable={canEdit}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(DRAG_TYPE, item.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    onDragStart(item.id);
+                  }}
+                  onDragEnd={onDragEnd}
+                  onDragOver={(e) => {
+                    if (!canEdit || !takesDrop || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+                    e.preventDefault();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    onDragOverIndex(e.clientY < rect.top + rect.height / 2 ? index : index + 1, null);
+                  }}
+                  onClick={() => onOpenItem(item.id)}
+                  className={cx(
+                    'mt-1.5 block w-full rounded-lg border bg-[var(--color-raised)] p-2.5 text-left shadow-sm transition-colors',
+                    item.id === activeItemId
+                      ? 'border-[var(--color-accent)]'
+                      : 'border-transparent hover:border-[var(--color-line)]',
+                    dragging === item.id && 'opacity-40',
+                  )}
+                >
+                  <p className={cx('text-sm leading-snug', status.category === 'done' && 'text-[var(--color-muted)] line-through')}>
+                    {item.title}
+                  </p>
+                  <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+                    <TypeIcon type={item.type} />
+                    <span>{item.key}</span>
+                    {/* A merged column holds work from several statuses, so each card says which. */}
+                    {cell.merged && (
+                      <span className="flex items-center gap-0.5" title={status.name}>
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: status.color }} />
+                        <span className="max-w-[5rem] truncate">{status.name}</span>
+                      </span>
+                    )}
+                    {item.priority !== 'none' && <PriorityIcon priority={item.priority} />}
+                    {item.dueDate && (
+                      <span className={cx('flex items-center gap-0.5', overdue && 'text-red-500')}>
+                        <Icon name="calendar-event" className="text-[10px]" />
+                        {formatDue(item.dueDate)}
+                      </span>
+                    )}
+                    {item.commentCount > 0 && (
+                      <span className="flex items-center gap-0.5">
+                        <Icon name="chat-left-text" className="text-[10px]" />
+                        {item.commentCount}
+                      </span>
+                    )}
+                    <span className="flex-1" />
+                    {item.estimate !== null && (
+                      <span className="rounded bg-[var(--color-surface)] px-1 tabular-nums" title="Estimate">
+                        {item.estimate}
+                      </span>
+                    )}
+                    <PeopleStack userIds={holders} names={holderNames} members={memberMap} max={2} size="xs" />
+                  </div>
+                </button>
+              </div>
+            );
+          })}
+          {dropIndex === items.length && indicator}
+          {items.length === 0 && <p className="px-2 py-4 text-center text-xs text-[var(--color-muted)]">Nothing here</p>}
+        </div>
+        {boxed && (
           <StatusBoxes
             statuses={offered}
             active={dropStatusId}
-            onOver={(statusId, clientY) => onDragOverIndex(indexAt(clientY), statusId)}
-            onDrop={(statusId, clientY, itemId) => onDropAt(indexAt(clientY), itemId, statusId)}
+            onOver={(statusId, fraction) => onDragOverIndex(indexAt(fraction), statusId)}
+            onDrop={(statusId, fraction, itemId) => onDropAt(indexAt(fraction), itemId, statusId)}
           />
         )}
-        {items.map((item, index) => {
-          const holders = primaryRole ? (item.roles[primaryRole.id] ?? []) : [];
-          const holderNames = primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : [];
-          const status = cell.statuses.find((s) => s.id === item.statusId) ?? cell.statuses[0];
-          const overdue = isOverdue(item.dueDate, status.category === 'done');
-          return (
-            <div key={item.id}>
-              {dropIndex === index && dragging !== item.id && indicator}
-              <button
-                data-card
-                draggable={canEdit}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData(DRAG_TYPE, item.id);
-                  e.dataTransfer.effectAllowed = 'move';
-                  onDragStart(item.id);
-                }}
-                onDragEnd={onDragEnd}
-                onDragOver={(e) => {
-                  if (!canEdit || !takesDrop || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
-                  e.preventDefault();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  onDragOverIndex(e.clientY < rect.top + rect.height / 2 ? index : index + 1, null);
-                }}
-                onClick={() => onOpenItem(item.id)}
-                className={cx(
-                  'mt-1.5 block w-full rounded-lg border bg-[var(--color-raised)] p-2.5 text-left shadow-sm transition-colors',
-                  item.id === activeItemId
-                    ? 'border-[var(--color-accent)]'
-                    : 'border-transparent hover:border-[var(--color-line)]',
-                  dragging === item.id && 'opacity-40',
-                )}
-              >
-                <p className={cx('text-sm leading-snug', status.category === 'done' && 'text-[var(--color-muted)] line-through')}>
-                  {item.title}
-                </p>
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
-                  <TypeIcon type={item.type} />
-                  <span>{item.key}</span>
-                  {/* A merged column holds work from several statuses, so each card says which. */}
-                  {cell.merged && (
-                    <span className="flex items-center gap-0.5" title={status.name}>
-                      <span className="h-1.5 w-1.5 rounded-full" style={{ background: status.color }} />
-                      <span className="max-w-[5rem] truncate">{status.name}</span>
-                    </span>
-                  )}
-                  {item.priority !== 'none' && <PriorityIcon priority={item.priority} />}
-                  {item.dueDate && (
-                    <span className={cx('flex items-center gap-0.5', overdue && 'text-red-500')}>
-                      <Icon name="calendar-event" className="text-[10px]" />
-                      {formatDue(item.dueDate)}
-                    </span>
-                  )}
-                  {item.commentCount > 0 && (
-                    <span className="flex items-center gap-0.5">
-                      <Icon name="chat-left-text" className="text-[10px]" />
-                      {item.commentCount}
-                    </span>
-                  )}
-                  <span className="flex-1" />
-                  {item.estimate !== null && (
-                    <span className="rounded bg-[var(--color-surface)] px-1 tabular-nums" title="Estimate">
-                      {item.estimate}
-                    </span>
-                  )}
-                  <PeopleStack userIds={holders} names={holderNames} members={memberMap} max={2} size="xs" />
-                </div>
-              </button>
-            </div>
-          );
-        })}
-        {dropIndex === items.length && indicator}
-        {items.length === 0 && <p className="px-2 py-4 text-center text-xs text-[var(--color-muted)]">Nothing here</p>}
       </div>
     </section>
   );
