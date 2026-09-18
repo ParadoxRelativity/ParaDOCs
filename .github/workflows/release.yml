@@ -101,7 +101,14 @@ jobs:
       # the empty path to the working directory and dies with "not a file".
       # So the signing variables are exported only when a certificate actually
       # exists, and are left genuinely unset otherwise.
+      #
+      # macOS only. These secrets hold an Apple Developer ID certificate, and
+      # electron-builder on Windows reads the same CSC_LINK, so letting this run
+      # there would sign the installer with a certificate Windows does not
+      # trust. Windows builds unsigned until it has a certificate of its own,
+      # which electron-builder takes from WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD.
       - name: Configure signing
+        if: runner.os == 'macOS'
         shell: bash
         env:
           CERT: ${{ secrets.CSC_LINK }}

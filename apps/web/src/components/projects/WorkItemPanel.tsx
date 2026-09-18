@@ -3,6 +3,7 @@ import {
   WORK_ITEM_PRIORITIES,
   WORK_ITEM_TYPES,
   canMoveTo,
+  usesSprints,
   type MessageReferences,
   type Project,
   type ProjectRole,
@@ -288,6 +289,28 @@ function ItemDetail({
               canEdit={canEdit}
             />
           ))}
+          {usesSprints(project) && (
+            <Property label="Sprint">
+              <select
+                value={item.sprintId ?? ''}
+                disabled={!canEdit}
+                onChange={(e) => patch({ sprintId: e.target.value || null })}
+                className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
+                aria-label="Sprint"
+              >
+                <option value="">Backlog</option>
+                {/* Running and planned sprints, and a completed one only where it already is. */}
+                {project.sprints
+                  .filter((s) => s.state !== 'completed' || s.id === item.sprintId)
+                  .map((s) => (
+                    <option key={s.id} value={s.id} disabled={s.state === 'completed'}>
+                      {s.name}
+                      {s.state === 'active' ? ' (running)' : s.state === 'completed' ? ' (complete)' : ''}
+                    </option>
+                  ))}
+              </select>
+            </Property>
+          )}
           <Property label="Due date">
             <DueDatePicker
               value={item.dueDate}
@@ -365,10 +388,7 @@ function ItemDetail({
           navigation={navigation}
         />
 
-        <p className="mt-6 text-xs text-[var(--color-muted)]">
-          Created by {item.createdBy?.name ?? 'someone'} {formatRelative(item.createdAt)}
-          {item.completedAt && ` · done ${formatRelative(item.completedAt)}`}
-        </p>
+        <History item={item} memberMap={memberMap} />
       </div>
 
       {confirmingDelete && (
@@ -572,8 +592,6 @@ function Backlinks({ itemId, navigation }: { itemId: string; navigation: Project
   );
 }
 
-type Entry = { kind: 'comment'; at: string; comment: WorkItemComment } | { kind: 'activity'; at: string; activity: WorkItemActivity };
-
 function Timeline({
   workspaceId,
   item,
@@ -595,109 +613,88 @@ function Timeline({
   const [editing, setEditing] = useState<string | null>(null);
 
   const references = timeline.data?.references;
-  const entries: Entry[] = [
-    ...(timeline.data?.comments ?? []).map((comment): Entry => ({ kind: 'comment', at: comment.createdAt, comment })),
-    ...(timeline.data?.activity ?? []).map((activity): Entry => ({ kind: 'activity', at: activity.createdAt, activity })),
-  ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-
-  // A free-form role writes the name itself into the history, since no account
-  // holds it; anything that is not an id is already what to show.
-  const name = (id: string) =>
-    UUID.test(id)
-      ? (memberMap.get(id)?.name ?? references?.members.find((m) => m.id === id)?.name ?? 'someone')
-      : id;
+  const entries = [...(timeline.data?.comments ?? [])]
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    .map((comment) => ({ at: comment.createdAt, comment }));
 
   return (
     <>
-      <Heading count={timeline.data?.comments.length}>Activity</Heading>
+      <Heading count={timeline.data?.comments.length}>Comments</Heading>
       {timeline.isLoading ? (
         <Spinner />
       ) : (
         <ol className="space-y-3">
-          {entries.map((entry) =>
-            entry.kind === 'activity' ? (
-              <li key={entry.activity.id} className="flex items-start gap-2 pl-1 text-xs text-[var(--color-muted)]">
-                <Icon name="clock-history" className="mt-0.5 shrink-0" />
-                <span className="min-w-0 flex-1">
-                  <span className="font-medium text-[var(--color-ink)]">{entry.activity.actor?.name ?? 'Someone'}</span>{' '}
-                  {describeActivity(entry.activity, name)}
-                </span>
-                <span className="shrink-0" title={formatDateTime(entry.at)}>
-                  {formatRelative(entry.at)}
-                </span>
-              </li>
-            ) : (
-              <li key={entry.comment.id} className="group flex gap-2">
-                <Avatar
-                  name={entry.comment.author?.name ?? '?'}
-                  url={entry.comment.author?.avatarUrl}
-                  seed={entry.comment.author?.id}
-                  size="lg"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-sm font-semibold">{entry.comment.author?.name ?? 'Former member'}</span>
-                    <span className="text-xs text-[var(--color-muted)]" title={formatDateTime(entry.at)}>
-                      {formatRelative(entry.at)}
-                      {entry.comment.editedAt && ' (edited)'}
-                    </span>
-                    <span className="flex-1" />
-                    {canEdit && entry.comment.author?.id === selfId && editing !== entry.comment.id && (
-                      <button
-                        onClick={() => setEditing(entry.comment.id)}
-                        className="hidden text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)] group-hover:inline"
-                      >
-                        Edit
-                      </button>
-                    )}
-                    {entry.comment.author?.id === selfId && (
-                      <button
-                        onClick={() =>
-                          comments.remove.mutate(entry.comment.id, {
-                            onError: (err) => toast(err instanceof Error ? err.message : 'Could not delete the comment', 'error'),
-                          })
-                        }
-                        className="hidden text-xs text-[var(--color-muted)] hover:text-red-500 group-hover:inline"
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                  {editing === entry.comment.id ? (
-                    <div className="mt-1">
-                      <ReferenceEditor
-                        workspaceId={workspaceId}
-                        initialBody={entry.comment.body}
-                        references={references}
-                        autoFocus
-                        minRows={2}
-                        submitLabel="Save"
-                        onCancel={() => setEditing(null)}
-                        onSubmit={async (body) => {
-                          if (!body) return;
-                          try {
-                            await comments.edit.mutateAsync({ id: entry.comment.id, body });
-                            setEditing(null);
-                          } catch (err) {
-                            toast(err instanceof Error ? err.message : 'Could not save the comment', 'error');
-                          }
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="text-sm leading-relaxed">
-                      <MessageBody
-                        body={entry.comment.body}
-                        references={references ?? EMPTY_REFERENCES}
-                        selfId={selfId}
-                        {...navigation}
-                      />
-                    </div>
+          {entries.map((entry) => (
+            <li key={entry.comment.id} className="group flex gap-2">
+              <Avatar
+                name={entry.comment.author?.name ?? '?'}
+                url={entry.comment.author?.avatarUrl}
+                seed={entry.comment.author?.id}
+                size="lg"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-semibold">{entry.comment.author?.name ?? 'Former member'}</span>
+                  <span className="text-xs text-[var(--color-muted)]" title={formatDateTime(entry.at)}>
+                    {formatRelative(entry.at)}
+                    {entry.comment.editedAt && ' (edited)'}
+                  </span>
+                  <span className="flex-1" />
+                  {canEdit && entry.comment.author?.id === selfId && editing !== entry.comment.id && (
+                    <button
+                      onClick={() => setEditing(entry.comment.id)}
+                      className="hidden text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)] group-hover:inline"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {entry.comment.author?.id === selfId && (
+                    <button
+                      onClick={() =>
+                        comments.remove.mutate(entry.comment.id, {
+                          onError: (err) => toast(err instanceof Error ? err.message : 'Could not delete the comment', 'error'),
+                        })
+                      }
+                      className="hidden text-xs text-[var(--color-muted)] hover:text-red-500 group-hover:inline"
+                    >
+                      Delete
+                    </button>
                   )}
                 </div>
-              </li>
-            ),
-          )}
+                {editing === entry.comment.id ? (
+                  <div className="mt-1">
+                    <ReferenceEditor
+                      workspaceId={workspaceId}
+                      initialBody={entry.comment.body}
+                      references={references}
+                      autoFocus
+                      minRows={2}
+                      submitLabel="Save"
+                      onCancel={() => setEditing(null)}
+                      onSubmit={async (body) => {
+                        if (!body) return;
+                        try {
+                          await comments.edit.mutateAsync({ id: entry.comment.id, body });
+                          setEditing(null);
+                        } catch (err) {
+                          toast(err instanceof Error ? err.message : 'Could not save the comment', 'error');
+                        }
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="text-sm leading-relaxed">
+                    <MessageBody
+                      body={entry.comment.body}
+                      references={references ?? EMPTY_REFERENCES}
+                      selfId={selfId}
+                      {...navigation}
+                    />
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
         </ol>
       )}
 
@@ -724,6 +721,61 @@ function Timeline({
   );
 }
 
+/** Created and last-updated dates, with the change history behind a toggle. */
+function History({ item, memberMap }: { item: WorkItem; memberMap: Map<string, WorkspaceMember> }) {
+  const [open, setOpen] = useState(false);
+  const timeline = useWorkItemTimeline(item.id);
+  const references = timeline.data?.references;
+  const activity = [...(timeline.data?.activity ?? [])].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+
+  // A free-form role writes the name itself into the history, since no account
+  // holds it; anything that is not an id is already what to show.
+  const name = (id: string) =>
+    UUID.test(id)
+      ? (memberMap.get(id)?.name ?? references?.members.find((m) => m.id === id)?.name ?? 'someone')
+      : id;
+
+  return (
+    <div className="mt-6 border-t border-[var(--color-line)] pt-3 text-xs text-[var(--color-muted)]">
+      <div className="flex items-center gap-3">
+        <span>Created {formatDateTime(item.createdAt)}</span>
+        <span title={formatDateTime(item.updatedAt)}>Updated {formatRelative(item.updatedAt)}</span>
+        <span className="flex-1" />
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--color-surface)] hover:text-[var(--color-ink)]"
+        >
+          <Icon name="clock-history" />
+          {open ? 'Hide history' : 'History'}
+        </button>
+      </div>
+      {open &&
+        (timeline.isLoading ? (
+          <Spinner />
+        ) : activity.length === 0 ? (
+          <p className="mt-3">No changes yet.</p>
+        ) : (
+          <ol className="mt-3 space-y-2">
+            {activity.map((entry) => (
+              <li key={entry.id} className="flex items-start gap-2">
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium text-[var(--color-ink)]">{entry.actor?.name ?? 'Someone'}</span>{' '}
+                  {describeActivity(entry, name)}
+                </span>
+                <span className="shrink-0" title={formatDateTime(entry.createdAt)}>
+                  {formatRelative(entry.createdAt)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ))}
+    </div>
+  );
+}
+
 const EMPTY_REFERENCES: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [] };
 
 function describeActivity(activity: WorkItemActivity, name: (id: string) => string): string {
@@ -736,6 +788,9 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
       return `changed the priority from ${PRIORITY[activity.from].label.toLowerCase()} to ${PRIORITY[activity.to].label.toLowerCase()}`;
     case 'title':
       return `renamed this from "${activity.from}"`;
+    case 'sprint':
+      if (!activity.to) return `took this out of ${activity.from ?? 'its sprint'}, back to the backlog`;
+      return activity.from ? `moved this from ${activity.from} to ${activity.to}` : `added this to ${activity.to}`;
     case 'role': {
       const parts: string[] = [];
       if (activity.added.length) parts.push(`made ${activity.added.map(name).join(', ')} ${activity.role}`);

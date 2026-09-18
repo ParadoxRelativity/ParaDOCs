@@ -164,8 +164,6 @@ export interface DocumentSummary {
   folderId: string | null;
   title: string;
   icon: string | null;
-  isJournal: boolean;
-  journalDate: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -198,7 +196,6 @@ export interface SearchHit {
   folderId: string | null;
   folderPath: string[];
   updatedAt: string;
-  isJournal: boolean;
   /** Highlighted snippet from the document body, with <mark> around matches. */
   snippet: string;
   rank: number;
@@ -265,7 +262,6 @@ export interface ActivityDay {
   day: string;
   created: number;
   updated: number;
-  hasJournal: boolean;
 }
 
 /** A workspace as a notification names it. */

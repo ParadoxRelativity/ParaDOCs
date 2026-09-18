@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { DbClient } from '../db/pool.js';
 import { createDocumentSchema, isoDate, updateDocumentSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
-import { badRequest, forbidden, notFound, parse } from '../lib/http.js';
+import { badRequest, notFound, parse } from '../lib/http.js';
 import { resolveSheetRefs } from './spreadsheets.js';
 import { replaceSheetRefs, sheetRefsInMarkdown } from '@paradocs/shared';
 import { blocksToMarkdown, deriveTitle } from '../lib/blocksToMarkdown.js';
@@ -10,7 +10,6 @@ import { documentSummaryColumns } from '../lib/documentColumns.js';
 import {
   assertFolderAccess,
   assertMoveKeepsAccess,
-  documentAccess,
   documentLevelSql,
   roleSql,
 } from '../lib/access.js';
@@ -220,62 +219,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     return `${frontmatter}${body}\n`;
   });
 
-  /**
-   * Daily journal: fetch the entry for a date, creating it on first visit so the
-   * client never has to decide between GET and POST.
-   */
-  app.get<{ Params: { id: string; date: string } }>('/workspaces/:id/journal/:date', async (req) => {
-    // Opening a journal creates it on first visit, so this needs write access.
-    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
-    const date = parse(isoDate, req.params.date);
-
-    const existing = await query<{ id: string }>(
-      `SELECT d.id FROM documents d
-        WHERE d.workspace_id = $1 AND d.is_journal AND d.journal_date = $2::date`,
-      [req.params.id, date],
-    );
-
-    const id =
-      existing.rows[0]?.id ??
-      (await transaction(async (client) => {
-        // Journal entries land in a "Journal" folder, created once per workspace.
-        const { rows: folder } = await client.query<{ id: string }>(
-          `WITH existing AS (
-             SELECT id FROM folders WHERE workspace_id = $1 AND app = 'docs' AND parent_id IS NULL AND name = 'Journal' LIMIT 1
-           ), created AS (
-             INSERT INTO folders (workspace_id, name, position)
-             SELECT $1, 'Journal', 0 WHERE NOT EXISTS (SELECT 1 FROM existing)
-             RETURNING id
-           )
-           SELECT id FROM existing UNION ALL SELECT id FROM created`,
-          [req.params.id],
-        );
-        const title = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-          timeZone: 'UTC',
-        });
-        const { rows } = await client.query<{ id: string }>(
-          `INSERT INTO documents (workspace_id, folder_id, title, is_journal, journal_date, body, body_md, created_by)
-           VALUES ($1, $2, $3, true, $4::date, '[]'::jsonb, '', $5)
-           ON CONFLICT (workspace_id, journal_date) WHERE is_journal DO UPDATE SET updated_at = documents.updated_at
-           RETURNING id`,
-          [req.params.id, folder[0]?.id ?? null, title, date, req.user!.id],
-        );
-        return rows[0].id;
-      }));
-
-    // The journal belongs to the workspace and is filed in its Journal folder,
-    // which can be locked like any other.
-    if (!(await documentAccess(req.user!.id, id))) {
-      throw forbidden('The journal is in a folder you cannot open');
-    }
-    return fetchDocument(id, req.user!.id);
-  });
-
-  /** Which days have journals or document activity, for the calendar dots. */
+  /** Which days have document activity, for the calendar dots. */
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>(
     '/workspaces/:id/activity',
     async (req) => {
@@ -288,13 +232,12 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       const { rows } = await query(
         `SELECT to_char(day, 'YYYY-MM-DD') AS day,
                 count(*) FILTER (WHERE kind = 'created')::int AS created,
-                count(*) FILTER (WHERE kind = 'updated')::int AS updated,
-                bool_or(is_journal) AS "hasJournal"
+                count(*) FILTER (WHERE kind = 'updated')::int AS updated
            FROM (
-             SELECT date_trunc('day', d.created_at)::date AS day, 'created' AS kind, d.is_journal
+             SELECT date_trunc('day', d.created_at)::date AS day, 'created' AS kind
                FROM documents d WHERE ${visible}
              UNION ALL
-             SELECT date_trunc('day', d.updated_at)::date, 'updated', d.is_journal
+             SELECT date_trunc('day', d.updated_at)::date, 'updated'
                FROM documents d WHERE ${visible}
            ) activity
           WHERE day BETWEEN $2::date AND $3::date

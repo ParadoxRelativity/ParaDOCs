@@ -1,16 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useActivity, useCreateEvent, useDeleteEvent, useEvents } from '../../api/hooks';
 import { cx, toISODate, todayISO } from '../../lib/util';
-import { Button, IconButton } from '../ui';
+import { IconButton } from '../ui';
 import Icon from '../Icon';
 
 interface Props {
   workspaceId: string;
   documentId: string | null;
-  onOpenJournal: (date: string) => void;
 }
 
-export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }: Props) {
+export default function CalendarPanel({ workspaceId, documentId }: Props) {
   const [cursor, setCursor] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -104,7 +103,6 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
             <button
               key={iso}
               onClick={() => setSelected(iso)}
-              onDoubleClick={() => onOpenJournal(iso)}
               title={act ? `${act.created} created, ${act.updated} updated` : undefined}
               className={cx(
                 'relative aspect-square rounded text-xs transition-colors',
@@ -117,8 +115,7 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
             >
               {date.getDate()}
               <span className="absolute inset-x-0 bottom-0.5 flex justify-center gap-0.5">
-                {act?.hasJournal && <Dot selected={iso === selected} color="var(--color-accent)" />}
-                {act && act.updated > 0 && !act.hasJournal && (
+                {act && act.updated > 0 && (
                   <Dot selected={iso === selected} color="var(--color-muted)" />
                 )}
                 {dayEvents?.length ? <Dot selected={iso === selected} color="#f59e0b" /> : null}
@@ -137,14 +134,9 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
               day: 'numeric',
             })}
           </span>
-          <div className="flex gap-1">
-            <Button variant="ghost" className="text-[11px]" onClick={() => onOpenJournal(selected)}>
-              Journal
-            </Button>
-            <IconButton label="Add event" onClick={() => setAdding((v) => !v)}>
-              <Icon name="plus-lg" />
-            </IconButton>
-          </div>
+          <IconButton label="Add event" onClick={() => setAdding((v) => !v)}>
+            <Icon name="plus-lg" />
+          </IconButton>
         </div>
 
         {adding && (
@@ -179,7 +171,7 @@ export default function CalendarPanel({ workspaceId, documentId, onOpenJournal }
             </div>
           ))}
           {selectedEvents.length === 0 && !adding && (
-            <p className="text-xs text-[var(--color-muted)]">No events. Double-click a day to open its journal.</p>
+            <p className="text-xs text-[var(--color-muted)]">No events.</p>
           )}
         </div>
       </div>

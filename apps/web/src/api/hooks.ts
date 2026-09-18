@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryO
 import type {
   AccessSettings,
   ActivityDay,
+  BoardLayout,
   CalendarEvent,
   Channel,
   Comment,
@@ -33,13 +34,16 @@ import type {
   WorkspaceInvite,
   WorkspaceMember,
   CreateProjectInput,
+  CreateSprintInput,
   CreateWorkItemInput,
   Project,
   ProjectRole,
+  ProjectSprint,
   ProjectStatus,
   ProjectSummary,
   ProjectWorkflow,
   StatusCategory,
+  UpdateSprintInput,
   UpdateWorkItemInput,
   WorkItem,
   WorkItemBacklinks,
@@ -674,8 +678,15 @@ export function useCreateProject(workspaceId: string) {
 export function useUpdateProject(workspaceId: string, projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: { name?: string; key?: string; description?: string; icon?: string | null; archived?: boolean }) =>
-      api.patch<Project>(`/projects/${projectId}`, patch),
+    mutationFn: (patch: {
+      name?: string;
+      key?: string;
+      description?: string;
+      icon?: string | null;
+      archived?: boolean;
+      boardLayout?: BoardLayout;
+      sprintsEnabled?: boolean;
+    }) => api.patch<Project>(`/projects/${projectId}`, patch),
     onSuccess: (project) => {
       qc.setQueryData(keys.project(project.id), project);
       invalidateProject(qc, workspaceId, project.id);
@@ -758,6 +769,63 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
       mutationFn: (input: { type: WorkItemType; workflowId: string | null }) =>
         api.put<Project>(`/projects/${projectId}/type-workflows`, input),
       onSuccess: settle,
+    }),
+  };
+}
+
+/**
+ * Planning, starting and completing a project's sprints, and putting work in
+ * them. Starting and completing move work too, so both settle the item list.
+ */
+export function useSprints(workspaceId: string, projectId: string) {
+  const qc = useQueryClient();
+  const settle = () => {
+    invalidateProject(qc, workspaceId, projectId);
+    void qc.invalidateQueries({ queryKey: keys.workItems(projectId) });
+  };
+  const settleWork = () => {
+    settle();
+    // Each moved item's panel and history changed too.
+    void qc.invalidateQueries({ queryKey: ['workItem'] });
+    void qc.invalidateQueries({ queryKey: ['workItemTimeline'] });
+  };
+  const fromProject = (project: Project) => {
+    qc.setQueryData(keys.project(project.id), project);
+    settleWork();
+  };
+  return {
+    create: useMutation({
+      mutationFn: (input: CreateSprintInput) => api.post<ProjectSprint>(`/projects/${projectId}/sprints`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: UpdateSprintInput & { id: string }) =>
+        api.patch<ProjectSprint>(`/project-sprints/${id}`, patch),
+      onSuccess: settle,
+    }),
+    start: useMutation({
+      mutationFn: ({ id, ...input }: { id: string; startDate: string; endDate: string; includeBoard: boolean }) =>
+        api.post<Project>(`/project-sprints/${id}/start`, input),
+      onSuccess: fromProject,
+    }),
+    complete: useMutation({
+      mutationFn: ({ id, moveTo }: { id: string; moveTo: string | null }) =>
+        api.post<Project>(`/project-sprints/${id}/complete`, { moveTo }),
+      onSuccess: fromProject,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-sprints/${id}`),
+      onSuccess: settleWork,
+    }),
+    /** Puts items in a sprint, or back in the backlog with null. */
+    place: useMutation({
+      mutationFn: (input: { itemIds: string[]; sprintId: string | null }) =>
+        api.post<{ moved: number }>(`/projects/${projectId}/items/sprint`, input),
+      onSuccess: () => {
+        settleItem(qc, projectId);
+        void qc.invalidateQueries({ queryKey: ['workItem'] });
+        void qc.invalidateQueries({ queryKey: ['workItemTimeline'] });
+      },
     }),
   };
 }
@@ -929,15 +997,6 @@ export function useMarkWorkItemsRead() {
   return useMutation({
     mutationFn: (itemIds?: string[]) => api.post('/notifications/work-items/read', itemIds ? { itemIds } : {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
-  });
-}
-
-export function useJournal(workspaceId: string | undefined, date: string, enabled: boolean) {
-  return useQuery({
-    queryKey: ['journal', workspaceId, date],
-    queryFn: () => api.get<Doc>(`/workspaces/${workspaceId}/journal/${date}`),
-    enabled: Boolean(workspaceId) && enabled,
-    staleTime: 0,
   });
 }
 

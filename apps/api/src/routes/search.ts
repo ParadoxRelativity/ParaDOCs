@@ -193,7 +193,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
 
       const { rows } = !docsOn ? { rows: [] } : await query(
         `SELECT d.id, d.title, d.icon, d.mode, d.folder_id AS "folderId",
-                d.updated_at AS "updatedAt", d.is_journal AS "isJournal",
+                d.updated_at AS "updatedAt",
                 ${rankExpr} AS rank,
                 ${snippetExpr} AS snippet,
                 COALESCE((

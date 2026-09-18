@@ -36,7 +36,7 @@ export async function createAccount(
     [wsRows[0].id, created.id],
   );
   await client.query(
-    `INSERT INTO folders (workspace_id, name, position) VALUES ($1, 'Journal', 0), ($1, 'Notes', 1)`,
+    `INSERT INTO folders (workspace_id, name, position) VALUES ($1, 'Notes', 0)`,
     [wsRows[0].id],
   );
   // Somewhere to talk, so the chat tab is never an empty room.

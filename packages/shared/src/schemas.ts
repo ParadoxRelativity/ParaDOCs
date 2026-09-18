@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const uuid = z.string().uuid();
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be a #rrggbb hex color');
-/** YYYY-MM-DD, the wire format for journal dates and calendar filters. */
+/** YYYY-MM-DD, the wire format for calendar filters and due dates. */
 export const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD');
 
 export const registerSchema = z.object({

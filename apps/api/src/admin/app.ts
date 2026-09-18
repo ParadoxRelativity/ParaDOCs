@@ -67,7 +67,7 @@ export async function buildAdminApp() {
       index: 'admin.html',
       // The admin page and the bundles it loads, but not the app's own page,
       // which would only fail here without the app's API behind it.
-      allowedPath: (pathName) => pathName === '/' || pathName === '/admin.html' || pathName.startsWith('/assets/'),
+      allowedPath: (pathName) => pathName === '/' || pathName === '/admin.html' || pathName === '/favicon.png' || pathName.startsWith('/assets/'),
     });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) {

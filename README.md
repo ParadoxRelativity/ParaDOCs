@@ -21,7 +21,6 @@ Multi-user, multi-workspace. Working today:
 - **Search** — Postgres full-text over document titles and bodies, and over
   spreadsheet titles and cells, prefix-matched as you type, with highlighted
   snippets; filter by tag, folder, and date range
-- **Daily journal** — one entry per day, created on first visit
 - **Left sidebar** — collapsible; workspace switcher, an app grid for moving
   between Docs, Chat and Sheets, and the folder tree, channel list or
   spreadsheet list of whichever is open. Shows organized documents only; new
@@ -71,7 +70,7 @@ back and forth loses nothing.
 
 A document's icon follows the mode it was last used in — 📄 for a page, 🎨 for a
 canvas — in the sidebar, All Documents and search results. A document with its
-own icon set keeps that instead, and journals stay 📔.
+own icon set keeps that instead.
 
 Canvas elements live in the *same Y.Doc* as the page body, under a separate root
 map. Collaboration, websocket auth, role checks and persistence are therefore
@@ -876,7 +875,6 @@ GET /api/documents/:id/markdown
 | `⌘K` / `Ctrl+K` | Open search           |
 | `⌘\` / `Ctrl+\` | Toggle left sidebar   |
 | `⌘⇧\`          | Toggle right sidebar   |
-| `⌘⇧J`          | Open today's journal   |
 | `/`            | Block commands in the editor, including spreadsheet cells and charts |
 | `@` / `#`      | Tag a person / link a channel, in the editor |
 | `⌘`/`Ctrl`-click | Open a document or workspace in a new tab |

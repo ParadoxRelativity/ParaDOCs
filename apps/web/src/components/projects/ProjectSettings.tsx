@@ -54,6 +54,7 @@ export default function ProjectSettings({
         <StatusSection project={project} items={items} canEdit={canEdit} />
         <WorkflowSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
+        {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
 
         <Section
           title="Permissions"
@@ -137,6 +138,69 @@ export default function ProjectSettings({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Whether the board is run in sprints. Turning it off keeps the sprints and
+ * what is in them, so turning it back on picks up where it was.
+ */
+function SprintSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
+  const update = useUpdateProject(project.workspaceId, project.id);
+  const toast = useToast();
+  const on = project.sprintsEnabled;
+  const running = project.sprints.find((s) => s.state === 'active');
+  const disabled = !canEdit || update.isPending;
+
+  return (
+    <Section
+      title="Sprints"
+      hint="Run the board in sprints: plan work into a sprint from the backlog, start it, and the board shows that sprint's work until it is completed."
+    >
+      <div className="flex items-center gap-3 rounded-lg border border-[var(--color-line)] px-3 py-2.5">
+        <Icon name="arrow-repeat" className={cx('text-base', on ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium">Use sprints</span>
+          <span className="block text-xs text-[var(--color-muted)]">
+            {on
+              ? running
+                ? `${running.name} is running.`
+                : `${project.sprints.filter((s) => s.state === 'planned').length} planned, none running.`
+              : 'Off: the board shows all planned work. Turning sprints off later keeps them for when they are turned back on.'}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-label="Use sprints"
+          disabled={disabled}
+          onClick={() =>
+            update.mutate(
+              { sprintsEnabled: !on },
+              {
+                onSuccess: () => toast(on ? 'Sprints turned off' : 'Sprints turned on. Plan the first one in the backlog.'),
+                onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error'),
+              },
+            )
+          }
+          className={cx(
+            'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+            'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
+            on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-line)]',
+            disabled && 'cursor-not-allowed opacity-50',
+          )}
+        >
+          <span
+            aria-hidden
+            className={cx(
+              'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-[left] duration-150 motion-reduce:transition-none',
+              on ? 'left-[1.125rem]' : 'left-0.5',
+            )}
+          />
+        </button>
+      </div>
+    </Section>
   );
 }
 

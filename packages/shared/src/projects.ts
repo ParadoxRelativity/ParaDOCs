@@ -16,6 +16,10 @@
  * out of workload, in a ranked list of its own, so a project with hundreds of
  * ideas and requests still has a board showing only what is actually planned.
  *
+ * A project can run its board in sprints. It is an option, off to begin with:
+ * with it on, the board shows only the running sprint's work, and the backlog
+ * becomes where the sprints after it are planned. See `ProjectSprint`.
+ *
  * Work items are referenced from elsewhere by id, the way documents and
  * spreadsheets are: `<item:uuid>` in chat, in canvas text and in other work
  * items, and an inline `workItem` node in a document. What a reference shows —
@@ -79,6 +83,64 @@ export interface ProjectWorkflow {
   transitions: Record<string, string[]>;
 }
 
+/**
+ * One column's worth of cards on the board. Usually a single status; several
+ * means those statuses are merged and their work is shown as one list, for
+ * stages a team tracks separately but reads as one — "In review" beside
+ * "Awaiting QA" when what matters is that it has left development.
+ */
+export interface BoardCell {
+  /** At least one. In the order a merged cell offers them to a card dropped in. */
+  statusIds: string[];
+  /** What a merged cell is called. Null: its statuses' names, joined. */
+  name: string | null;
+}
+
+/**
+ * A slot across the board: one cell, or several stacked over and under each
+ * other, so two narrow stages take up one column's width between them.
+ */
+export interface BoardLane {
+  cells: BoardCell[];
+}
+
+/**
+ * How a project's board is laid out, over and above the order its statuses are
+ * in. Everyone on the project sees the same arrangement; which lanes are folded
+ * up is each viewer's own business and is not kept here.
+ *
+ * It is stored as a wish rather than a rule: statuses it does not mention get
+ * lanes of their own, and ones it names that have since been deleted or moved
+ * to the backlog are ignored. That way a layout never hides work, and a project
+ * that has never been arranged needs no layout stored at all.
+ */
+export interface BoardLayout {
+  lanes: BoardLane[];
+}
+
+export const EMPTY_BOARD_LAYOUT: BoardLayout = { lanes: [] };
+
+export type SprintState = 'planned' | 'active' | 'completed';
+
+/**
+ * A stretch of time a project's team commits a set of work to. It is planned,
+ * then running — only one at a time — then complete. Which items are in it is
+ * each item's `sprintId`; a completed sprint keeps what was finished in it.
+ */
+export interface ProjectSprint {
+  id: string;
+  name: string;
+  /** What the sprint is for, in a sentence. Empty when nobody said. */
+  goal: string;
+  state: SprintState;
+  /** YYYY-MM-DD, planned. Either may be open until the sprint starts. */
+  startDate: string | null;
+  endDate: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
 export interface ProjectRole {
   id: string;
   name: string;
@@ -125,6 +187,12 @@ export interface Project extends ProjectSummary {
   workflows: ProjectWorkflow[];
   /** The workflow each item type follows, by workflow id. A type left out moves freely. */
   typeWorkflows: Partial<Record<WorkItemType, string>>;
+  /** How the board's columns are arranged. Empty lanes: one per status, in order. */
+  boardLayout: BoardLayout;
+  /** Whether the board is run in sprints. Always false for a queue. */
+  sprintsEnabled: boolean;
+  /** Running first, then planned in the order they were made, then completed, newest first. */
+  sprints: ProjectSprint[];
   /** Deleting is for owners, admins, and whoever made the project. */
   canDelete: boolean;
 }
@@ -141,6 +209,8 @@ export interface WorkItemSummary {
   statusId: string;
   /** Order within its status, fractional like a status's. */
   position: number;
+  /** The sprint it is in, if the project runs in sprints and it has been put in one. */
+  sprintId: string | null;
   /** YYYY-MM-DD. */
   dueDate: string | null;
   /** In whatever unit the team estimates in: points, hours, days. */
@@ -190,7 +260,9 @@ export type WorkItemActivityData =
   | { kind: 'status'; from: string; to: string }
   | { kind: 'role'; role: string; added: string[]; removed: string[] }
   | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority }
-  | { kind: 'title'; from: string; to: string };
+  | { kind: 'title'; from: string; to: string }
+  /** Sprint names as they were at the time; null is the backlog. */
+  | { kind: 'sprint'; from: string | null; to: string | null };
 
 export type WorkItemActivity = {
   id: string;
@@ -267,6 +339,172 @@ export function canMoveTo(
   if (fromStatusId === toStatusId) return true;
   const allowed = allowedMoves(project, type, fromStatusId);
   return allowed === null || allowed.includes(toStatusId);
+}
+
+// --- board layout ------------------------------------------------------------
+
+/** A cell with its statuses looked up, and a name to put at the top of it. */
+export interface BoardCellView {
+  /** Identifies the cell across a redraw, and is what a collapsed cell is remembered by. */
+  key: string;
+  name: string;
+  /** Whether the name was chosen for the merge, rather than derived from its statuses. */
+  named: boolean;
+  statuses: ProjectStatus[];
+  /** Whether it holds more than one status, so cards need to say which they are in. */
+  merged: boolean;
+}
+
+/** A lane with its cells looked up, in the order they are stacked. */
+export interface BoardLaneView {
+  /** Its first status: stable while the lane is merged, split or moved. */
+  key: string;
+  /** All the statuses in it, whatever cell they are in. */
+  statuses: ProjectStatus[];
+  cells: BoardCellView[];
+}
+
+/** What a merged cell is called when it has not been named: its statuses, joined. */
+function joinedName(statuses: ProjectStatus[]): string {
+  return statuses.map((s) => s.name).join(' · ');
+}
+
+/**
+ * The board's columns as they should be drawn: the stored layout reconciled
+ * with the statuses the project actually has now.
+ *
+ * Statuses the layout does not mention get a lane each, after the ones it does,
+ * so a status added since it was arranged still turns up on the board. Ones it
+ * names that are gone, or have been moved to the backlog, drop out, along with
+ * any cell or lane left empty. A status named twice is kept where it is named
+ * first, since it can only be in one place.
+ */
+export function boardLanes(project: Pick<Project, 'statuses' | 'boardLayout'>): BoardLaneView[] {
+  const onBoard = project.statuses.filter((s) => s.category !== 'backlog');
+  const byId = new Map(onBoard.map((s) => [s.id, s]));
+  const placed = new Set<string>();
+
+  const lanes: BoardLaneView[] = [];
+  for (const lane of project.boardLayout?.lanes ?? []) {
+    const cells: BoardCellView[] = [];
+    for (const cell of lane.cells ?? []) {
+      const statuses: ProjectStatus[] = [];
+      for (const id of cell.statusIds ?? []) {
+        const status = byId.get(id);
+        if (status && !placed.has(id)) {
+          placed.add(id);
+          statuses.push(status);
+        }
+      }
+      if (statuses.length === 0) continue;
+      const named = statuses.length > 1 && !!cell.name;
+      cells.push({
+        key: statuses.map((s) => s.id).join('+'),
+        name: named ? cell.name! : joinedName(statuses),
+        named,
+        statuses,
+        merged: statuses.length > 1,
+      });
+    }
+    if (cells.length > 0) lanes.push({ key: cells[0].statuses[0].id, statuses: cells.flatMap((c) => c.statuses), cells });
+  }
+
+  for (const status of onBoard) {
+    if (placed.has(status.id)) continue;
+    lanes.push({
+      key: status.id,
+      statuses: [status],
+      cells: [{ key: status.id, name: status.name, named: false, statuses: [status], merged: false }],
+    });
+  }
+  return lanes;
+}
+
+/** The lanes as they would be stored: what an edit is made against and saved back. */
+export function layoutOf(lanes: BoardLaneView[]): BoardLayout {
+  return {
+    lanes: lanes.map((lane) => ({
+      cells: lane.cells.map((cell) => ({
+        statusIds: cell.statuses.map((s) => s.id),
+        // A name is only worth keeping when someone chose it; a derived one
+        // would go stale the moment a status in it is renamed.
+        name: cell.named ? cell.name : null,
+      })),
+    })),
+  };
+}
+
+/**
+ * Every status in this cell that a card could be dropped into, in the cell's
+ * own order. A merged column can offer several, since a workflow may allow the
+ * card into more than one of the statuses behind it — and staying where it is
+ * always counts, so a card already in the column offers that status too.
+ *
+ * More than one means the drop is ambiguous and the board has to ask rather
+ * than choose: it draws a box per status over the column and the card takes
+ * whichever it is dropped in. Empty means the column cannot take the card.
+ */
+export function cellTargets(
+  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  cell: Pick<BoardCellView, 'statuses'>,
+  item: Pick<WorkItemSummary, 'type' | 'statusId'>,
+): ProjectStatus[] {
+  return cell.statuses.filter((status) => canMoveTo(project, item.type, item.statusId, status.id));
+}
+
+/**
+ * Where a card dropped on this cell lands when nothing has picked a status: the
+ * first one the cell offers, or null when it offers none. Callers that can ask
+ * — the board, which draws a box per status — should use `cellTargets` and let
+ * the drop say which, since the first is only a guess when there are several.
+ */
+export function cellTarget(
+  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  cell: Pick<BoardCellView, 'statuses'>,
+  item: Pick<WorkItemSummary, 'type' | 'statusId'>,
+): string | null {
+  const offered = cellTargets(project, cell, item);
+  // Staying put beats moving when the card is already here.
+  if (offered.some((s) => s.id === item.statusId)) return item.statusId;
+  return offered[0]?.id ?? null;
+}
+
+// --- sprints -----------------------------------------------------------------
+
+/** The sprint running now, if any. */
+export function activeSprint(project: Pick<Project, 'sprints'>): ProjectSprint | null {
+  return project.sprints.find((s) => s.state === 'active') ?? null;
+}
+
+/** Whether this project's board is being run in sprints. */
+export function usesSprints(project: Pick<Project, 'kind' | 'sprintsEnabled'>): boolean {
+  return project.kind === 'project' && project.sprintsEnabled;
+}
+
+/**
+ * Where an item goes on the board when it joins a running sprint from a
+ * backlog status: the first board status its workflow allows, not-started
+ * ones before any other, in board order. Null when its workflow allows none.
+ * An item already on the board stays where it is, which is also null.
+ */
+export function sprintEntryStatus(
+  project: Pick<Project, 'statuses' | 'workflows' | 'typeWorkflows'>,
+  item: Pick<WorkItemSummary, 'type' | 'statusId'>,
+): ProjectStatus | null {
+  const current = project.statuses.find((s) => s.id === item.statusId);
+  if (!current || current.category !== 'backlog') return null;
+  const open = project.statuses.filter(
+    (s) => s.category !== 'backlog' && canMoveTo(project, item.type, item.statusId, s.id),
+  );
+  return open.find((s) => s.category === 'todo') ?? open[0] ?? null;
+}
+
+/** Whole days from today to a YYYY-MM-DD date: negative once it has passed. */
+export function daysUntil(date: string, today = new Date()): number {
+  const [y, m, d] = date.split('-').map(Number);
+  const end = Date.UTC(y, m - 1, d);
+  const now = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.round((end - now) / 86_400_000);
 }
 
 /** Where a work item opens in the app. */
@@ -369,12 +607,42 @@ export const createProjectSchema = z.object({
   icon: z.string().trim().max(8).nullish(),
 });
 
+/**
+ * A board arrangement as it is sent. The bounds are there to keep a malformed
+ * or hostile layout small; which statuses it names is not checked, since the
+ * board reconciles that itself every time it is drawn.
+ */
+export const boardLayoutSchema = z.object({
+  lanes: z
+    .array(
+      z.object({
+        cells: z
+          .array(
+            z.object({
+              statusIds: z.array(uuid).min(1).max(20),
+              name: z
+                .string()
+                .trim()
+                .max(40)
+                .nullish()
+                .transform((value) => value || null),
+            }),
+          )
+          .min(1)
+          .max(20),
+      }),
+    )
+    .max(50),
+});
+
 export const updateProjectSchema = z.object({
   name: z.string().trim().min(1, 'Name it').max(80).optional(),
   key: projectKeySchema.optional(),
   description: z.string().max(4000).optional(),
   icon: z.string().trim().max(8).nullish(),
   archived: z.boolean().optional(),
+  boardLayout: boardLayoutSchema.optional(),
+  sprintsEnabled: z.boolean().optional(),
 });
 
 export const createStatusSchema = z.object({
@@ -431,6 +699,48 @@ export const setTypeWorkflowSchema = z.object({
   workflowId: uuid.nullable(),
 });
 
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD');
+
+/** How long a sprint runs when nobody says otherwise. */
+export const DEFAULT_SPRINT_DAYS = 14;
+
+export const createSprintSchema = z.object({
+  /** "Sprint 4", counting the project's sprints, when left out. */
+  name: z.string().trim().max(60).optional(),
+  goal: z.string().trim().max(500).default(''),
+  startDate: isoDate.nullish(),
+  endDate: isoDate.nullish(),
+});
+
+export const updateSprintSchema = z.object({
+  name: z.string().trim().min(1, 'Name the sprint').max(60).optional(),
+  goal: z.string().trim().max(500).optional(),
+  /** Pass null to clear. */
+  startDate: isoDate.nullish(),
+  endDate: isoDate.nullish(),
+});
+
+export const startSprintSchema = z.object({
+  startDate: isoDate,
+  endDate: isoDate,
+  /**
+   * Also bring in the open work already on the board that is in no sprint —
+   * what a project that is only now turning sprints on has in flight.
+   */
+  includeBoard: z.boolean().default(false),
+});
+
+export const completeSprintSchema = z.object({
+  /** Where unfinished work goes: a planned sprint, or null for the backlog. */
+  moveTo: uuid.nullable().default(null),
+});
+
+/** Putting many items into a sprint at once, or taking them out with null. */
+export const setWorkItemsSprintSchema = z.object({
+  itemIds: z.array(uuid).min(1).max(500),
+  sprintId: uuid.nullable(),
+});
+
 export const MAX_ROLE_HOLDERS = 20;
 
 /** A name typed into a free-form role: a person, a company, a ticket number. */
@@ -452,6 +762,8 @@ export const createWorkItemSchema = z.object({
   roles: z.record(uuid, z.array(uuid).max(MAX_ROLE_HOLDERS)).optional(),
   /** Names typed into free-form roles from the start, keyed by role id. */
   roleNames: z.record(uuid, roleNamesSchema).optional(),
+  /** The sprint it starts in. A running sprint takes it onto the board. */
+  sprintId: uuid.nullish(),
 });
 
 export const updateWorkItemSchema = z.object({
@@ -464,6 +776,8 @@ export const updateWorkItemSchema = z.object({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD').nullish(),
   estimate: estimateSchema.nullish(),
   position: z.number().finite().optional(),
+  /** Pass null to send it back to the backlog. */
+  sprintId: uuid.nullish(),
 });
 
 /** Moving many items at once, such as from the backlog onto the board. */
@@ -489,5 +803,7 @@ export const resolveWorkItemsSchema = z.object({
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
+export type CreateSprintInput = z.input<typeof createSprintSchema>;
+export type UpdateSprintInput = z.infer<typeof updateSprintSchema>;
 export type CreateWorkItemInput = z.input<typeof createWorkItemSchema>;
 export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;

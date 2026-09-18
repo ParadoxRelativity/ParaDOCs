@@ -116,7 +116,7 @@ export function useAutosave<T>(fn: (value: T) => void, delayMs: number) {
 export const todayISO = () => toISODate(new Date());
 
 export function toISODate(date: Date): string {
-  // Local calendar date, not UTC: a journal entry belongs to the user's day.
+  // Local calendar date, not UTC: a day on the calendar is the user's day.
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }

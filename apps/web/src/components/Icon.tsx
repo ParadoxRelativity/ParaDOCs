@@ -20,16 +20,11 @@ export function DocumentIcon({
   doc,
   className,
 }: {
-  doc: { icon?: string | null; isJournal?: boolean; mode?: string };
+  doc: { icon?: string | null; mode?: string };
   className?: string;
 }) {
   if (doc.icon) return <span className={className}>{doc.icon}</span>;
-  return (
-    <Icon
-      name={doc.isJournal ? 'journal-text' : doc.mode === 'canvas' ? 'easel' : 'file-earmark-text'}
-      className={className}
-    />
-  );
+  return <Icon name={doc.mode === 'canvas' ? 'easel' : 'file-earmark-text'} className={className} />;
 }
 
 /** The same, for a spreadsheet, which has no mode to choose a fallback by. */

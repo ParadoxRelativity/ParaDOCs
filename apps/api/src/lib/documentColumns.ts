@@ -14,7 +14,6 @@ import { documentLevelSql, permissionSql, spreadsheetLevelSql } from './access.j
 export function documentSummaryColumns(user: string, role: string): string {
   return `
   d.id, d.workspace_id AS "workspaceId", d.folder_id AS "folderId", d.title, d.icon, d.mode,
-  d.is_journal AS "isJournal", d.journal_date AS "journalDate",
   d.archived_at AS "archivedAt", d.created_at AS "createdAt", d.updated_at AS "updatedAt",
   d.access, ${permissionSql(documentLevelSql(user, role))} AS permission,
   COALESCE(

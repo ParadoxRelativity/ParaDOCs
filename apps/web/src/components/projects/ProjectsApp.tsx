@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { User, WorkItemListing, WorkspaceMember } from '@paradocs/shared';
+import { activeSprint, usesSprints, type User, type WorkItemListing, type WorkspaceMember } from '@paradocs/shared';
 import {
   useMarkWorkItemsRead,
   useMembers,
@@ -17,6 +17,7 @@ import ProjectBacklog from './ProjectBacklog';
 import ProjectBoard from './ProjectBoard';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
 import ProjectSettings from './ProjectSettings';
+import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
 import ProjectTable from './ProjectTable';
 import ProjectWorkload from './ProjectWorkload';
 import WorkItemPanel, { type ProjectNavigation } from './WorkItemPanel';
@@ -119,7 +120,10 @@ function ProjectView({
   const [creating, setCreating] = useState(false);
 
   const data = project.data;
-  const hasBacklog = data?.statuses.some((s) => s.category === 'backlog') ?? false;
+  const sprints = data ? usesSprints(data) : false;
+  const running = data && sprints ? activeSprint(data) : null;
+  // With sprints on, the backlog is where they are planned, whatever the statuses are.
+  const hasBacklog = sprints || (data?.statuses.some((s) => s.category === 'backlog') ?? false);
   // A backlog view with no backlog status to show falls back to the board.
   const chosen = storedView === 'backlog' && !hasBacklog ? null : storedView;
   const view: View = chosen ?? (data?.kind === 'queue' ? 'list' : 'board');
@@ -136,6 +140,16 @@ function ProjectView({
         (!who || Object.values(item.roles).some((holders) => holders.includes(who))),
     );
   }, [items.data, text, person, user.id]);
+
+  // With sprints on, the board is the running sprint's work and nothing else.
+  const onBoard = useMemo(
+    () => (sprints ? (running ? filtered.filter((item) => item.sprintId === running.id) : []) : filtered),
+    [filtered, sprints, running],
+  );
+  const sprintItems = useMemo(
+    () => (running ? (items.data ?? []).filter((item) => item.sprintId === running.id) : []),
+    [items.data, running],
+  );
 
   if (project.isLoading) return <Spinner />;
   if (!data) {
@@ -248,6 +262,16 @@ function ProjectView({
               canManageAccess={canManageAccess}
               onDeleted={onProjectDeleted}
             />
+          ) : view === 'backlog' && sprints ? (
+            <SprintBacklog
+              project={data}
+              items={filtered}
+              memberMap={memberMap}
+              canEdit={canEdit}
+              activeItemId={itemId}
+              onOpenItem={onOpenItem}
+              onOpenBoard={() => setView('board')}
+            />
           ) : view === 'backlog' ? (
             <ProjectBacklog
               project={data}
@@ -264,16 +288,32 @@ function ProjectView({
               title={data.kind === 'queue' ? 'Nothing in the queue' : 'No work items yet'}
               hint={canEdit ? 'Add the first with New. Work items can be linked from documents, canvases and chat.' : undefined}
             />
+          ) : view === 'board' && sprints && !running ? (
+            <NoSprintRunning project={data} canEdit={canEdit} onOpenBacklog={() => setView('backlog')} />
           ) : view === 'board' ? (
-            <ProjectBoard
-              project={data}
-              items={filtered}
-              memberMap={memberMap}
-              canEdit={canEdit && !filtering}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onOpenBacklog={hasBacklog ? () => setView('backlog') : undefined}
-            />
+            <div className="flex h-full flex-col">
+              {running && (
+                <SprintBar
+                  project={data}
+                  sprint={running}
+                  items={sprintItems}
+                  canEdit={canEdit}
+                  onOpenBacklog={() => setView('backlog')}
+                />
+              )}
+              <div className="min-h-0 flex-1">
+                <ProjectBoard
+                  project={data}
+                  items={onBoard}
+                  memberMap={memberMap}
+                  canEdit={canEdit && !filtering}
+                  activeItemId={itemId}
+                  onOpenItem={onOpenItem}
+                  // The sprint bar leads to the backlog when there are sprints.
+                  onOpenBacklog={hasBacklog && !sprints ? () => setView('backlog') : undefined}
+                />
+              </div>
+            </div>
           ) : view === 'list' ? (
             <ProjectTable
               project={data}
@@ -317,6 +357,8 @@ function ProjectView({
           members={members}
           selfId={user.id}
           initialStatusId={newStatusId}
+          // Filed from the board while a sprint runs, it joins that sprint so it shows up there.
+          initialSprintId={view === 'board' ? running?.id : undefined}
           onClose={() => setCreating(false)}
           onCreated={(id) => {
             setCreating(false);

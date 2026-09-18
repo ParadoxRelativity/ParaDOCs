@@ -2,7 +2,9 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   canMoveTo,
+  completeSprintSchema,
   createProjectSchema,
+  createSprintSchema,
   createRoleSchema,
   createStatusSchema,
   createWorkItemSchema,
@@ -14,10 +16,14 @@ import {
   resolveWorkItemsSchema,
   setTypeWorkflowSchema,
   setWorkItemRoleSchema,
+  setWorkItemsSprintSchema,
+  sprintEntryStatus,
+  startSprintSchema,
   textMembers,
   textWorkItems,
   updateProjectSchema,
   updateRoleSchema,
+  updateSprintSchema,
   updateStatusSchema,
   updateWorkItemSchema,
   updateWorkflowSchema,
@@ -26,8 +32,10 @@ import {
   type Project,
   type ProjectKind,
   type ProjectRole,
+  type ProjectSprint,
   type ProjectStatus,
   type ProjectWorkflow,
+  type SprintState,
   type StatusCategory,
   type WorkItem,
   type WorkItemActivity,
@@ -127,7 +135,7 @@ function projectColumns(user: string, role: string): string {
 /** A work item's summary. Items aliased `i`, their project `p`. */
 const ITEM_COLUMNS = `
   i.id, i.project_id AS "projectId", i.number, p.key || '-' || i.number AS key, i.title, i.type, i.priority,
-  i.status_id AS "statusId", i.position, to_char(i.due_date, 'YYYY-MM-DD') AS "dueDate",
+  i.status_id AS "statusId", i.position, i.sprint_id AS "sprintId", to_char(i.due_date, 'YYYY-MM-DD') AS "dueDate",
   i.estimate::float8 AS estimate,
   COALESCE((
     SELECT json_object_agg(g.role_id, g.users)
@@ -151,6 +159,17 @@ function authorJson(alias: string): string {
     ELSE json_build_object('id', ${alias}.id, 'name', ${alias}.name, 'email', ${alias}.email,
                            'avatarUrl', ${uploadUrlSql(`${alias}.avatar_key`)}) END`;
 }
+
+/** A sprint as the client wants it. The table must be aliased `sp`. */
+const SPRINT_COLUMNS = `
+  sp.id, sp.name, sp.goal, sp.state,
+  to_char(sp.start_date, 'YYYY-MM-DD') AS "startDate", to_char(sp.end_date, 'YYYY-MM-DD') AS "endDate",
+  sp.started_at AS "startedAt", sp.completed_at AS "completedAt", sp.created_at AS "createdAt"`;
+
+/** Running first, then planned in the order they were made, then completed, newest first. */
+const SPRINT_ORDER = `CASE sp.state WHEN 'active' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END,
+  CASE WHEN sp.state = 'completed' THEN NULL ELSE sp.created_at END,
+  sp.completed_at DESC`;
 
 /** A workflow's moves as the client wants them: to-statuses keyed by from-status. */
 const TRANSITIONS_JSON = `COALESCE((
@@ -178,6 +197,11 @@ async function fetchProject(id: string, userId: string): Promise<Project> {
                         FROM project_workflows w WHERE w.project_id = p.id), '[]'::json) AS workflows,
             COALESCE((SELECT json_object_agg(tw.type, tw.workflow_id)
                         FROM project_type_workflows tw WHERE tw.project_id = p.id), '{}'::json) AS "typeWorkflows",
+            p.board_layout AS "boardLayout",
+            p.kind = 'project' AND p.sprints_enabled AS "sprintsEnabled",
+            COALESCE((SELECT json_agg(to_jsonb(s) - 'ord' ORDER BY s.ord)
+                        FROM (SELECT ${SPRINT_COLUMNS}, row_number() OVER (ORDER BY ${SPRINT_ORDER}) AS ord
+                                FROM project_sprints sp WHERE sp.project_id = p.id) s), '[]'::json) AS sprints,
             (${roleSql('$2', 'p.workspace_id')} IN ('owner', 'admin') OR p.created_by = $2) AS "canDelete"
        FROM projects p WHERE p.id = $1`,
     [id, userId],
@@ -403,6 +427,126 @@ async function endOfStatus(db: Queryable, statusId: string): Promise<number> {
   return rows[0].next;
 }
 
+// --- sprints -------------------------------------------------------------------
+
+type SprintRow = { id: string; projectId: string; name: string; state: SprintState };
+
+async function sprintRow(sprintId: string): Promise<SprintRow> {
+  if (!UUID.test(sprintId)) throw notFound('Sprint not found');
+  const { rows } = await query<SprintRow>(
+    'SELECT id, project_id AS "projectId", name, state FROM project_sprints WHERE id = $1',
+    [sprintId],
+  );
+  if (!rows[0]) throw notFound('Sprint not found');
+  return rows[0];
+}
+
+/** A sprint of this project that work can still be put in: one not yet complete. */
+async function openSprintOf(projectId: string, sprintId: string): Promise<SprintRow> {
+  const sprint = await sprintRow(sprintId).catch(() => {
+    throw badRequest('That sprint is not in this project');
+  });
+  if (sprint.projectId !== projectId) throw badRequest('That sprint is not in this project');
+  if (sprint.state === 'completed') throw badRequest(`${sprint.name} is complete. Put the work in a sprint still to come.`);
+  return sprint;
+}
+
+/** One item as putting it in a sprint needs it. */
+type Placing = { id: string; key: string; type: WorkItemType; statusId: string; sprintId: string | null };
+
+async function placingItems(db: Queryable, projectId: string, itemIds: string[]): Promise<Placing[]> {
+  const { rows } = await db.query<Placing>(
+    `SELECT i.id, p.key || '-' || i.number AS key, i.type, i.status_id AS "statusId", i.sprint_id AS "sprintId"
+       FROM unnest($1::uuid[]) WITH ORDINALITY AS picked(id, n)
+       JOIN work_items i ON i.id = picked.id AND i.project_id = $2
+       JOIN projects p ON p.id = i.project_id
+      ORDER BY picked.n`,
+    [itemIds, projectId],
+  );
+  return rows;
+}
+
+/**
+ * Where each of these items goes when a running sprint takes it: from a
+ * backlog status onto the board, at the first status its workflow allows.
+ * Checked before anything is written, so a refusal changes nothing.
+ *
+ * An item whose workflow lets it nowhere on the board cannot join, which is
+ * said by name. Owners and admins are let through to the first board status,
+ * as they are past any other workflow rule.
+ */
+function boardEntries(project: Project, role: string | null, items: Placing[]): Map<string, ProjectStatus> {
+  const entries = new Map<string, ProjectStatus>();
+  for (const item of items) {
+    const status = project.statuses.find((s) => s.id === item.statusId);
+    if (status?.category !== 'backlog') continue;
+    let entry = sprintEntryStatus(project, item);
+    if (!entry && (role === 'owner' || role === 'admin')) {
+      const board = project.statuses.filter((s) => s.category !== 'backlog');
+      entry = board.find((s) => s.category === 'todo') ?? board[0] ?? null;
+    }
+    if (!entry) {
+      throw badRequest(`${item.key} cannot join a running sprint: its workflow does not let it onto the board from ${status.name}`);
+    }
+    entries.set(item.id, entry);
+  }
+  return entries;
+}
+
+/** Moves items onto the board where `boardEntries` said, at the end of each status, in order. */
+async function moveOntoBoard(
+  db: Queryable,
+  items: Placing[],
+  entries: Map<string, ProjectStatus>,
+  fromName: (statusId: string) => string,
+  actorId: string,
+): Promise<void> {
+  for (const item of items) {
+    const entry = entries.get(item.id);
+    if (!entry) continue;
+    await db.query(
+      `UPDATE work_items
+          SET status_id = $2, position = $3,
+              completed_at = CASE WHEN $4 = 'done' THEN COALESCE(completed_at, now()) ELSE NULL END,
+              updated_at = now()
+        WHERE id = $1`,
+      [item.id, entry.id, await endOfStatus(db, entry.id), entry.category],
+    );
+    await logActivity(db, item.id, actorId, { kind: 'status', from: fromName(item.statusId), to: entry.name });
+  }
+}
+
+/**
+ * Puts items in a sprint, or back in the backlog with null, and notes it in
+ * each one's history. Joining a running sprint also takes an item waiting in a
+ * backlog status onto the board, since the board is all a running sprint shows.
+ * Leaving one moves nothing: work that has started is still started.
+ */
+async function placeInSprint(
+  db: Queryable,
+  project: Project,
+  role: string | null,
+  items: Placing[],
+  sprint: Pick<SprintRow, 'id' | 'name' | 'state'> | null,
+  actorId: string,
+): Promise<number> {
+  const moving = items.filter((item) => item.sprintId !== (sprint?.id ?? null));
+  if (moving.length === 0) return 0;
+  const entries = sprint?.state === 'active' ? boardEntries(project, role, moving) : new Map<string, ProjectStatus>();
+
+  await db.query('UPDATE work_items SET sprint_id = $2, updated_at = now() WHERE id = ANY($1::uuid[])', [
+    moving.map((item) => item.id),
+    sprint?.id ?? null,
+  ]);
+  const sprintName = (id: string | null) => (id ? (project.sprints.find((s) => s.id === id)?.name ?? null) : null);
+  for (const item of moving) {
+    await logActivity(db, item.id, actorId, { kind: 'sprint', from: sprintName(item.sprintId), to: sprint?.name ?? null });
+  }
+  const statusName = (id: string) => project.statuses.find((s) => s.id === id)?.name ?? 'Backlog';
+  await moveOntoBoard(db, moving, entries, statusName, actorId);
+  return moving.length;
+}
+
 const listQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   mine: z.enum(['true', 'false']).optional(),
@@ -483,6 +627,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
     const input = parse(updateProjectSchema, req.body ?? {});
     if (input.key) await assertKeyFree(workspaceId, input.key, req.params.id);
+    if (input.sprintsEnabled) {
+      const { rows } = await query<{ kind: ProjectKind }>('SELECT kind FROM projects WHERE id = $1', [req.params.id]);
+      if (rows[0]?.kind === 'queue') throw badRequest('A queue is worked through in order, not in sprints');
+    }
 
     await query(
       `UPDATE projects
@@ -495,6 +643,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                 WHEN $7::boolean THEN COALESCE(archived_at, now())
                 ELSE NULL
               END,
+              board_layout = COALESCE($8::jsonb, board_layout),
+              sprints_enabled = COALESCE($9, sprints_enabled),
               updated_at = now()
         WHERE id = $1`,
       [
@@ -505,6 +655,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         input.icon !== undefined,
         input.icon ?? null,
         input.archived ?? null,
+        input.boardLayout ? JSON.stringify(input.boardLayout) : null,
+        input.sprintsEnabled ?? null,
       ],
     );
     projectChanged(workspaceId, req.params.id);
@@ -771,6 +923,170 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     return fetchProject(req.params.id, req.user!.id);
   });
 
+  // --- sprints -----------------------------------------------------------------
+
+  async function fetchSprint(id: string): Promise<ProjectSprint> {
+    const { rows } = await query<ProjectSprint>(`SELECT ${SPRINT_COLUMNS} FROM project_sprints sp WHERE sp.id = $1`, [id]);
+    if (!rows[0]) throw notFound('Sprint not found');
+    return rows[0];
+  }
+
+  function assertDates(start: string | null | undefined, end: string | null | undefined): void {
+    if (start && end && end < start) throw badRequest('A sprint cannot end before it starts');
+  }
+
+  app.post<{ Params: { id: string } }>('/projects/:id/sprints', async (req, reply) => {
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const input = parse(createSprintSchema, req.body ?? {});
+    assertDates(input.startDate, input.endDate);
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO project_sprints (project_id, name, goal, start_date, end_date)
+       VALUES ($1, COALESCE(NULLIF($2, ''), 'Sprint ' || ((SELECT count(*) FROM project_sprints WHERE project_id = $1) + 1)),
+               $3, $4, $5)
+       RETURNING id`,
+      [req.params.id, input.name ?? null, input.goal ?? '', input.startDate ?? null, input.endDate ?? null],
+    );
+    projectChanged(workspaceId, req.params.id);
+    reply.status(201);
+    return fetchSprint(rows[0].id);
+  });
+
+  app.patch<{ Params: { id: string } }>('/project-sprints/:id', async (req) => {
+    const sprint = await sprintRow(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const input = parse(updateSprintSchema, req.body ?? {});
+    const { rows } = await query<{ start: string | null; end: string | null }>(
+      `SELECT to_char(start_date, 'YYYY-MM-DD') AS start, to_char(end_date, 'YYYY-MM-DD') AS "end"
+         FROM project_sprints WHERE id = $1`,
+      [req.params.id],
+    );
+    assertDates(
+      input.startDate !== undefined ? input.startDate : rows[0].start,
+      input.endDate !== undefined ? input.endDate : rows[0].end,
+    );
+    await query(
+      `UPDATE project_sprints
+          SET name = COALESCE($2, name), goal = COALESCE($3, goal),
+              start_date = CASE WHEN $4::boolean THEN $5::date ELSE start_date END,
+              end_date = CASE WHEN $6::boolean THEN $7::date ELSE end_date END
+        WHERE id = $1`,
+      [
+        req.params.id,
+        input.name ?? null,
+        input.goal ?? null,
+        input.startDate !== undefined,
+        input.startDate ?? null,
+        input.endDate !== undefined,
+        input.endDate ?? null,
+      ],
+    );
+    projectChanged(workspaceId, sprint.projectId);
+    return fetchSprint(req.params.id);
+  });
+
+  /**
+   * Starts a planned sprint. Its work waiting in backlog statuses goes onto the
+   * board, since the board is what a running sprint is worked from.
+   */
+  app.post<{ Params: { id: string } }>('/project-sprints/:id/start', async (req) => {
+    const sprint = await sprintRow(req.params.id);
+    const { workspaceId, role } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const input = parse(startSprintSchema, req.body ?? {});
+    assertDates(input.startDate, input.endDate);
+    if (sprint.state !== 'planned') throw badRequest(`${sprint.name} has already been started`);
+    const project = await fetchProject(sprint.projectId, req.user!.id);
+    const running = project.sprints.find((s) => s.state === 'active');
+    if (running) throw conflict(`${running.name} is still running. Complete it before starting another.`);
+
+    await transaction(async (client) => {
+      await client.query(
+        `UPDATE project_sprints
+            SET state = 'active', start_date = $2, end_date = $3, started_at = now()
+          WHERE id = $1`,
+        [req.params.id, input.startDate, input.endDate],
+      );
+      if (input.includeBoard) {
+        const { rows } = await client.query<{ id: string }>(
+          `SELECT i.id FROM work_items i JOIN project_statuses st ON st.id = i.status_id
+            WHERE i.project_id = $1 AND i.sprint_id IS NULL AND st.category IN ('todo', 'active')
+            ORDER BY i.position, i.number`,
+          [sprint.projectId],
+        );
+        const joining = await placingItems(client, sprint.projectId, rows.map((r) => r.id));
+        // Already on the board, so nothing moves; the sprint only takes them in.
+        await placeInSprint(client, project, role, joining, { ...sprint, state: 'planned' }, req.user!.id);
+      }
+      const { rows: waiting } = await client.query<{ id: string }>(
+        `SELECT i.id FROM work_items i JOIN project_statuses st ON st.id = i.status_id
+          WHERE i.sprint_id = $1 AND st.category = 'backlog'
+          ORDER BY i.position, i.number`,
+        [req.params.id],
+      );
+      const items = await placingItems(client, sprint.projectId, waiting.map((r) => r.id));
+      const statusName = (id: string) => project.statuses.find((s) => s.id === id)?.name ?? 'Backlog';
+      await moveOntoBoard(client, items, boardEntries(project, role, items), statusName, req.user!.id);
+    });
+
+    projectChanged(workspaceId, sprint.projectId);
+    return fetchProject(sprint.projectId, req.user!.id);
+  });
+
+  /**
+   * Completes the running sprint. What was finished stays in it, as the record
+   * of what it got done; what was not goes on to a planned sprint, or back to
+   * the backlog. Nothing changes status: unfinished work is where it was left.
+   */
+  app.post<{ Params: { id: string } }>('/project-sprints/:id/complete', async (req) => {
+    const sprint = await sprintRow(req.params.id);
+    const { workspaceId, role } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const input = parse(completeSprintSchema, req.body ?? {});
+    if (sprint.state !== 'active') throw badRequest(`${sprint.name} is not running`);
+    const next = input.moveTo ? await openSprintOf(sprint.projectId, input.moveTo) : null;
+    if (next?.id === sprint.id) throw badRequest('Choose another sprint for the unfinished work');
+    const project = await fetchProject(sprint.projectId, req.user!.id);
+
+    await transaction(async (client) => {
+      await client.query(`UPDATE project_sprints SET state = 'completed', completed_at = now() WHERE id = $1`, [
+        req.params.id,
+      ]);
+      const { rows } = await client.query<{ id: string }>(
+        `SELECT i.id FROM work_items i JOIN project_statuses st ON st.id = i.status_id
+          WHERE i.sprint_id = $1 AND st.category <> 'done'
+          ORDER BY i.position, i.number`,
+        [req.params.id],
+      );
+      const unfinished = await placingItems(client, sprint.projectId, rows.map((r) => r.id));
+      await placeInSprint(client, project, role, unfinished, next, req.user!.id);
+    });
+
+    projectChanged(workspaceId, sprint.projectId);
+    return fetchProject(sprint.projectId, req.user!.id);
+  });
+
+  /** Deletes a sprint that is not running. Its work goes back to the backlog. */
+  app.delete<{ Params: { id: string } }>('/project-sprints/:id', async (req, reply) => {
+    const sprint = await sprintRow(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    if (sprint.state === 'active') throw badRequest(`${sprint.name} is running. Complete it before deleting it.`);
+    await query('DELETE FROM project_sprints WHERE id = $1', [req.params.id]);
+    projectChanged(workspaceId, sprint.projectId);
+    reply.status(204);
+  });
+
+  /** Puts many items in one sprint, or back in the backlog with null. */
+  app.post<{ Params: { id: string } }>('/projects/:id/items/sprint', async (req) => {
+    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'edit');
+    const input = parse(setWorkItemsSprintSchema, req.body ?? {});
+    const sprint = input.sprintId ? await openSprintOf(req.params.id, input.sprintId) : null;
+    const project = await fetchProject(req.params.id, req.user!.id);
+    const moved = await transaction(async (client) => {
+      const items = await placingItems(client, req.params.id, [...new Set(input.itemIds)]);
+      return placeInSprint(client, project, role, items, sprint, req.user!.id);
+    });
+    projectChanged(workspaceId, req.params.id);
+    return { moved };
+  });
+
   // --- work items --------------------------------------------------------------
 
   app.get<{ Params: { id: string } }>('/projects/:id/items', async (req) => {
@@ -793,8 +1109,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const project = await fetchProject(req.params.id, req.user!.id);
     if (project.archivedAt) throw badRequest('This project is archived. Restore it to add work to it.');
 
-    const status = input.statusId ? project.statuses.find((s) => s.id === input.statusId) : project.statuses[0];
+    let status = input.statusId ? project.statuses.find((s) => s.id === input.statusId) : project.statuses[0];
     if (!status) throw badRequest('That status is not in this project');
+    const sprint = input.sprintId ? await openSprintOf(req.params.id, input.sprintId) : null;
+    // New work in a running sprint starts on the board, where the sprint is worked.
+    if (sprint?.state === 'active' && status.category === 'backlog') {
+      const entry = project.statuses.find((s) => s.category === 'todo') ?? project.statuses.find((s) => s.category !== 'backlog');
+      if (entry) status = entry;
+    }
 
     const roleIds = new Set([...Object.keys(input.roles ?? {}), ...Object.keys(input.roleNames ?? {})]);
     const roles = [...roleIds].map((roleId) => {
@@ -814,8 +1136,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       );
       const { rows } = await client.query<{ id: string }>(
         `INSERT INTO work_items (project_id, workspace_id, number, title, description, type, priority, status_id,
-                                 position, due_date, estimate, created_by, completed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $13 THEN now() END)
+                                 position, due_date, estimate, created_by, completed_at, sprint_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $13 THEN now() END, $14)
          RETURNING id`,
         [
           req.params.id,
@@ -831,6 +1153,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           input.estimate ?? null,
           req.user!.id,
           status.category === 'done',
+          sprint?.id ?? null,
         ],
       );
       const itemId = rows[0].id;
@@ -927,9 +1250,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       status_id: string;
       status_name: string;
       status_category: StatusCategory;
+      sprint_id: string | null;
     }>(
       `SELECT p.key || '-' || i.number AS key, i.title, i.description, i.type, i.priority, i.status_id,
-              st.name AS status_name, st.category AS status_category
+              st.name AS status_name, st.category AS status_category, i.sprint_id
          FROM work_items i
          JOIN projects p ON p.id = i.project_id
          JOIN project_statuses st ON st.id = i.status_id
@@ -948,6 +1272,11 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       assertMoveAllowed(project, role, [{ key: current.key, type, from: current.status_id, to: status.id }]);
       target = status;
     }
+
+    // Changing sprint is done after everything else, from wherever that left it.
+    const changingSprint = input.sprintId !== undefined && (input.sprintId ?? null) !== current.sprint_id;
+    const sprint = changingSprint && input.sprintId ? await openSprintOf(projectId, input.sprintId) : null;
+    const sprintProject = changingSprint ? await fetchProject(projectId, req.user!.id) : null;
 
     await transaction(async (client) => {
       // Moved into another status with nowhere in particular to go: the end of it.
@@ -991,6 +1320,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
       if (input.title && input.title !== current.title) {
         await logActivity(client, req.params.id, actor, { kind: 'title', from: current.title, to: input.title });
+      }
+      if (sprintProject) {
+        const items = await placingItems(client, projectId, [req.params.id]);
+        await placeInSprint(client, sprintProject, role, items, sprint, actor);
       }
     });
 

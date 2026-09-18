@@ -194,11 +194,6 @@ function EditorSurface({
     <div className="scroll-thin h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-12 py-10">
         <div className="mb-1 flex items-center gap-2 text-xs text-[var(--color-muted)]">
-          {doc.isJournal && (
-            <span className="rounded bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[var(--color-accent)]">
-              Journal
-            </span>
-          )}
           {doc.archivedAt && (
             <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-600">Archived</span>
           )}

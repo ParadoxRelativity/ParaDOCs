@@ -17,7 +17,7 @@ import type { DbClient, DbDriver, DbResult } from '@paradocs/api/db/driver';
 const OID = { INT8: 20, DATE: 1082, TIMESTAMP: 1114, TIMESTAMPTZ: 1184 } as const;
 
 const parsers = {
-  // A journal date is a calendar day. Parsing it into a Date applies the local
+  // A DATE column holds a calendar day. Parsing it into a Date applies the local
   // timezone and can move it to the previous day.
   [OID.DATE]: (value: string) => value,
   [OID.INT8]: (value: string) => Number(value),

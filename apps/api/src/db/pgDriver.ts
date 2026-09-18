@@ -1,8 +1,8 @@
 import pg from 'pg';
 import type { DbClient, DbDriver } from './driver.js';
 
-// node-postgres returns DATE as a local-midnight Date, which shifts journal
-// dates across timezones. Keep them as the plain YYYY-MM-DD string we stored.
+// node-postgres returns DATE as a local-midnight Date, which shifts calendar
+// dates (a work item's due date) across timezones. Keep them as the plain YYYY-MM-DD string we stored.
 pg.types.setTypeParser(pg.types.builtins.DATE, (value) => value);
 // Return bigint counts as JS numbers; our counts never approach 2^53.
 pg.types.setTypeParser(pg.types.builtins.INT8, (value) => Number(value));

@@ -9,7 +9,7 @@ const APPS: Record<WorkspaceApp, { label: string; icon: IconName; hint: string }
   docs: {
     label: 'Docs',
     icon: 'journals',
-    hint: 'Pages, canvases, the journal, tags and the calendar.',
+    hint: 'Pages, canvases, tags and the calendar.',
   },
   sheets: {
     label: 'Sheets',

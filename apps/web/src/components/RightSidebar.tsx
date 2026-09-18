@@ -27,7 +27,6 @@ interface Props {
   currentUserId: string;
   onPatch: (patch: DocumentPatch) => void;
   onDelete: () => void;
-  onOpenJournal: (date: string) => void;
 }
 
 export default function RightSidebar(props: Props) {
@@ -54,11 +53,7 @@ export default function RightSidebar(props: Props) {
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {props.tab === 'calendar' ? (
-          <CalendarPanel
-            workspaceId={props.workspaceId}
-            documentId={props.doc?.id ?? null}
-            onOpenJournal={props.onOpenJournal}
-          />
+          <CalendarPanel workspaceId={props.workspaceId} documentId={props.doc?.id ?? null} />
         ) : !props.doc ? (
           <EmptyState icon="file-earmark-text" title="No document open" />
         ) : props.tab === 'toc' ? (

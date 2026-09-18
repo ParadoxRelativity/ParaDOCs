@@ -156,6 +156,7 @@ export function NewWorkItemDialog({
   members,
   selfId,
   initialStatusId,
+  initialSprintId,
   onCreated,
   onClose,
 }: {
@@ -164,6 +165,8 @@ export function NewWorkItemDialog({
   selfId: string;
   /** Where it starts; the project's first status when not given. */
   initialStatusId?: string;
+  /** The sprint it starts in, if any. */
+  initialSprintId?: string;
   onCreated: (itemId: string) => void;
   onClose: () => void;
 }) {
@@ -200,6 +203,7 @@ export function NewWorkItemDialog({
         estimate: parsedEstimate !== null && Number.isFinite(parsedEstimate) ? parsedEstimate : null,
         roles,
         roleNames,
+        sprintId: initialSprintId ?? null,
       });
       toast(`Created ${item.key}`);
       onCreated(item.id);

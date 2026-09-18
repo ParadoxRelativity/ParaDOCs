@@ -67,7 +67,6 @@ interface Props {
   canManageAccess: boolean;
   /** A document was deleted from the tree, so anything showing it must move off. */
   onDocumentDeleted: (id: string) => void;
-  onOpenJournal: () => void;
   onOpenSearch: () => void;
   onOpenAllDocuments: () => void;
   allDocumentsActive: boolean;
@@ -371,7 +370,6 @@ export default function LeftSidebar(props: Props) {
           active={props.allDocumentsActive}
           onClick={props.onOpenAllDocuments}
         />
-        <SidebarAction icon="journal-text" label="Today's journal" onClick={props.onOpenJournal} />
         <SidebarAction icon="file-earmark-plus" label="New document" onClick={() => addDocument(null)} />
         <SidebarAction icon="easel" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
         <SidebarAction

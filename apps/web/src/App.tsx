@@ -14,7 +14,6 @@ import {
 import {
   useDeleteDocument,
   useDocument,
-  useJournal,
   useLogout,
   useMe,
   useUpdateDocument,
@@ -33,7 +32,8 @@ import {
   useVoiceParticipants,
   type DocumentPatch,
 } from './api/hooks';
-import { cx, todayISO, useLocalStorage } from './lib/util';
+import { ApiError } from './api/client';
+import { cx, useLocalStorage } from './lib/util';
 import AuthScreen from './components/AuthScreen';
 import LeftSidebar from './components/LeftSidebar';
 import RightSidebar, { type RightTab } from './components/RightSidebar';
@@ -193,15 +193,28 @@ function DesktopNavigation() {
   return null;
 }
 
+/**
+ * Where the app opens: back to the tab that was in front when it was last
+ * used, and the first workspace only when there is no such tab. The tab has to
+ * be in a workspace this account still has, or a workspace that is gone would
+ * send it back here in a loop.
+ */
 function FirstWorkspaceRedirect() {
   const workspaces = useWorkspaces();
   if (workspaces.isLoading) return <Spinner />;
+  const last = activeTab();
+  if (last && workspaces.data?.some((w) => w.id === last.workspaceId)) {
+    return <Navigate to={last.path} replace />;
+  }
   const first = workspaces.data?.[0];
   if (!first) {
     return <EmptyState icon="exclamation-triangle" title="No workspaces" hint="Your account has no workspace. Try signing out and back in." />;
   }
   return <Navigate to={`/w/${first.id}`} replace />;
 }
+
+/** What the server says for anything this reader cannot have: deleted, or not shared with them. */
+const isNotFound = (error: unknown) => error instanceof ApiError && error.status === 404;
 
 function RenamedToAccess() {
   const { workspaceId = '', '*': rest = '' } = useParams();
@@ -365,10 +378,7 @@ function Workspace({
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [activeTagIds, setActiveTagIds] = useState<string[]>([]);
   const [liveBlocks, setLiveBlocks] = useState<unknown[]>([]);
-  const [journalDate, setJournalDate] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
-
-  const journal = useJournal(workspaceId, journalDate ?? todayISO(), journalDate !== null && appOn('docs'));
 
   /**
    * Opening a document you were tagged in answers the tag, however you got
@@ -383,15 +393,6 @@ function Workspace({
     // The mutation object is stable; including it would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentId, taggedHere]);
-
-  // Opening a journal is a fetch-then-navigate, since the id is assigned server side.
-  useEffect(() => {
-    if (journalDate && journal.data) {
-      navigate(`/w/${workspaceId}/d/${journal.data.id}`);
-      setJournalDate(null);
-      queryClient.invalidateQueries({ queryKey: ['tree', workspaceId] });
-    }
-  }, [journalDate, journal.data, workspaceId, navigate, queryClient]);
 
   const dark =
     theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -417,10 +418,6 @@ function Workspace({
         e.preventDefault();
         if (e.shiftKey) setRightOpen((v) => !v);
         else setLeftOpen((v) => !v);
-      }
-      if (meta && e.key.toLowerCase() === 'j' && e.shiftKey) {
-        e.preventDefault();
-        setJournalDate(todayISO());
       }
     }
     window.addEventListener('keydown', onKey);
@@ -592,6 +589,35 @@ function Workspace({
     if (chat && !channelId && firstChannelId) navigate(`/w/${workspaceId}/c/${firstChannelId}`, { replace: true });
   }, [chat, channelId, firstChannelId, workspaceId, navigate]);
 
+  // A channel this visit has already shown. Deleting or leaving one refreshes
+  // the list a moment before whoever did it moves on, so its going missing
+  // then is theirs to handle, not something to report as unavailable.
+  const shownChannel = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeChannel) shownChannel.current = activeChannel.id;
+  }, [activeChannel]);
+
+  // Something no longer there — deleted, or locked away from this reader since
+  // the tab or link was made — gives way to the workspace's front door rather
+  // than an error about a page nobody just asked for. The server answers both
+  // with 404 and nothing else does, so an outage still shows as one.
+  const unavailable = isNotFound(document.error)
+    ? 'document'
+    : isNotFound(openSheet.error)
+      ? 'spreadsheet'
+      : isNotFound(openProject.error)
+        ? 'project'
+        : chat && channelId && channels.isSuccess && directs.isSuccess && !activeChannel && shownChannel.current !== channelId
+          ? 'conversation'
+          : null;
+  useEffect(() => {
+    if (!unavailable) return;
+    toast(`That ${unavailable} is no longer available`);
+    navigate(`/w/${workspaceId}`, { replace: true });
+    // The toast is stable; including it would change nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unavailable, workspaceId, navigate]);
+
   if (workspaces.isLoading) return <Spinner />;
   if (workspaces.data && !workspace) {
     return <Navigate to="/" replace />;
@@ -630,7 +656,6 @@ function Workspace({
               // or the page sits on something the server no longer has.
               if (id === documentId) navigate(`/w/${workspaceId}`);
             }}
-            onOpenJournal={() => setJournalDate(todayISO())}
             onOpenSearch={() => setSearchOpen(true)}
             onOpenAllDocuments={() => navigate(`/w/${workspaceId}/all`)}
             allDocumentsActive={allDocuments}
@@ -746,8 +771,8 @@ function Workspace({
           </span>
           {/* Writing and drawing are two views of one document, so moving
               between them belongs beside the document rather than inside a
-              panel. A journal entry is a dated page and has nowhere to slide. */}
-          {!chat && !sheets && !projects && !access && !allDocuments && document.data && !document.data.isJournal && (
+              panel. */}
+          {!chat && !sheets && !projects && !access && !allDocuments && document.data && (
             <ModeSwitch
               mode={document.data.mode}
               disabled={!canEdit || document.data.permission !== 'edit'}
@@ -987,7 +1012,6 @@ function Workspace({
                 deleteDocument.mutate(documentId);
                 navigate(`/w/${workspaceId}`);
               }}
-              onOpenJournal={(date) => setJournalDate(date)}
             />
           </div>
         </aside>

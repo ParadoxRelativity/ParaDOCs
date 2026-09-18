@@ -145,7 +145,6 @@ const RESERVED_PROPERTY_NAMES = new Set([
   'updated',
   'owner',
   'words',
-  'journal date',
 ]);
 
 export function PropertyEditor({ doc, onPatch, readOnly }: Omit<MetaProps, 'workspaceId'>) {
@@ -274,11 +273,6 @@ export function BuiltInProperties({ doc }: { doc: Doc }) {
       <MetaRow label="Words">
         <ReadOnly>{words.toLocaleString()}</ReadOnly>
       </MetaRow>
-      {doc.isJournal && doc.journalDate && (
-        <MetaRow label="Journal date">
-          <ReadOnly>{doc.journalDate}</ReadOnly>
-        </MetaRow>
-      )}
     </>
   );
 }

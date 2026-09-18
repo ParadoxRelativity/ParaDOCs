@@ -67,7 +67,7 @@ async function main() {
     const workspaceId = workspaces[0].id;
 
     const folderIds = new Map<string, string>();
-    for (const [index, name] of ['Journal', 'Notes', 'Product'].entries()) {
+    for (const [index, name] of ['Notes', 'Product'].entries()) {
       const { rows } = await client.query<{ id: string }>(
         'INSERT INTO folders (workspace_id, name, position) VALUES ($1, $2, $3) RETURNING id',
         [workspaceId, name, index],
