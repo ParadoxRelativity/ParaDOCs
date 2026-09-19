@@ -683,7 +683,11 @@ function Column({
                   onDragStart={(e) => {
                     e.dataTransfer.setData(DRAG_TYPE, item.id);
                     e.dataTransfer.effectAllowed = 'move';
-                    onDragStart(item.id);
+                    // Raising the drop boxes covers this card, and covering the
+                    // source during dragstart makes the browser cancel the drag.
+                    // Wait for the drag to begin before drawing them.
+                    const id = item.id;
+                    setTimeout(() => onDragStart(id), 0);
                   }}
                   onDragEnd={onDragEnd}
                   onDragOver={(e) => {
