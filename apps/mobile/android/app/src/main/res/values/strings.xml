@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ParaDOCs</string>
+    <string name="title_activity_main">ParaDOCs</string>
+    <string name="package_name">com.paradocs.mobile</string>
+    <string name="custom_url_scheme">com.paradocs.mobile</string>
+</resources>

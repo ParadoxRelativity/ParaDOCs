@@ -17,6 +17,7 @@ import { documentSchema } from './documentSchema';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
 import { WorkItemPicker } from './projects/WorkItemRefs';
 import { copyEditorSelection } from '../lib/documentClipboard';
+import { assetUrl, serverPath } from '../lib/server';
 
 interface Props {
   doc: Doc;
@@ -106,7 +107,10 @@ function EditorSurface({
       extensions: [syntaxHighlighter],
       // Image, video, audio and file blocks, and files dropped or pasted into
       // the page, upload to the workspace under the server's size limit.
-      uploadFile: async (file: File) => (await upload.mutateAsync({ file, documentId: doc.id })).url,
+      // The page keeps the server's path, not this client's address for it;
+      // see lib/server.ts.
+      uploadFile: async (file: File) => serverPath((await upload.mutateAsync({ file, documentId: doc.id })).url),
+      resolveFileUrl: async (url: string) => assetUrl(url),
     }),
     [session],
   );
@@ -230,7 +234,7 @@ function EditorSurface({
         <DocumentMeta doc={doc} workspaceId={workspaceId} onPatch={onPatch} readOnly={!canEdit} />
 
         <div
-          className="-mx-12 mt-6"
+          className="mt-6"
           onClick={(e) => {
             // A channel or document link inside the editor is an in-app route;
             // letting the browser follow it would reload the whole client.

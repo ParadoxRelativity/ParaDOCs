@@ -25,6 +25,7 @@ import {
   useWorkItemTimeline,
 } from '../../api/hooks';
 import { cx, formatDateTime, formatRelative } from '../../lib/util';
+import { shareOrigin } from '../../lib/server';
 import Avatar from '../Avatar';
 import { MessageBody } from '../chat/MessageBody';
 import Icon, { DocumentIcon } from '../Icon';
@@ -174,7 +175,7 @@ function ItemDetail({
   }
 
   function copyLink() {
-    const url = `${window.location.origin}/w/${workspaceId}/p/${project.id}/${item.id}`;
+    const url = `${shareOrigin()}/w/${workspaceId}/p/${project.id}/${item.id}`;
     void navigator.clipboard?.writeText(url).then(
       () => toast(`Link to ${item.key} copied`),
       () => toast('Could not copy the link', 'error'),

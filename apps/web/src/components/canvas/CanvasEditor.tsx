@@ -37,6 +37,7 @@ import Icon, { type IconName } from '../Icon';
 import SheetRefPicker from '../sheet/SheetRefPicker';
 import { WorkItemPicker } from '../projects/WorkItemRefs';
 import { withCachedSheetValues } from '../../lib/sheetRefs';
+import { serverPath } from '../../lib/server';
 
 interface Props {
   doc: Doc;
@@ -246,7 +247,7 @@ export default function CanvasEditor({
           create(type, {
             x: point.x - size.width / 2 + offset,
             y: point.y - size.height / 2 + offset,
-            url: uploaded.url,
+            url: serverPath(uploaded.url),
             title: file.name,
             alt: file.name,
           } as never),

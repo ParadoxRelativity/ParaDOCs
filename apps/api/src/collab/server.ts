@@ -28,7 +28,7 @@ import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
 import { setLiveDocumentLookup } from '../lib/liveDocuments.js';
 import { syncWorkItemMentions } from '../lib/workItems.js';
 import { documentSchema } from './documentSchema.js';
-import { SESSION_COOKIE, documentAccessForUser, resolveSession, type SessionUser } from '../plugins/session.js';
+import { documentAccessForUser, resolveSession, selectProtocol, upgradeToken, type SessionUser } from '../plugins/session.js';
 import { UUID } from '../lib/access.js';
 import { onAccessChanged } from '../lib/accessEvents.js';
 import { onSignedOut } from '../lib/accountEvents.js';
@@ -43,16 +43,6 @@ const serverEditor = ServerBlockNoteEditor.create({ schema: documentSchema });
 
 interface CollabContext {
   user: SessionUser;
-}
-
-function readCookie(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined;
-  for (const part of header.split(';')) {
-    const index = part.indexOf('=');
-    if (index === -1) continue;
-    if (part.slice(0, index).trim() === name) return decodeURIComponent(part.slice(index + 1).trim());
-  }
-  return undefined;
 }
 
 /**
@@ -298,14 +288,14 @@ export function createCollabServer(log: FastifyBaseLogger) {
     }
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectProtocol });
 
   /**
    * Authenticates the session cookie before handing the socket to Hocuspocus.
    * Per-document authorization happens in onConnect, where the name is known.
    */
   async function handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
-    const token = readCookie(request.headers.cookie, SESSION_COOKIE);
+    const token = upgradeToken(request);
     const user = token ? await resolveSession(token) : null;
     if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');

@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { query } from '../db/pool.js';
@@ -39,7 +40,7 @@ const plugin: FastifyPluginAsync = async (app) => {
   app.decorateRequest('user', null);
 
   app.addHook('onRequest', async (req) => {
-    const token = req.cookies?.[SESSION_COOKIE];
+    const token = sessionToken(req);
     if (!token) return;
     req.user = await resolveSession(token);
   });
@@ -50,6 +51,55 @@ const plugin: FastifyPluginAsync = async (app) => {
 };
 
 export const sessionPlugin = fp(plugin, { name: 'session' });
+
+/**
+ * The session token a request carries. A browser sends it as a cookie. The
+ * mobile app is served from its own origin, and a cross-site cookie from a
+ * webview is refused or dropped, so it sends the token as a bearer header
+ * instead.
+ */
+export function sessionToken(req: FastifyRequest): string | undefined {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) return header.slice('Bearer '.length).trim() || undefined;
+  return req.cookies?.[SESSION_COOKIE];
+}
+
+/**
+ * The subprotocol a websocket offers to authenticate with, followed by the
+ * token itself: `new WebSocket(url, [BEARER_PROTOCOL, token])`. A browser
+ * websocket cannot set headers, and a token in the address would end up in
+ * access logs, so this is how the mobile app authenticates a socket.
+ */
+export const BEARER_PROTOCOL = 'paradocs.bearer';
+
+/** The session token on a websocket handshake: the cookie, or the bearer subprotocol. */
+export function upgradeToken(request: IncomingMessage): string | undefined {
+  const offered = (request.headers['sec-websocket-protocol'] ?? '').split(',').map((p) => p.trim());
+  const at = offered.indexOf(BEARER_PROTOCOL);
+  if (at !== -1 && offered[at + 1]) return offered[at + 1];
+  return readCookie(request.headers.cookie, SESSION_COOKIE);
+}
+
+function readCookie(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    if (part.slice(0, index).trim() === name) return decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return undefined;
+}
+
+/**
+ * Picks the subprotocol a websocket server answers with. One that offered the
+ * bearer protocol has to have it echoed back, or the client drops the
+ * connection; the token after it is never echoed.
+ */
+export function selectProtocol(protocols: Set<string>): string | false {
+  if (protocols.has(BEARER_PROTOCOL)) return BEARER_PROTOCOL;
+  const [first] = protocols;
+  return first ?? false;
+}
 
 /** Looks up the user behind a session token. Shared with the websocket handshake. */
 export async function resolveSession(token: string): Promise<SessionUser | null> {

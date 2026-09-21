@@ -22,6 +22,8 @@
     "desktop": "npm run start --workspace=@paradocs/desktop",
     "desktop:dev": "npm run dev --workspace=@paradocs/desktop",
     "desktop:dist:mac": "npm run dist:mac --workspace=@paradocs/desktop",
-    "desktop:dist:win": "npm run dist:win --workspace=@paradocs/desktop"
+    "desktop:dist:win": "npm run dist:win --workspace=@paradocs/desktop",
+    "mobile:ios": "npm run ios --workspace=@paradocs/mobile",
+    "mobile:android": "npm run android --workspace=@paradocs/mobile"
   }
 }

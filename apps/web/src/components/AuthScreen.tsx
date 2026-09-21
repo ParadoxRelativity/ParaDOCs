@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useLogin, useRegister } from '../api/hooks';
 import { ApiError } from '../api/client';
 import { desktop, requireDesktop, useDesktopConnections } from '../lib/desktop';
+import { isNativeApp, serverOrigin } from '../lib/server';
+import ServerPicker from './ServerPicker';
 import ConnectServerDialog from './ConnectServerDialog';
 import Icon from './Icon';
 import { ConfirmDialog } from './Modal';
@@ -18,6 +20,7 @@ export default function AuthScreen({ allowRegistration, oidc }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [changingServer, setChangingServer] = useState(false);
   const login = useLogin();
   const register = useRegister();
 
@@ -33,6 +36,8 @@ export default function AuthScreen({ allowRegistration, oidc }: Props) {
   const field =
     'w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-3 py-2 text-sm ' +
     'outline-none focus:border-[var(--color-accent)]';
+
+  if (changingServer) return <ServerPicker onCancel={() => setChangingServer(false)} />;
 
   return (
     <div className="flex h-full items-center justify-center bg-[var(--color-surface)] p-6">
@@ -120,6 +125,18 @@ export default function AuthScreen({ allowRegistration, oidc }: Props) {
         )}
 
         {desktop && <DesktopPlaces />}
+
+        {/* The mobile app signs in to one server at a time, chosen before this. */}
+        {isNativeApp && (
+          <div className="mt-4 border-t border-[var(--color-line)] pt-4 text-xs text-[var(--color-muted)]">
+            <p className="mb-2 truncate">
+              Signing in to <span className="text-[var(--color-ink)]">{serverOrigin()}</span>
+            </p>
+            <Button variant="subtle" className="text-xs" onClick={() => setChangingServer(true)}>
+              <Icon name="hdd-network" /> Change server
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

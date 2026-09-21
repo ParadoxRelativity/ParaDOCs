@@ -1,4 +1,5 @@
 import { ConnectionError, ConnectionErrorReason } from 'livekit-client';
+import { serverOrigin, socketUrl } from './server';
 
 /**
  * Where to dial LiveKit's signalling when the server relays it under /rtc:
@@ -9,8 +10,8 @@ import { ConnectionError, ConnectionErrorReason } from 'livekit-client';
  * desktop app's loopback proxy, can hide both from the server.
  */
 export function sameOriginSignallingUrl(): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${protocol}://${window.location.host}`;
+  // The mobile app is not served by its server, so it names the server instead.
+  return socketUrl('');
 }
 
 /**
@@ -26,7 +27,7 @@ export function explainJoinFailure(err: unknown, url: string): Error {
       // Not a URL; name it as given.
     }
     return new Error(
-      host === window.location.host
+      host === (serverOrigin() ? new URL(serverOrigin()!).host : window.location.host)
         ? 'Could not reach the voice service through this server. It may be stopped or still starting.'
         : `Could not reach the voice service at ${host}. If that address is from an earlier setup, remove LIVEKIT_URL from the server's .env.`,
     );

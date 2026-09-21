@@ -11,6 +11,7 @@ import {
   useUpdateMember,
 } from '../api/hooks';
 import { cx, formatRelative } from '../lib/util';
+import { shareOrigin } from '../lib/server';
 import { useToast } from './Toast';
 import { Button, Spinner } from './ui';
 import Avatar from './Avatar';
@@ -64,7 +65,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
     : everyone;
 
   function inviteLink(token: string) {
-    return `${window.location.origin}/invite/${token}`;
+    return `${shareOrigin()}/invite/${token}`;
   }
 
   async function copy(token: string) {

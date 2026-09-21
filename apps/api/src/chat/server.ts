@@ -3,7 +3,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ChatEvent, PresenceStatus } from '@paradocs/shared';
-import { SESSION_COOKIE, resolveSession, workspaceRole, type SessionUser } from '../plugins/session.js';
+import { resolveSession, selectProtocol, upgradeToken, workspaceRole, type SessionUser } from '../plugins/session.js';
 import { query } from '../db/pool.js';
 import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { subscribeToChannel, subscribeToUser, subscribeToWorkspace } from './hub.js';
@@ -12,16 +12,6 @@ import { onAccessChanged } from '../lib/accessEvents.js';
 import { onSignedOut } from '../lib/accountEvents.js';
 
 export const CHAT_PATH = '/chat';
-
-/** Same cookie handshake as the collaboration socket. */
-function readCookie(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined;
-  for (const part of header.split(';')) {
-    const [key, ...rest] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(rest.join('='));
-  }
-  return undefined;
-}
 
 interface ClientMessage {
   /**
@@ -59,7 +49,7 @@ const TYPING_ACCESS_LIMIT = 200;
  * socket being authenticated says who you are, not what you may read.
  */
 export function createChatServer(log: FastifyBaseLogger) {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectProtocol });
   // Sockets that have stopped answering pings, so a dropped laptop lid does not
   // leave a subscriber attached to a channel forever.
   const alive = new WeakMap<WebSocket, boolean>();
@@ -230,7 +220,7 @@ export function createChatServer(log: FastifyBaseLogger) {
   heartbeat.unref();
 
   async function handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
-    const token = readCookie(request.headers.cookie, SESSION_COOKIE);
+    const token = upgradeToken(request);
     const user = token ? await resolveSession(token) : null;
     if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');

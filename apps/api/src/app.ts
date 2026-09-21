@@ -43,6 +43,9 @@ export async function buildApp() {
   await app.register(cors, {
     origin: config.corsOrigins,
     credentials: true, // the session cookie must survive cross-origin dev
+    // The plugin's default is GET, HEAD and POST. The mobile app calls across
+    // origins for everything, so edits and deletes have to pass preflight too.
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
   });
   await app.register(cookie);
   await app.register(multipart);

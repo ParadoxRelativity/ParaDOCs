@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatEvent } from '@paradocs/shared';
+import { fromServer, openSocket, socketUrl } from './server';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected';
-
-function socketUrl(): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  // Same origin, so the session cookie authenticates the handshake.
-  return `${protocol}://${window.location.host}/chat`;
-}
 
 /**
  * One socket for the session, subscribed to every channel in the workspace and
@@ -62,7 +57,9 @@ export function useChatSocket({
     let attempt = 0;
 
     function connect() {
-      const socket = new WebSocket(socketUrl());
+      // Same origin in a browser, so the session cookie authenticates the
+      // handshake; the mobile app offers its token instead.
+      const socket = openSocket(socketUrl('/chat'));
       socketRef.current = socket;
       setStatus('connecting');
       const send = (message: object) => socket.send(JSON.stringify(message));
@@ -82,7 +79,7 @@ export function useChatSocket({
       };
       socket.onmessage = (event) => {
         try {
-          const parsed = JSON.parse(event.data as string) as ChatEvent | { type: 'subscribed' };
+          const parsed = fromServer(JSON.parse(event.data as string)) as ChatEvent | { type: 'subscribed' };
           if (parsed.type === 'subscribed') return;
           handler.current(parsed as ChatEvent);
         } catch {

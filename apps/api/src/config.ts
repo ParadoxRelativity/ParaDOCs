@@ -85,14 +85,24 @@ function megabytes(name: string, fallback: number): number {
   return Math.floor(value * 1024 * 1024);
 }
 
+/** Where the iOS and Android apps serve their bundled client from. */
+const MOBILE_APP_ORIGINS = ['capacitor://localhost', 'https://localhost'];
+
 export const config = {
   databaseUrl: required('DATABASE_URL'),
   port: Number(process.env.API_PORT ?? 4000),
   sessionSecret: required('SESSION_SECRET'),
-  corsOrigins: (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean),
+  corsOrigins: [
+    ...(process.env.CORS_ORIGIN ?? 'http://localhost:5173')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+    // The mobile app's pages are served from inside the app, from these
+    // origins, and call this server across origins. It signs in with a bearer
+    // token rather than a cookie, so allowing them lends it no browser
+    // credentials. A server that wants no mobile access sets ALLOW_MOBILE_APP=false.
+    ...(process.env.ALLOW_MOBILE_APP === 'false' ? [] : MOBILE_APP_ORIGINS),
+  ],
   secureCookies: process.env.SECURE_COOKIES === 'true',
   uploadDir: path.resolve(here, '../../..', process.env.UPLOAD_DIR ?? './data/uploads'),
   /**

@@ -7,6 +7,7 @@ import { keys, useDocument } from '../../api/hooks';
 import { useCollaboration } from '../../lib/collaboration';
 import { renderMarkdownPreview } from '../../lib/markdownPreview';
 import { cx } from '../../lib/util';
+import { assetUrl } from '../../lib/server';
 import Icon from '../Icon';
 
 interface Props {
@@ -110,6 +111,7 @@ function LiveSurface({
   const editor = useCreateBlockNote(
     withCollaboration({
       collaboration: { provider: { awareness: session.provider.awareness ?? undefined }, fragment: session.fragment, user },
+      resolveFileUrl: async (url: string) => assetUrl(url),
     }),
     [session],
   );

@@ -9,6 +9,7 @@ import {
 } from '@paradocs/shared';
 import type { WorkspaceMember } from '@paradocs/shared';
 import { cx } from '../../lib/util';
+import { assetUrl } from '../../lib/server';
 import EmbeddedDocument from './EmbeddedDocument';
 import { SheetCellCard, SheetChartCard } from '../sheet/SheetRefViews';
 import { WorkItemCard } from '../projects/WorkItemRefs';
@@ -154,7 +155,7 @@ export default function CanvasElementView({
     case 'image':
       return element.url ? (
         <img
-          src={element.url}
+          src={assetUrl(element.url)}
           alt={element.alt ?? ''}
           draggable={false}
           className="h-full w-full rounded-lg object-cover"
@@ -167,14 +168,14 @@ export default function CanvasElementView({
       return (
         <div className="flex h-full w-full flex-col justify-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] px-3">
           {element.title && <span className="truncate text-xs font-medium">{element.title}</span>}
-          <audio src={element.url} controls className="w-full" />
+          <audio src={assetUrl(element.url)} controls className="w-full" />
         </div>
       );
 
     case 'video':
       return element.url ? (
         <video
-          src={element.url}
+          src={assetUrl(element.url)}
           controls
           // Controls only respond once the element is selected, so a click on an
           // unselected video still selects and drags it.

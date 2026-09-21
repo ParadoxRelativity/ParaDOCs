@@ -5,6 +5,14 @@
 # to a DRAFT GitHub Release. Publishing that draft is a deliberate second step,
 # because publishing is what makes every installed client start updating.
 #
+# The same tag builds the mobile apps. The Android APK goes into the same draft
+# release: a debug-signed one that sideloads anywhere, or a release-signed one
+# (plus an .aab for Google Play) once a keystore is configured. iOS always
+# builds for the simulator, which proves the project compiles; with signing
+# secrets it also archives an .ipa, kept as a workflow artifact for upload to
+# App Store Connect, since an App Store build cannot be installed from a
+# release page.
+#
 # The same tag also builds the server image and pushes it as X.Y.Z, X.Y and
 # latest to the GitHub Container Registry (ghcr.io/<owner>/<repo>) and, when
 # Docker Hub credentials are configured, to Docker Hub
@@ -23,6 +31,10 @@ permissions:
 
 env:
   NODE_VERSION: '20'
+  # Whether the tag also builds the iOS and Android apps. Set the repository
+  # variable BUILD_MOBILE to false to turn them off without editing this file;
+  # it wins over the default here.
+  BUILD_MOBILE: 'false'
 
 jobs:
   verify:
@@ -30,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      mobile: ${{ steps.mobile.outputs.build }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,7 +74,30 @@ jobs:
               exit 1
             fi
           fi
+          # The mobile app is released alongside, under the same number.
+          MOBILE="$(node -p "require('./apps/mobile/package.json').version")"
+          if [ "$MOBILE" != "$PKG" ]; then
+            echo "::error::apps/mobile/package.json ($MOBILE) does not match apps/desktop/package.json ($PKG)."
+            exit 1
+          fi
           echo "Releasing $PKG"
+
+      # Resolved here because a job's `if:` cannot read `env`, only the outputs
+      # of a job it waits for.
+      - name: Mobile builds on or off
+        id: mobile
+        shell: bash
+        env:
+          OVERRIDE: ${{ vars.BUILD_MOBILE }}
+        run: |
+          WANTED="${OVERRIDE:-$BUILD_MOBILE}"
+          case "$(echo "$WANTED" | tr '[:upper:]' '[:lower:]')" in
+            true|yes|1) BUILD=true ;;
+            false|no|0) BUILD=false ;;
+            *) echo "::error::BUILD_MOBILE is \"$WANTED\"; use true or false."; exit 1 ;;
+          esac
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "Mobile builds: $BUILD"
 
   build:
     name: Build ${{ matrix.platform }}
@@ -164,11 +200,243 @@ jobs:
             apps/desktop/release/*.blockmap
             apps/desktop/release/latest*.yml
 
+  android:
+    name: Build Android
+    needs: verify
+    if: needs.verify.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      # Capacitor's command line needs Node 22.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Build web client
+        run: npm run build --workspace=@paradocs/web
+      - name: Copy it into the Android project
+        working-directory: apps/mobile
+        run: npx cap sync android
+
+      # The same rule as desktop signing: the keystore is written out, and its
+      # variables exported, only when the secret actually exists.
+      - name: Configure signing
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "No Android keystore configured; building a debug-signed APK."
+            exit 0
+          fi
+          echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          {
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore"
+            echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            echo "ANDROID_KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+          } >> "$GITHUB_ENV"
+          echo "Signing with the release keystore."
+
+      - name: Build
+        working-directory: apps/mobile/android
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/mobile-release"
+          if [ -n "$ANDROID_KEYSTORE_PATH" ]; then
+            ./gradlew --no-daemon assembleRelease bundleRelease
+            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/mobile-release/ParaDOCs-$VERSION-android.apk"
+            cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/mobile-release/ParaDOCs-$VERSION-android.aab"
+          else
+            ./gradlew --no-daemon assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/mobile-release/ParaDOCs-$VERSION-android.apk"
+          fi
+          ls -la "$GITHUB_WORKSPACE/mobile-release"
+
+      # Named like the desktop installers so the release job picks the APK up.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-Android
+          if-no-files-found: error
+          path: mobile-release/*.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-bundle
+          if-no-files-found: ignore
+          path: mobile-release/*.aab
+
+  ios:
+    name: Build iOS
+    needs: verify
+    if: needs.verify.outputs.mobile == 'true'
+    # Capacitor 8 needs Xcode 26.
+    runs-on: macos-26
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Build web client
+        run: npm run build --workspace=@paradocs/web
+      - name: Copy it into the iOS project
+        working-directory: apps/mobile
+        run: npx cap sync ios
+
+      # The build number is the version read as digits, as on Android: App
+      # Store Connect refuses an upload whose number it has seen before.
+      - name: Version
+        shell: bash
+        run: |
+          IFS=.- read -r major minor patch _ <<< "$VERSION"
+          echo "BUILD_NUMBER=$((major * 10000 + minor * 100 + patch))" >> "$GITHUB_ENV"
+
+      # Proves the project compiles on every release, signing or not.
+      - name: Build for the simulator
+        working-directory: apps/mobile/ios/App
+        run: |
+          xcodebuild build \
+            -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/simulator" \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO
+          ditto -c -k --keepParent \
+            "$RUNNER_TEMP/simulator/Build/Products/Release-iphonesimulator/App.app" \
+            "$GITHUB_WORKSPACE/ParaDOCs-$VERSION-ios-simulator.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator
+          if-no-files-found: error
+          path: ParaDOCs-*-ios-simulator.zip
+
+      # A device build needs an Apple Distribution certificate and a
+      # provisioning profile for com.paradocs.mobile. These are not the
+      # desktop's Developer ID secrets; that certificate cannot sign iOS apps.
+      # IOS_EXPORT_METHOD is a repository variable: app-store-connect (the
+      # default) for TestFlight and the App Store, or release-testing for
+      # ad hoc installs on registered devices.
+      - name: Configure signing
+        id: signing
+        shell: bash
+        env:
+          CERT: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          CERT_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          EXPORT_METHOD: ${{ vars.IOS_EXPORT_METHOD || 'app-store-connect' }}
+        run: |
+          if [ -z "$CERT" ] || [ -z "$PROFILE" ] || [ -z "$TEAM_ID" ]; then
+            echo "iOS signing secrets are not all set; skipping the device build."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A keychain of its own, so the build never reaches for the runner's.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          # Installed under its own UUID, which is also how the export names it.
+          echo "$PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          PROFILE_UUID="$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" | plutil -extract UUID raw -)"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>$EXPORT_METHOD</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict><key>com.paradocs.mobile</key><string>$PROFILE_UUID</string></dict>
+          </dict>
+          </plist>
+          PLIST
+
+          {
+            echo "enabled=true"
+            echo "profile=$PROFILE_UUID"
+            echo "team=$TEAM_ID"
+          } >> "$GITHUB_OUTPUT"
+          echo "Signing for $EXPORT_METHOD."
+
+      - name: Archive and export
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: apps/mobile/ios/App
+        run: |
+          xcodebuild archive \
+            -project App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${{ steps.signing.outputs.team }}" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.profile }}"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+          cp "$RUNNER_TEMP/export/"*.ipa "$GITHUB_WORKSPACE/ParaDOCs-$VERSION-ios.ipa"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          name: ios-ipa
+          if-no-files-found: error
+          path: ParaDOCs-*-ios.ipa
+
+      - name: Remove signing keychain
+        if: always() && steps.signing.outputs.enabled == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
   release:
     name: Upload to draft release
     # Waits for every platform, so a draft never holds half a release. If one
     # platform fails, re-running it re-runs this job too.
-    needs: [verify, build]
+    # The APK is part of the release, so Android is waited for too. iOS is not:
+    # nothing from it goes on a release page.
+    needs: [verify, build, android]
+    # A skipped dependency would skip this job with it, and Android is skipped
+    # whenever mobile builds are off. So the results are checked by hand, which
+    # means `always()` and a failure of either other job stopping this one.
+    if: >-
+      always()
+      && needs.verify.result == 'success'
+      && needs.build.result == 'success'
+      && (needs.android.result == 'success' || needs.android.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

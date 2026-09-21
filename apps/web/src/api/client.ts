@@ -1,4 +1,9 @@
-/** Thin fetch wrapper. Requests are same-origin thanks to the Vite proxy. */
+/**
+ * Thin fetch wrapper. Requests are same-origin thanks to the Vite proxy, except
+ * in the mobile app, which names its server and authenticates with a token:
+ * see lib/server.ts.
+ */
+import { authHeaders, fromServer, serverUrl, toServer } from '../lib/server';
 
 export class ApiError extends Error {
   constructor(
@@ -12,11 +17,14 @@ export class ApiError extends Error {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   // Form data sets its own multipart content type, boundary included.
   const form = body instanceof FormData;
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(serverUrl(`/api${path}`), {
     method,
     credentials: 'include',
-    headers: body === undefined || form ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : form ? body : JSON.stringify(body),
+    headers: {
+      ...authHeaders(),
+      ...(body === undefined || form ? {} : { 'content-type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : form ? body : JSON.stringify(toServer(body)),
   });
 
   if (res.status === 204) return undefined as T;
@@ -24,7 +32,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const text = await res.text();
   const payload = text ? safeJson(text) : null;
   if (!res.ok) throw new ApiError(res.status, errorDetail(payload) || `Request failed (${res.status})`);
-  return payload as T;
+  return fromServer(payload) as T;
 }
 
 function safeJson(text: string): unknown {
@@ -59,14 +67,15 @@ export const api = {
   ) =>
     new Promise<T>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `/api${path}`);
+      xhr.open('POST', serverUrl(`/api${path}`));
       xhr.withCredentials = true;
+      for (const [name, value] of Object.entries(authHeaders())) xhr.setRequestHeader(name, value);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(e.loaded / e.total);
       };
       xhr.onload = () => {
         const payload = xhr.responseText ? safeJson(xhr.responseText) : null;
-        if (xhr.status >= 200 && xhr.status < 300) resolve(payload as T);
+        if (xhr.status >= 200 && xhr.status < 300) resolve(fromServer(payload) as T);
         else reject(new ApiError(xhr.status, errorDetail(payload) || `Upload failed (${xhr.status})`));
       };
       xhr.onerror = () => reject(new ApiError(0, 'The upload did not finish. Check the connection and try again.'));
@@ -86,7 +95,7 @@ export const api = {
   },
   /** Returns the raw text body, for the markdown export endpoint. */
   text: async (path: string) => {
-    const res = await fetch(`/api${path}`, { credentials: 'include' });
+    const res = await fetch(serverUrl(`/api${path}`), { credentials: 'include', headers: authHeaders() });
     if (!res.ok) throw new ApiError(res.status, `Request failed (${res.status})`);
     return res.text();
   },

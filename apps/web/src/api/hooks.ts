@@ -57,6 +57,7 @@ import { WORKSPACE_APPS } from '@paradocs/shared';
 import { formatBytes } from '../lib/util';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
+import { authHeaders, fromServer, serverUrl, setSessionToken } from '../lib/server';
 
 export interface WorkspaceSummary extends Workspace {
   documentCount: number;
@@ -134,8 +135,12 @@ export function useLogin() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { email: string; password: string }) =>
-      api.post<{ user: User }>('/auth/login', input),
-    onSuccess: () => qc.invalidateQueries(),
+      api.post<{ user: User; token?: string }>('/auth/login', input),
+    onSuccess: (result) => {
+      // Only the mobile app is handed its session to keep; see lib/server.ts.
+      if (result.token) setSessionToken(result.token);
+      return qc.invalidateQueries();
+    },
   });
 }
 
@@ -143,8 +148,11 @@ export function useRegister() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { email: string; password: string; name: string }) =>
-      api.post<{ user: User }>('/auth/register', input),
-    onSuccess: () => qc.invalidateQueries(),
+      api.post<{ user: User; token?: string }>('/auth/register', input),
+    onSuccess: (result) => {
+      if (result.token) setSessionToken(result.token);
+      return qc.invalidateQueries();
+    },
   });
 }
 
@@ -183,7 +191,10 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.post('/auth/logout'),
-    onSuccess: () => qc.clear(),
+    onSuccess: () => {
+      setSessionToken(null);
+      qc.clear();
+    },
   });
 }
 
@@ -1074,16 +1085,17 @@ export function useUploadFile(workspaceId: string) {
       // arrived before the file part.
       if (documentId) body.append('documentId', documentId);
       body.append('file', file);
-      const res = await fetch(`/api/workspaces/${workspaceId}/uploads`, {
+      const res = await fetch(serverUrl(`/api/workspaces/${workspaceId}/uploads`), {
         method: 'POST',
         credentials: 'include',
+        headers: authHeaders(),
         body,
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => null);
         throw new Error(detail?.error ?? `Upload failed (${res.status})`);
       }
-      return res.json();
+      return fromServer(await res.json());
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['uploads', workspaceId] }),
   });

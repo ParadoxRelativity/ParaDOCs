@@ -1,6 +1,4 @@
 @import 'tailwindcss';
-@import '@blocknote/core/fonts/inter.css';
-@import '@blocknote/mantine/style.css';
 
 /* Tailwind v4 needs to be told that `dark:` follows our root class, which the
    inline script in index.html sets before first paint. */
@@ -32,6 +30,13 @@ html,
 body,
 #root {
   height: 100%;
+}
+
+/* The page runs edge to edge on phones (viewport-fit=cover), so it keeps
+   itself clear of the notch, status bar and home indicator. Everywhere else
+   these are zero. */
+#root {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 body {

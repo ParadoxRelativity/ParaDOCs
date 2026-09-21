@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -61,6 +61,7 @@ import { useCall } from './lib/call';
 import { useDirectCalls } from './lib/directCalls';
 import { effectiveStatus, useIdle } from './lib/idle';
 import { getOpenBehaviour } from './lib/openBehaviour';
+import { setMobilePane, useIsMobile, useMobilePane } from './lib/mobile';
 import {
   activeTab,
   describePath,
@@ -141,6 +142,7 @@ function TabStrip() {
   const workspaces = useWorkspaces();
   const { tabs, activeId } = useTabState();
   const lastActivated = useRef<string | null>(activeId);
+  const mobile = useIsMobile();
 
   // There is always somewhere the app is, so there is always at least one tab.
   useEffect(() => {
@@ -161,8 +163,10 @@ function TabStrip() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, navigate]);
 
-  // Nothing to put tabs above until the app is somewhere tabbable.
-  if (!describePath(location.pathname) || tabs.length === 0) return null;
+  // Nothing to put tabs above until the app is somewhere tabbable. A phone has
+  // no room for a row of them; the effects above still run, so the tab in
+  // front keeps following you and the app reopens where you left it.
+  if (mobile || !describePath(location.pathname) || tabs.length === 0) return null;
 
   return (
     <TabBar
@@ -267,6 +271,17 @@ function Workspace({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
+  // A phone shows the sidebar as a menu or one thing from it, never both.
+  const mobile = useIsMobile();
+  const mobilePane = useMobilePane();
+  /** Goes somewhere to be looked at, which on a phone means leaving the menu for it. */
+  const show = useCallback(
+    (path: string) => {
+      navigate(path);
+      setMobilePane('content');
+    },
+    [navigate],
+  );
 
   const workspaces = useWorkspaces();
   const workspace = workspaces.data?.find((w) => w.id === workspaceId);
@@ -337,7 +352,7 @@ function Workspace({
     call,
     selfId: userId,
     muted: quiet,
-    onAccepted: (incoming) => navigate(`/w/${incoming.workspaceId}/c/${incoming.channelId}`),
+    onAccepted: (incoming) => show(`/w/${incoming.workspaceId}/c/${incoming.channelId}`),
   });
 
   // Chat's socket lives here, not in the chat view: a mention has to reach you
@@ -353,7 +368,7 @@ function Workspace({
       // Clicking a mention should land on the conversation wherever it is
       // being read, which may be a window of its own rather than this one.
       if (isPoppedOut(id)) void desktop?.popouts.focus(id).catch(() => {});
-      else navigate(`/w/${targetWorkspaceId}/c/${id}`);
+      else show(`/w/${targetWorkspaceId}/c/${id}`);
     },
     onCallEvent: (event) => {
       // A call can be the first anyone hears of a conversation.
@@ -373,6 +388,20 @@ function Workspace({
   const [rightOpen, setRightOpen] = useLocalStorage('paradocs.rightOpen', true);
   const [membersOpen, setMembersOpen] = useLocalStorage('paradocs.membersOpen', true);
   const [rightTab, setRightTab] = useLocalStorage<RightTab>('paradocs.rightTab', 'toc');
+  // On a phone the members and details panels cover the page rather than
+  // sharing it, so they start closed and are not the desktop's remembered
+  // choice; they close again whenever you move somewhere.
+  const [mobileMembersOpen, setMobileMembersOpen] = useState(false);
+  const [mobileRightOpen, setMobileRightOpen] = useState(false);
+  const pathname = useLocation().pathname;
+  useEffect(() => {
+    setMobileMembersOpen(false);
+    setMobileRightOpen(false);
+  }, [pathname, mobilePane]);
+  const membersShown = mobile ? mobileMembersOpen : membersOpen;
+  const setMembersShown = mobile ? setMobileMembersOpen : setMembersOpen;
+  const rightShown = mobile ? mobileRightOpen : rightOpen;
+  const setRightShown = mobile ? setMobileRightOpen : setRightOpen;
   const [theme, setTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
@@ -443,6 +472,7 @@ function Workspace({
           // like the call had simply been dropped.
           const current = latest.current;
           current.navigate(`/w/${command.workspaceId}/c/${command.channelId}`);
+          setMobilePane('content');
           if (command.join) current.call.join(command.channelId);
         }
       }),
@@ -614,6 +644,7 @@ function Workspace({
     if (!unavailable) return;
     toast(`That ${unavailable} is no longer available`);
     navigate(`/w/${workspaceId}`, { replace: true });
+    setMobilePane('menu');
     // The toast is stable; including it would change nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unavailable, workspaceId, navigate]);
@@ -637,27 +668,34 @@ function Workspace({
     <div className="flex h-full overflow-hidden">
       <aside
         className={cx(
-          'shrink-0 overflow-hidden border-r border-[var(--color-line)] transition-[width] duration-200',
-          leftOpen ? 'w-64' : 'w-0',
+          'shrink-0 overflow-hidden',
+          mobile
+            ? mobilePane === 'menu'
+              ? 'w-full'
+              : 'hidden'
+            : cx('border-r border-[var(--color-line)] transition-[width] duration-200', leftOpen ? 'w-64' : 'w-0'),
         )}
       >
-        <div className="h-full w-64">
+        <div className={cx('h-full', mobile ? 'w-full' : 'w-64')}>
           <LeftSidebar
             user={user}
             workspaces={workspaces.data ?? []}
             workspaceId={workspaceId}
             onSelectWorkspace={(id) => navigate(`/w/${id}`)}
             documentId={documentId ?? null}
-            onSelectDocument={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
+            onSelectDocument={(id) => show(`/w/${workspaceId}/d/${id}`)}
             canEdit={canEdit}
             canManageAccess={canManageChannels}
             onDocumentDeleted={(id) => {
               // Deleting the document you are reading has to move you off it,
               // or the page sits on something the server no longer has.
-              if (id === documentId) navigate(`/w/${workspaceId}`);
+              if (id === documentId) {
+                navigate(`/w/${workspaceId}`);
+                setMobilePane('menu');
+              }
             }}
             onOpenSearch={() => setSearchOpen(true)}
-            onOpenAllDocuments={() => navigate(`/w/${workspaceId}/all`)}
+            onOpenAllDocuments={() => show(`/w/${workspaceId}/all`)}
             allDocumentsActive={allDocuments}
             documentCount={workspace?.documentCount ?? 0}
             activeTagIds={activeTagIds}
@@ -677,15 +715,18 @@ function Workspace({
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}
             activeProjectId={projects ? (projectId ?? null) : null}
-            onSelectProject={(id) => navigate(`/w/${workspaceId}/p/${id}`)}
-            onOpenMyWork={() => navigate(`/w/${workspaceId}/p`)}
+            onSelectProject={(id) => show(`/w/${workspaceId}/p/${id}`)}
+            onOpenMyWork={() => show(`/w/${workspaceId}/p`)}
             myWorkCount={myWork.data?.length}
             activeAccessSection={accessSection}
-            onSelectAccessSection={(next) => navigate(`/w/${workspaceId}/access/${next}`)}
+            onSelectAccessSection={(next) => show(`/w/${workspaceId}/access/${next}`)}
             activeSheetId={sheetId ?? null}
-            onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
+            onSelectSheet={(id) => show(`/w/${workspaceId}/s/${id}`)}
             onSheetDeleted={(id) => {
-              if (id === sheetId) navigate(`/w/${workspaceId}/s`);
+              if (id === sheetId) {
+                navigate(`/w/${workspaceId}/s`);
+                setMobilePane('menu');
+              }
             }}
             channels={channelList}
             directs={directList}
@@ -699,7 +740,7 @@ function Workspace({
               // joining here would take the call away from where it is running.
               if (isPoppedOut(id)) void desktop?.popouts.focus(id).catch(() => {});
               else if (channelList.find((c) => c.id === id)?.kind === 'voice') call.join(id);
-              navigate(`/w/${workspaceId}/c/${id}`);
+              show(`/w/${workspaceId}/c/${id}`);
             }}
             canManageChannels={canManageChannels}
             unreadTotal={unreadTotal}
@@ -719,7 +760,7 @@ function Workspace({
                     mic: call.mic,
                     onToggleMic: () => call.toggle('mic'),
                     onLeave: call.leave,
-                    onOpen: () => navigate(`/w/${workspaceId}/c/${call.channelId}`),
+                    onOpen: () => show(`/w/${workspaceId}/c/${call.channelId}`),
                     onPopOut: desktop && callChannel ? () => popOut(callChannel, true) : undefined,
                   }
                 : callElsewhere
@@ -743,11 +784,17 @@ function Workspace({
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className={cx('min-w-0 flex-1 flex-col', mobile && mobilePane === 'menu' ? 'hidden' : 'flex')}>
         <header className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--color-line)] px-2">
-          <IconButton label={leftOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={() => setLeftOpen(!leftOpen)}>
-            <Icon name={leftOpen ? 'layout-sidebar-inset' : 'layout-sidebar'} />
-          </IconButton>
+          {mobile ? (
+            <IconButton label="Back to menu" onClick={() => setMobilePane('menu')}>
+              <Icon name="chevron-left" />
+            </IconButton>
+          ) : (
+            <IconButton label={leftOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={() => setLeftOpen(!leftOpen)}>
+              <Icon name={leftOpen ? 'layout-sidebar-inset' : 'layout-sidebar'} />
+            </IconButton>
+          )}
           <span className="min-w-0 flex-1 truncate px-2 text-sm text-[var(--color-muted)]">
             {chat
               ? activeChannel
@@ -782,10 +829,10 @@ function Workspace({
           <NotificationsMenu />
           {chat ? (
             <IconButton
-              label={membersOpen ? 'Hide members' : 'Show members'}
-              aria-pressed={membersOpen}
-              onClick={() => setMembersOpen(!membersOpen)}
-              className={cx(membersOpen && 'text-[var(--color-ink)]')}
+              label={membersShown ? 'Hide members' : 'Show members'}
+              aria-pressed={membersShown}
+              onClick={() => setMembersShown(!membersShown)}
+              className={cx(membersShown && 'text-[var(--color-ink)]')}
             >
               <Icon name="people" />
             </IconButton>
@@ -795,10 +842,10 @@ function Workspace({
                 <Icon name="search" />
               </IconButton>
               <IconButton
-                label={rightOpen ? 'Hide details' : 'Show details'}
-                onClick={() => setRightOpen(!rightOpen)}
+                label={rightShown ? 'Hide details' : 'Show details'}
+                onClick={() => setRightShown(!rightShown)}
               >
-                <Icon name={rightOpen ? 'layout-sidebar-inset-reverse' : 'layout-sidebar-reverse'} />
+                <Icon name={rightShown ? 'layout-sidebar-inset-reverse' : 'layout-sidebar-reverse'} />
               </IconButton>
             </>
           )}
@@ -974,47 +1021,34 @@ function Workspace({
       {/* Chat has no document details to show; who is around takes that side
           instead. A spreadsheet has neither, and wants the width for columns. */}
       {chat ? (
-        <aside
-          className={cx(
-            'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
-            membersOpen ? 'w-60' : 'w-0',
-          )}
-        >
-          <div className="h-full w-60">
-            <MemberList
-              workspaceId={workspaceId}
-              presence={presenceMap}
-              selfStatus={selfStatus}
-              voiceEnabled={voiceEnabled}
-              onMessage={(id) => void messageMember(id)}
-              onCall={(id, video) => void callMember(id, video)}
-            />
-          </div>
-        </aside>
+        <SidePanel open={membersShown} width="w-60" mobile={mobile} onClose={() => setMembersShown(false)}>
+          <MemberList
+            workspaceId={workspaceId}
+            presence={presenceMap}
+            selfStatus={selfStatus}
+            voiceEnabled={voiceEnabled}
+            onMessage={(id) => void messageMember(id)}
+            onCall={(id, video) => void callMember(id, video)}
+          />
+        </SidePanel>
       ) : sheets || projects || access ? null : (
-        <aside
-          className={cx(
-            'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
-            rightOpen ? 'w-72' : 'w-0',
-          )}
-        >
-          <div className="h-full w-72">
-            <RightSidebar
-              tab={rightTab}
-              onTabChange={setRightTab}
-              doc={document.data}
-              liveBlocks={liveBlocks}
-              workspaceId={workspaceId}
-              currentUserId={userId}
-              onPatch={patch}
-              onDelete={() => {
-                if (!documentId) return;
-                deleteDocument.mutate(documentId);
-                navigate(`/w/${workspaceId}`);
-              }}
-            />
-          </div>
-        </aside>
+        <SidePanel open={rightShown} width="w-72" mobile={mobile} onClose={() => setRightShown(false)}>
+          <RightSidebar
+            tab={rightTab}
+            onTabChange={setRightTab}
+            doc={document.data}
+            liveBlocks={liveBlocks}
+            workspaceId={workspaceId}
+            currentUserId={userId}
+            onPatch={patch}
+            onDelete={() => {
+              if (!documentId) return;
+              deleteDocument.mutate(documentId);
+              navigate(`/w/${workspaceId}`);
+              setMobilePane('menu');
+            }}
+          />
+        </SidePanel>
       )}
 
       {settingsSection && (
@@ -1038,10 +1072,10 @@ function Workspace({
             setSearchOpen(false);
             setActiveTagIds([]);
           }}
-          onSelect={(id) => navigate(`/w/${workspaceId}/d/${id}`)}
-          onSelectSheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
+          onSelect={(id) => show(`/w/${workspaceId}/d/${id}`)}
+          onSelectSheet={(id) => show(`/w/${workspaceId}/s/${id}`)}
           onSelectWorkItem={
-            appOn('projects') ? (hit) => navigate(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
+            appOn('projects') ? (hit) => show(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
           }
         />
       )}
@@ -1059,6 +1093,48 @@ function Workspace({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * A panel on the right of the page: members beside a conversation, details
+ * beside a document. On a desktop it takes its width from the page and slides
+ * shut; a phone has no width to give, so there it covers the page from the
+ * right with a scrim behind it that closes it when tapped.
+ */
+function SidePanel({
+  open,
+  width,
+  mobile,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  width: 'w-60' | 'w-72';
+  mobile: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  if (mobile) {
+    if (!open) return null;
+    return (
+      <>
+        <div className="fixed inset-0 z-30 bg-black/40" onClick={onClose} aria-hidden />
+        <aside className="fixed inset-y-0 right-0 z-40 w-[85vw] max-w-80 border-l border-[var(--color-line)] bg-[var(--color-canvas)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-xl">
+          {children}
+        </aside>
+      </>
+    );
+  }
+  return (
+    <aside
+      className={cx(
+        'shrink-0 overflow-hidden border-l border-[var(--color-line)] transition-[width] duration-200',
+        open ? width : 'w-0',
+      )}
+    >
+      <div className={cx('h-full', width)}>{children}</div>
+    </aside>
   );
 }
 

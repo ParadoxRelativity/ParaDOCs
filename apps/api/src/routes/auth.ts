@@ -1,9 +1,9 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { changePasswordSchema, loginSchema, registerSchema, updateProfileSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { hashPassword, newSessionToken, verifyPassword } from '../lib/auth.js';
 import { badRequest, conflict, forbidden, parse, unauthorized } from '../lib/http.js';
-import { SESSION_COOKIE, sessionCookieOptions } from '../plugins/session.js';
+import { SESSION_COOKIE, sessionCookieOptions, sessionToken } from '../plugins/session.js';
 import { config } from '../config.js';
 import { oidcStatus } from './oidc.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
@@ -22,6 +22,20 @@ async function createSession(userId: string): Promise<string> {
     [token, userId, String(config.sessionTtlDays)],
   );
   return token;
+}
+
+/**
+ * Hands a new session to whoever signed in. A browser gets it as an HTTP-only
+ * cookie, where page script cannot read it. The mobile app asks for it in the
+ * body instead, with this header, because it cannot use a cookie from another
+ * origin and has to send the token itself.
+ */
+const TOKEN_HEADER = 'x-paradocs-session';
+
+function issueSession(req: FastifyRequest, reply: FastifyReply, token: string): { token?: string } {
+  if (req.headers[TOKEN_HEADER] === 'token') return { token };
+  reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
+  return {};
 }
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
@@ -47,8 +61,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     );
 
     const token = await createSession(user.id);
-    reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
-    return { user: { ...user, avatarUrl: null } };
+    return { user: { ...user, avatarUrl: null }, ...issueSession(req, reply, token) };
   });
 
   app.post('/auth/login', async (req, reply) => {
@@ -73,8 +86,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     if (row.disabled) throw forbidden('This account has been disabled. Contact the server administrator.');
 
     const token = await createSession(row.id);
-    reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
-    return { user: { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatarUrl } };
+    return {
+      user: { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatarUrl },
+      ...issueSession(req, reply, token),
+    };
   });
 
   app.patch('/auth/me', async (req) => {
@@ -129,7 +144,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const hash = await hashPassword(input.newPassword);
-    const keep = req.cookies?.[SESSION_COOKIE] ?? '';
+    const keep = sessionToken(req) ?? '';
     await transaction(async (client) => {
       await client.query('UPDATE users SET password_hash = $2 WHERE id = $1', [req.user!.id, hash]);
       // Changing a password signs out everywhere else.
@@ -140,7 +155,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/auth/logout', async (req, reply) => {
-    const token = req.cookies?.[SESSION_COOKIE];
+    const token = sessionToken(req);
     if (token) await query('DELETE FROM sessions WHERE token = $1', [token]);
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
     return { ok: true };
