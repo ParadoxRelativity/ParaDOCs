@@ -6,6 +6,7 @@ import {
   directPeople,
   isGroupDirect,
   parseMentionHref,
+  projectPath,
   type Channel,
   type PresenceStatus,
   type User,
@@ -931,6 +932,7 @@ function Workspace({
                 onOpenSpreadsheet={(id) => navigate(`/w/${workspaceId}/s/${id}`)}
                 onOpenChannel={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
                 onOpenWorkItem={(item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
+                onOpenProject={(project) => navigate(projectPath(workspaceId, project.id, project.kind))}
               />
             ) : channelId && directs.isLoading ? (
               <Spinner />
@@ -949,6 +951,7 @@ function Workspace({
                   onOpenSpreadsheet: (id) => navigate(`/w/${workspaceId}/s/${id}`),
                   onOpenChannel: (id) => navigate(`/w/${workspaceId}/c/${id}`),
                   onOpenWorkItem: (item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`),
+                  onOpenProject: (project) => navigate(projectPath(workspaceId, project.id, project.kind)),
                 }}
                 onOpenProject={(id) => navigate(`/w/${workspaceId}/p/${id}`)}
                 onOpenItem={(project, item) => navigate(`/w/${workspaceId}/p/${project}/${item}`)}

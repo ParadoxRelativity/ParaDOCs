@@ -716,6 +716,16 @@ export function daysUntil(date: string, today = new Date()): number {
   return Math.round((end - now) / 86_400_000);
 }
 
+/**
+ * Where a project opens in the app. A link to it lands on the view its kind is
+ * worked in — a project's board, a queue's list — whatever the reader last had
+ * open, since that is what the link was made to show.
+ */
+export function projectPath(workspaceId: string, projectId: string, kind?: ProjectKind): string {
+  const path = `/w/${workspaceId}/p/${projectId}`;
+  return kind ? `${path}?view=${kind === 'queue' ? 'list' : 'board'}` : path;
+}
+
 /** Where a work item opens in the app. */
 export function workItemPath(workspaceId: string, projectId: string, itemId: string): string {
   return `/w/${workspaceId}/p/${projectId}/${itemId}`;

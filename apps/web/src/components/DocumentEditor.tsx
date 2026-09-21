@@ -4,7 +4,7 @@ import { SuggestionMenuController, getDefaultReactSlashMenuItems, useCreateBlock
 import { filterSuggestionItems } from '@blocknote/core';
 import { withCollaboration } from '@blocknote/core/yjs';
 import { syntaxHighlighter } from '@blocknote/code-block';
-import { mentionHref, mentionLabel, type Doc } from '@paradocs/shared';
+import { mentionHref, mentionLabel, projectPath, type Doc } from '@paradocs/shared';
 import { useAppEnabled, useChannels, useMembers, useUploadFile, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
 import { claimNewDocument } from '../lib/newDocuments';
@@ -15,7 +15,7 @@ import { Spinner } from './ui';
 import Avatar from './Avatar';
 import { documentSchema } from './documentSchema';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
-import { WorkItemPicker } from './projects/WorkItemRefs';
+import { ProjectPicker, WorkItemPicker } from './projects/WorkItemRefs';
 import { copyEditorSelection } from '../lib/documentClipboard';
 import { assetUrl, serverPath } from '../lib/server';
 
@@ -133,6 +133,7 @@ function EditorSurface({
   const sheetsOn = useAppEnabled(workspaceId, 'sheets');
   const projectsOn = useAppEnabled(workspaceId, 'projects');
   const [itemPicker, setItemPicker] = useState(false);
+  const [projectPicker, setProjectPicker] = useState(false);
   const channels = useChannels(chatOn ? workspaceId : undefined);
   const members = useMembers(workspaceId);
 
@@ -289,6 +290,14 @@ function EditorSurface({
                             icon: <span aria-hidden>▤</span>,
                             onItemClick: () => setItemPicker(true),
                           },
+                          {
+                            title: 'Board or queue',
+                            subtext: 'Link a project’s board or a queue',
+                            aliases: ['board', 'queue', 'project', 'kanban', 'sprint', 'backlog'],
+                            group: 'Projects',
+                            icon: <span aria-hidden>▥</span>,
+                            onItemClick: () => setProjectPicker(true),
+                          },
                         ]
                       : []),
                   ],
@@ -363,6 +372,26 @@ function EditorSurface({
               editor.focus();
               editor.insertInlineContent([
                 { type: 'workItem', props: { itemId: item.id, label: `${item.key} ${item.title}` } },
+                ' ',
+              ]);
+            }}
+          />
+        )}
+        {projectPicker && (
+          <ProjectPicker
+            workspaceId={workspaceId}
+            confirmLabel="Insert"
+            onCancel={() => {
+              setProjectPicker(false);
+              editor.focus();
+            }}
+            onPick={(project) => {
+              setProjectPicker(false);
+              editor.focus();
+              // An ordinary link, as a channel is: it follows in place like one,
+              // and the markdown derived for search reads the name.
+              editor.insertInlineContent([
+                { type: 'link', href: projectPath(workspaceId, project.id, project.kind), content: project.name },
                 ' ',
               ]);
             }}

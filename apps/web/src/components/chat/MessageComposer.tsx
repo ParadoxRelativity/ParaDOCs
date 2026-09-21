@@ -15,17 +15,20 @@ import {
   channelRef,
   documentRef,
   memberRef,
+  projectRef,
   spreadsheetRef,
   workItemRef,
   type AttachmentKind,
   type Channel,
   type MessageAttachment,
+  type ProjectKind,
 } from '@paradocs/shared';
 import { api } from '../../api/client';
 import {
   useAllDocuments,
   useAppEnabled,
   useMembers,
+  useProjects,
   useSpreadsheets,
   useUploadConfig,
   useWorkItemListing,
@@ -46,7 +49,7 @@ import { fileIcon } from './MessageAttachments';
  *
  * Typing `#` offers channels, `@` people (and `@here`, for everyone in the
  * channel), `[[` documents and spreadsheets, and `\\` work items — by key or
- * by title.
+ * by title — along with the boards and queues they are worked on.
  * What gets inserted is the id token, not the name — so the rendered link
  * follows a rename — while what you typed to find it never appears in the
  * message.
@@ -76,8 +79,26 @@ const PICKER_LIMIT = 6;
 /** What starts a work item reference: two backslashes, so a lone one in a path is left alone. */
 export const WORK_ITEM_TRIGGER = '\\\\';
 
-/** An inserted work item, followed by what was typed after it: the search is over. */
-const INSERTED_KEY = /^[A-Z][A-Z0-9]*-\d+\s/;
+/**
+ * An inserted work item, board or queue, followed by what was typed after it:
+ * the search is over.
+ */
+export const INSERTED_REF = /^[A-Z][A-Z0-9]*(?:-\d+| board| queue)\s/;
+
+/**
+ * How a board or queue reads in the box: `\\ENG board`. The word after the
+ * key keeps it from being the start of one of its own items' labels,
+ * `\\ENG-12`, which would swap the wrong one for its token on send.
+ */
+export function projectLabel(project: { key: string; kind: ProjectKind }): string {
+  return `${WORK_ITEM_TRIGGER}${project.key} ${project.kind === 'queue' ? 'queue' : 'board'}`;
+}
+
+/** Boards and queues matching what is typed, by name or key; a couple, above the work items. */
+export function matchProjects<T extends { name: string; key: string }>(projects: T[] | undefined, query: string): T[] {
+  const needle = query.trim().toLowerCase();
+  return (projects ?? []).filter((p) => p.name.toLowerCase().includes(needle) || p.key.toLowerCase().includes(needle)).slice(0, 2);
+}
 
 const TRIGGERS: { kind: Trigger['kind']; token: string }[] = [
   { kind: 'workItem', token: WORK_ITEM_TRIGGER },
@@ -98,7 +119,7 @@ function findTrigger(value: string, caret: number): Trigger | null {
     // A work item's title can be searched by a few words.
     const limit = kind === 'member' ? /\s\S*\s/ : kind === 'workItem' ? /\n|\s\S*\s\S*\s/ : /\s/;
     if (limit.test(query)) continue;
-    if (kind === 'workItem' && INSERTED_KEY.test(query)) continue;
+    if (kind === 'workItem' && INSERTED_REF.test(query)) continue;
     // `#`, `@` and `:` only start a mention at a word boundary, so "C#", an
     // email address and "12:30" are left alone.
     if (kind !== 'document' && start > 0 && !/\s/.test(value[start - 1])) continue;
@@ -180,6 +201,7 @@ export const MessageComposer = forwardRef<
     q: trigger?.kind === 'workItem' ? trigger.query || undefined : undefined,
     limit: PICKER_LIMIT,
   });
+  const projects = useProjects(trigger?.kind === 'workItem' && projectsOn ? workspaceId : undefined);
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
 
   const emojiQuery = trigger?.kind === 'emoji' ? trigger.query : null;
@@ -232,15 +254,24 @@ export const MessageComposer = forwardRef<
       return [...here, ...people];
     }
     if (trigger.kind === 'workItem') {
+      const boards = matchProjects(projects.data, trigger.query).map((p) => ({
+        id: p.id,
+        icon: <Icon name={p.kind === 'queue' ? 'inboxes' : 'kanban'} />,
+        label: p.name,
+        hint: p.kind === 'queue' ? 'Queue' : 'Board',
+        insert: projectLabel(p),
+        token: projectRef(p.id),
+      }));
       // Already matched on the server, by key or title.
-      return (workItems.data ?? []).map((item) => ({
+      const items = (workItems.data ?? []).map((item) => ({
         id: item.id,
-        icon: <Icon name="kanban" />,
+        icon: <Icon name="card-text" />,
         label: `${item.key} ${item.title}`,
         hint: item.status.name,
         insert: `${WORK_ITEM_TRIGGER}${item.key}`,
         token: workItemRef(item.id),
       }));
+      return [...boards, ...items].slice(0, PICKER_LIMIT);
     }
     // Both lists arrive newest-first, so interleaving by title would bury a
     // sheet someone just touched under documents they have not opened in
@@ -274,7 +305,7 @@ export const MessageComposer = forwardRef<
       ...documentOptions.slice(0, documentShare),
       ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
     ];
-  }, [trigger, channels, direct, documents.data, spreadsheets.data, workItems.data, members.data, emojiOptions]);
+  }, [trigger, channels, direct, documents.data, spreadsheets.data, workItems.data, projects.data, members.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {
@@ -517,7 +548,9 @@ export const MessageComposer = forwardRef<
         ? 'People'
         : trigger?.kind === 'emoji'
           ? 'Emoji'
-          : 'Documents & spreadsheets';
+          : trigger?.kind === 'workItem'
+            ? 'Boards, queues & work items'
+            : 'Documents & spreadsheets';
 
   return (
     <div className="relative border-t border-[var(--color-line)] p-3">

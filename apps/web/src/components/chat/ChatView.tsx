@@ -7,6 +7,7 @@ import {
   type Channel,
   type Message,
   type MessageReferences,
+  type ProjectReference,
   type WorkItemReference,
 } from '@paradocs/shared';
 import { api } from '../../api/client';
@@ -64,6 +65,7 @@ export function ChatView({
   onOpenSpreadsheet,
   onOpenChannel,
   onOpenWorkItem,
+  onOpenProject,
   onTyping,
 }: {
   workspaceId: string;
@@ -88,6 +90,7 @@ export function ChatView({
   onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
   onOpenWorkItem?: (item: WorkItemReference) => void;
+  onOpenProject?: (project: ProjectReference) => void;
   /** Tells everyone else in a channel that you are typing there, or have stopped. */
   onTyping?: (channelId: string, typing: boolean) => void;
 }) {
@@ -290,6 +293,7 @@ export function ChatView({
                 onOpenSpreadsheet={onOpenSpreadsheet}
                 onOpenChannel={onOpenChannel}
                 onOpenWorkItem={onOpenWorkItem}
+                onOpenProject={onOpenProject}
               />
             ))}
           </>
@@ -374,6 +378,7 @@ function Row({
   onOpenSpreadsheet,
   onOpenChannel,
   onOpenWorkItem,
+  onOpenProject,
 }: {
   message: Message;
   previous: Message | undefined;
@@ -390,6 +395,7 @@ function Row({
   onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
   onOpenWorkItem?: (item: WorkItemReference) => void;
+  onOpenProject?: (project: ProjectReference) => void;
 }) {
   const mentionsMe = !message.deletedAt && mentions(message.body, selfId);
   // A server that predates files and reactions sends neither.
@@ -448,6 +454,7 @@ function Row({
               onOpenSpreadsheet={onOpenSpreadsheet}
               onOpenChannel={onOpenChannel}
               onOpenWorkItem={onOpenWorkItem}
+              onOpenProject={onOpenProject}
             />
             {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}
           </div>

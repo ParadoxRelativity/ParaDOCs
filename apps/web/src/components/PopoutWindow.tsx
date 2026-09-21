@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { directName, directPeople, isGroupDirect, type User } from '@paradocs/shared';
+import { directName, directPeople, isGroupDirect, projectPath, type User } from '@paradocs/shared';
 import {
   useChannels,
   useDirectConversations,
@@ -234,6 +234,7 @@ export default function PopoutWindow({ user }: { user: User }) {
         onOpenDocument={(id) => showInMain(`/w/${workspaceId}/d/${id}`)}
         onOpenSpreadsheet={(id) => showInMain(`/w/${workspaceId}/s/${id}`)}
         onOpenWorkItem={(item) => showInMain(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
+        onOpenProject={(project) => showInMain(projectPath(workspaceId, project.id, project.kind))}
         onOpenChannel={(id) => showInMain(`/w/${workspaceId}/c/${id}`)}
       />
     </div>

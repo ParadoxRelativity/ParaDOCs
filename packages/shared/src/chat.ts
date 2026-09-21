@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { PresenceStatus } from './presence.js';
-import type { StatusCategory } from './projects.js';
+import type { ProjectKind, StatusCategory } from './projects.js';
 import type { AccessMode, Permission } from './types.js';
 
 /**
@@ -260,6 +260,15 @@ export interface WorkItemReference {
   statusColor: string;
 }
 
+/** A project or a queue, as a link to its board or list shows it. */
+export interface ProjectReference {
+  id: string;
+  kind: ProjectKind;
+  key: string;
+  name: string;
+  icon: string | null;
+}
+
 /** What a page of messages points at, resolved once. */
 export interface MessageReferences {
   documents: DocumentReference[];
@@ -268,6 +277,8 @@ export interface MessageReferences {
   members: MemberReference[];
   /** Absent from servers that predate Projects. */
   workItems?: WorkItemReference[];
+  /** Absent from servers that predate links to boards and queues. */
+  projects?: ProjectReference[];
 }
 
 /**
@@ -409,7 +420,8 @@ export const RING_TIMEOUT_MS = 45_000;
 /**
  * Documents, spreadsheets, work items, channels and people are referenced by
  * id inside a message, not by name: `<doc:uuid>`, `<sheet:uuid>`,
- * `<item:uuid>`, `<#uuid>` and `<@uuid>`.
+ * `<item:uuid>`, `<proj:uuid>`, `<#uuid>` and `<@uuid>`. `<proj:…>` is a project's
+ * board or a queue: both are projects, told apart by their kind.
  * `<!here>` addresses everyone who can read the channel it is posted in.
  * Rendering resolves them, so someone changing their display name updates every
  * message that mentions them instead of leaving a stale name scattered through
@@ -421,13 +433,14 @@ export const RING_TIMEOUT_MS = 45_000;
  * token covering both would have to carry which it meant anyway.
  */
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here)|item:(${UUID}))>`, 'g');
+const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here)|item:(${UUID})|proj:(${UUID}))>`, 'g');
 
 export type MessageSegment =
   | { type: 'text'; value: string }
   | { type: 'document'; id: string }
   | { type: 'spreadsheet'; id: string }
   | { type: 'workItem'; id: string }
+  | { type: 'project'; id: string }
   | { type: 'channel'; id: string }
   | { type: 'member'; id: string }
   | { type: 'here' };
@@ -445,6 +458,10 @@ export function spreadsheetRef(id: string): string {
 
 export function workItemRef(id: string): string {
   return `<item:${id}>`;
+}
+
+export function projectRef(id: string): string {
+  return `<proj:${id}>`;
 }
 
 export function channelRef(id: string): string {
@@ -470,6 +487,7 @@ export function parseMessage(body: string): MessageSegment[] {
     else if (match[4]) segments.push({ type: 'member', id: match[4].toLowerCase() });
     else if (match[5]) segments.push({ type: 'here' });
     else if (match[6]) segments.push({ type: 'workItem', id: match[6].toLowerCase() });
+    else if (match[7]) segments.push({ type: 'project', id: match[7].toLowerCase() });
     index = match.index + match[0].length;
   }
   if (index < body.length) segments.push({ type: 'text', value: body.slice(index) });
@@ -481,12 +499,14 @@ export function collectReferences(bodies: string[]): {
   documentIds: string[];
   spreadsheetIds: string[];
   workItemIds: string[];
+  projectIds: string[];
   channelIds: string[];
   userIds: string[];
 } {
   const documentIds = new Set<string>();
   const spreadsheetIds = new Set<string>();
   const workItemIds = new Set<string>();
+  const projectIds = new Set<string>();
   const channelIds = new Set<string>();
   const userIds = new Set<string>();
   for (const body of bodies) {
@@ -494,6 +514,7 @@ export function collectReferences(bodies: string[]): {
       if (segment.type === 'document') documentIds.add(segment.id);
       if (segment.type === 'spreadsheet') spreadsheetIds.add(segment.id);
       if (segment.type === 'workItem') workItemIds.add(segment.id);
+      if (segment.type === 'project') projectIds.add(segment.id);
       if (segment.type === 'channel') channelIds.add(segment.id);
       if (segment.type === 'member') userIds.add(segment.id);
     }
@@ -502,6 +523,7 @@ export function collectReferences(bodies: string[]): {
     documentIds: [...documentIds],
     spreadsheetIds: [...spreadsheetIds],
     workItemIds: [...workItemIds],
+    projectIds: [...projectIds],
     channelIds: [...channelIds],
     userIds: [...userIds],
   };
@@ -515,6 +537,7 @@ export function messagePreview(body: string, references: MessageReferences): str
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
   const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
+  const projects = new Map((references.projects ?? []).map((p) => [p.id, p]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
 
@@ -527,6 +550,10 @@ export function messagePreview(body: string, references: MessageReferences): str
       if (segment.type === 'workItem') {
         const item = workItems.get(segment.id);
         return item ? `${item.key} ${item.title}` : 'a work item';
+      }
+      if (segment.type === 'project') {
+        const project = projects.get(segment.id);
+        return project?.name ?? 'a board';
       }
       if (segment.type === 'channel') {
         const channel = channels.get(segment.id);

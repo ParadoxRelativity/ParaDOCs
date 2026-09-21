@@ -4,6 +4,7 @@ import {
   documentRef,
   memberRef,
   parseMessage,
+  projectRef,
   spreadsheetRef,
   workItemRef,
   type MessageReferences,
@@ -13,13 +14,14 @@ import {
   useAppEnabled,
   useChannels,
   useMembers,
+  useProjects,
   useSpreadsheets,
   useWorkItemListing,
 } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Avatar from '../Avatar';
 import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
-import { WORK_ITEM_TRIGGER } from '../chat/MessageComposer';
+import { INSERTED_REF, WORK_ITEM_TRIGGER, matchProjects, projectLabel } from '../chat/MessageComposer';
 import { Button } from '../ui';
 
 /**
@@ -27,7 +29,7 @@ import { Button } from '../ui';
  *
  * What is stored is written the way a chat message is, with id tokens, and
  * what is typed reads the way the chat box does: `@` offers people, `#`
- * channels, `[[` documents and spreadsheets, and `\\` other work items. The box
+ * channels, `[[` documents and spreadsheets, and `\\` other work items, boards and queues. The box
  * shows names, and they are swapped for their tokens when saved, so a
  * reference follows a rename.
  */
@@ -64,8 +66,8 @@ function findTrigger(value: string, caret: number): Trigger | null {
     const limit =
       kind === 'member' ? /\s\S*\s|\n/ : kind === 'channel' ? /\s/ : kind === 'item' ? /\n|\s\S*\s\S*\s/ : /\n|]]/;
     if (limit.test(query) || query.length > 60) continue;
-    // A work item already inserted, with more written after it.
-    if (kind === 'item' && /^[A-Z][A-Z0-9]*-\d+\s/.test(query)) continue;
+    // A work item, board or queue already inserted, with more written after it.
+    if (kind === 'item' && INSERTED_REF.test(query)) continue;
     if (kind !== 'link' && start > 0 && !/\s|\(/.test(value[start - 1])) continue;
     return { kind, start, query };
   }
@@ -98,6 +100,10 @@ function toDisplay(body: string, references: MessageReferences | undefined): { t
         const title = refs.spreadsheets.find((s) => s.id === segment.id)?.title;
         label = title !== undefined ? `[[${title || 'Untitled'}]]` : undefined;
         token = spreadsheetRef(segment.id);
+      } else if (segment.type === 'project') {
+        const project = (refs.projects ?? []).find((p) => p.id === segment.id);
+        label = project && projectLabel(project);
+        token = projectRef(segment.id);
       } else {
         const key = (refs.workItems ?? []).find((i) => i.id === segment.id)?.key;
         label = key && `${WORK_ITEM_TRIGGER}${key}`;
@@ -156,6 +162,7 @@ export default function ReferenceEditor({
     q: itemSearch ? trigger.query || undefined : undefined,
     limit: LIMIT,
   });
+  const projects = useProjects(itemSearch ? workspaceId : undefined);
 
   const options: Option[] = useMemo(() => {
     if (!trigger) return [];
@@ -180,14 +187,23 @@ export default function ReferenceEditor({
         .map((c) => ({ id: c.id, icon: <Icon name="hash" />, label: c.name, hint: c.topic ?? '', insert: `#${c.name}`, token: channelRef(c.id) }));
     }
     if (trigger.kind === 'item') {
-      return (workItems.data ?? []).map((item) => ({
+      const boards = matchProjects(projects.data, trigger.query).map((p) => ({
+        id: p.id,
+        icon: <Icon name={p.kind === 'queue' ? 'inboxes' : 'kanban'} />,
+        label: p.name,
+        hint: p.kind === 'queue' ? 'Queue' : 'Board',
+        insert: projectLabel(p),
+        token: projectRef(p.id),
+      }));
+      const items = (workItems.data ?? []).map((item) => ({
         id: item.id,
-        icon: <Icon name="kanban" />,
+        icon: <Icon name="card-text" />,
         label: `${item.key} ${item.title}`,
         hint: item.status.name,
         insert: `${WORK_ITEM_TRIGGER}${item.key}`,
         token: workItemRef(item.id),
       }));
+      return [...boards, ...items].slice(0, LIMIT);
     }
     const matches = (title: string) => (title || 'Untitled').toLowerCase().includes(needle);
     const docs = (documents.data?.documents ?? []).filter((d) => matches(d.title)).slice(0, 4).map((d) => ({
@@ -207,7 +223,7 @@ export default function ReferenceEditor({
       token: spreadsheetRef(s.id),
     }));
     return [...docs, ...sheets].slice(0, LIMIT);
-  }, [trigger, members.data, channels.data, documents.data, spreadsheets.data, workItems.data]);
+  }, [trigger, members.data, channels.data, documents.data, spreadsheets.data, workItems.data, projects.data]);
 
   useLayoutEffect(() => {
     const el = input.current;
@@ -339,7 +355,7 @@ export default function ReferenceEditor({
 
       <div className="mt-1.5 flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--color-muted)]">
-          @ people · # channels · [[ documents and spreadsheets · {WORK_ITEM_TRIGGER} work items · ⌘↵ to save
+          @ people · # channels · [[ documents and spreadsheets · {WORK_ITEM_TRIGGER} work items and boards · ⌘↵ to save
         </span>
         {onCancel && (
           <Button variant="subtle" className="text-xs" onClick={onCancel} disabled={saving}>

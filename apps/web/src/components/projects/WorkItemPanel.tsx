@@ -11,6 +11,7 @@ import {
   usesSprints,
   type MessageReferences,
   type Project,
+  type ProjectKind,
   type ProjectRole,
   type UpdateWorkItemInput,
   type WorkItem,
@@ -64,6 +65,7 @@ export interface ProjectNavigation {
   onOpenSpreadsheet: (id: string) => void;
   onOpenChannel: (id: string) => void;
   onOpenWorkItem: (item: { id: string; projectId: string }) => void;
+  onOpenProject?: (project: { id: string; kind: ProjectKind }) => void;
 }
 
 const FIELD =

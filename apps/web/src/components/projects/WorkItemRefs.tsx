@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { workItemPath, type WorkItemListing } from '@paradocs/shared';
-import { useWorkItemListing } from '../../api/hooks';
+import { workItemPath, type ProjectSummary, type WorkItemListing } from '@paradocs/shared';
+import { useProjects, useWorkItemListing } from '../../api/hooks';
 import { cx, useDebounced } from '../../lib/util';
 import { useWorkItemRef } from '../../lib/workItemRefs';
 import Icon from '../Icon';
@@ -11,7 +11,8 @@ import { CATEGORY_ICON, StatusPill } from './projectUi';
 
 /**
  * Work items outside Projects: the chip a document draws in a sentence, the
- * card a canvas places on the board, and the picker both insert them with.
+ * card a canvas places on the board, and the picker both insert them with —
+ * and the picker a document links a whole board or queue with.
  * Each shows the item as it is now, looked up when drawn.
  */
 
@@ -169,6 +170,92 @@ export function WorkItemPicker({
         ))}
         {!results.isLoading && items.length === 0 && (
           <li className="px-3 py-4 text-center text-xs text-[var(--color-muted)]">No work items match.</li>
+        )}
+      </ul>
+    </Modal>
+  );
+}
+
+/** Chooses a project's board or a queue, by name or key. */
+export function ProjectPicker({
+  workspaceId,
+  confirmLabel,
+  onPick,
+  onCancel,
+}: {
+  workspaceId: string;
+  confirmLabel: string;
+  onPick: (project: ProjectSummary) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const projects = useProjects(workspaceId);
+  const [cursor, setCursor] = useState(0);
+  const needle = query.trim().toLowerCase();
+  const items = (projects.data ?? []).filter(
+    (p) => p.name.toLowerCase().includes(needle) || p.key.toLowerCase().includes(needle),
+  );
+  useEffect(() => setCursor(0), [needle]);
+  const chosen = items[cursor];
+
+  return (
+    <Modal
+      title="Link a board or queue"
+      onClose={onCancel}
+      wide
+      footer={
+        <>
+          <Button variant="subtle" className="text-xs" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button variant="primary" className="text-xs" disabled={!chosen} onClick={() => chosen && onPick(chosen)}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <input
+        autoFocus
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setCursor((c) => Math.min(c + 1, items.length - 1));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setCursor((c) => Math.max(c - 1, 0));
+          } else if (e.key === 'Enter' && chosen) {
+            e.preventDefault();
+            onPick(chosen);
+          }
+        }}
+        placeholder="Search by name, or a key such as ENG"
+        className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2.5 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+      />
+      <ul className="scroll-thin mt-2 max-h-72 overflow-y-auto rounded-md border border-[var(--color-line)]">
+        {items.map((project, index) => (
+          <li key={project.id}>
+            <button
+              onMouseEnter={() => setCursor(index)}
+              onClick={() => setCursor(index)}
+              onDoubleClick={() => onPick(project)}
+              className={cx(
+                'flex w-full items-center gap-2 px-3 py-2 text-left text-sm',
+                index === cursor ? 'bg-[var(--color-accent-soft)]' : 'hover:bg-[var(--color-surface)]',
+              )}
+            >
+              <Icon name={project.kind === 'queue' ? 'inboxes' : 'kanban'} className="text-[var(--color-muted)]" />
+              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+              <span className="shrink-0 text-xs text-[var(--color-muted)]">{project.key}</span>
+              <span className="w-12 shrink-0 text-right text-xs text-[var(--color-muted)]">
+                {project.kind === 'queue' ? 'Queue' : 'Board'}
+              </span>
+            </button>
+          </li>
+        ))}
+        {!projects.isLoading && items.length === 0 && (
+          <li className="px-3 py-4 text-center text-xs text-[var(--color-muted)]">No boards or queues match.</li>
         )}
       </ul>
     </Modal>

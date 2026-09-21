@@ -4,6 +4,7 @@ import {
   type DocumentReference,
   type MemberReference,
   type MessageReferences,
+  type ProjectReference,
   type SpreadsheetReference,
   type WorkItemReference,
 } from '@paradocs/shared';
@@ -16,12 +17,13 @@ export type {
   DocumentReference,
   MemberReference,
   MessageReferences,
+  ProjectReference,
   SpreadsheetReference,
   WorkItemReference,
 };
 
 /**
- * Resolves the `<doc:…>`, `<sheet:…>`, `<item:…>`, `<#…>` and `<@…>` tokens in
+ * Resolves the `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>`, `<#…>` and `<@…>` tokens in
  * a batch of message bodies — or anything else written the same way, such as a
  * work item's description and comments.
  *
@@ -41,12 +43,13 @@ export async function resolveReferences(
   workspaceId: string,
   viewerId: string | null,
 ): Promise<MessageReferences> {
-  const { documentIds, spreadsheetIds, workItemIds, channelIds, userIds } = collectReferences(bodies);
-  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [] };
+  const { documentIds, spreadsheetIds, workItemIds, projectIds, channelIds, userIds } = collectReferences(bodies);
+  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [], projects: [] };
   if (
     documentIds.length === 0 &&
     spreadsheetIds.length === 0 &&
     workItemIds.length === 0 &&
+    projectIds.length === 0 &&
     channelIds.length === 0 &&
     userIds.length === 0
   ) {
@@ -56,7 +59,7 @@ export async function resolveReferences(
   const viewerRole = roleSql('$3', '$2');
   const viewer = viewerId ? [viewerId] : [];
 
-  const [documents, spreadsheets, channels, members, workItems] = await Promise.all([
+  const [documents, spreadsheets, channels, members, workItems, projects] = await Promise.all([
     documentIds.length
       ? query<DocumentReference>(
           `SELECT d.id, d.title, d.icon, d.mode FROM documents d
@@ -97,9 +100,19 @@ export async function resolveReferences(
         ).then((r) => r.rows)
       : Promise.resolve([]),
     workItemIds.length ? resolveWorkItems(workItemIds, workspaceId, viewerId) : Promise.resolve([]),
+    projectIds.length
+      ? // Held to what the reader may see, as work items are; an archived one
+        // still resolves, since the link to it is history.
+        query<ProjectReference>(
+          `SELECT p.id, p.kind, p.key, p.name, p.icon FROM projects p
+            WHERE p.id = ANY($1::uuid[]) AND p.workspace_id = $2 AND ${appEnabledSql('$2', 'projects')}
+              AND ${viewerId ? `${projectLevelSql('$3', viewerRole)} > 0` : `p.access = 'open'`}`,
+          [projectIds, workspaceId, ...viewer],
+        ).then((r) => r.rows)
+      : Promise.resolve([]),
   ]);
 
-  return { documents, spreadsheets, channels, members, workItems };
+  return { documents, spreadsheets, channels, members, workItems, projects };
 }
 
 /**

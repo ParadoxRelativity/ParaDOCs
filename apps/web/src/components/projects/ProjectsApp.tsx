@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   activeSprint,
   usesSprints,
@@ -124,6 +125,18 @@ function ProjectView({
   const items = useWorkItems(projectId);
   const memberMap = useMemberMap(members);
   const [storedView, setView] = useLocalStorage<View | null>(`paradocs.projectView.${projectId}`, null);
+  // A link to the board or the queue opens on it, and then is just where you are.
+  const [search, setSearch] = useSearchParams();
+  const linkedView = search.get('view');
+  useEffect(() => {
+    if (!linkedView) return;
+    if (VIEWS.some((v) => v.id === linkedView)) setView(linkedView as View);
+    const rest = new URLSearchParams(search);
+    rest.delete('view');
+    setSearch(rest, { replace: true });
+    // Only when a link brings a view in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedView]);
   const [text, setText] = useState('');
   const [person, setPerson] = useState('');
   const [creating, setCreating] = useState<{ typeId?: string; epicId?: string } | null>(null);

@@ -1,10 +1,10 @@
-import { parseMessage, type MessageReferences, type WorkItemReference } from '@paradocs/shared';
+import { parseMessage, type MessageReferences, type ProjectReference, type WorkItemReference } from '@paradocs/shared';
 import { emojiOnly } from '../../lib/emoji';
 import { cx } from '../../lib/util';
 import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
 
 /**
- * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>` and `<#…>`
+ * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>` and `<#…>`
  * tokens into links, and `<@…>` and `<!here>` into mentions. Work item
  * descriptions and comments are written the same way and drawn with this too.
  *
@@ -23,6 +23,7 @@ export function MessageBody({
   onOpenSpreadsheet,
   onOpenChannel,
   onOpenWorkItem,
+  onOpenProject,
 }: {
   body: string;
   references: MessageReferences;
@@ -33,12 +34,15 @@ export function MessageBody({
   onOpenChannel: (id: string) => void;
   /** Where a work item opens. Without it, one is shown but not clickable. */
   onOpenWorkItem?: (item: WorkItemReference) => void;
+  /** Where a board or queue opens. Without it, one is shown but not clickable. */
+  onOpenProject?: (project: ProjectReference) => void;
 }) {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
   const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
+  const projects = new Map((references.projects ?? []).map((p) => [p.id, p]));
   // A message that is just a few emoji is shown large.
   const emojiCount = emojiOnly(body);
   const jumbo = emojiCount > 0 && emojiCount <= 6;
@@ -85,6 +89,12 @@ export function MessageBody({
           const item = workItems.get(segment.id);
           if (!item) return <UnknownRef key={index} label="unknown work item" />;
           return <WorkItemChip key={index} item={item} onClick={onOpenWorkItem && (() => onOpenWorkItem(item))} />;
+        }
+
+        if (segment.type === 'project') {
+          const project = projects.get(segment.id);
+          if (!project) return <UnknownRef key={index} label="unknown board" />;
+          return <ProjectChip key={index} project={project} onClick={onOpenProject && (() => onOpenProject(project))} />;
         }
 
         if (segment.type === 'channel') {
@@ -156,6 +166,25 @@ export function WorkItemChip({ item, onClick }: { item: WorkItemReference; onCli
       />
       <span className={cx('shrink-0', done && 'line-through opacity-70')}>{item.key}</span>
       <span className="truncate">{item.title}</span>
+    </button>
+  );
+}
+
+/** A project's board or a queue, named as the sidebar names it. */
+export function ProjectChip({ project, onClick }: { project: ProjectReference; onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title={`${project.key} · ${project.kind === 'queue' ? 'Queue' : 'Board'}`}
+      className={cx(
+        'mx-0.5 inline-flex max-w-full items-baseline gap-1 rounded px-1.5 py-0.5 align-baseline text-[13px] font-medium',
+        'bg-[var(--color-accent)]/15 text-[var(--color-accent)] enabled:hover:bg-[var(--color-accent)]/25',
+      )}
+    >
+      <Icon name={project.kind === 'queue' ? 'inboxes' : 'kanban'} className="self-center text-[11px]" />
+      <span className="truncate">{project.name}</span>
     </button>
   );
 }
