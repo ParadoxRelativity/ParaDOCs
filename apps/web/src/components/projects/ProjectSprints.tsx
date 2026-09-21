@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import {
   DEFAULT_SPRINT_DAYS,
   daysUntil,
+  itemTypeOf,
   type Project,
   type ProjectSprint,
   type ProjectStatus,
@@ -16,7 +17,7 @@ import { Popover } from '../Popover';
 import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
-import { PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue } from './projectUi';
+import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue } from './projectUi';
 
 /**
  * Sprints, for a project whose board is run in them: the bar over the board
@@ -957,11 +958,12 @@ function SprintSection({
                   <span className="w-[13px]" />
                 )}
                 {canEdit && <Icon name="grip-vertical" className="cursor-grab text-xs text-[var(--color-muted)] opacity-0 group-hover:opacity-100" />}
-                <TypeIcon type={item.type} />
+                <TypeIcon type={itemTypeOf(project, item.typeId)} />
                 <span className="w-16 shrink-0 text-xs text-[var(--color-muted)]">{item.key}</span>
                 <span className={cx('min-w-0 flex-1 truncate', status?.category === 'done' && 'text-[var(--color-muted)] line-through')}>
                   {item.title}
                 </span>
+                {status?.category !== 'done' && <BlockedBadge count={item.blockedBy} className="text-xs" />}
                 {status && status.category !== 'backlog' && <StatusPill status={status} className="shrink-0" />}
                 {item.priority !== 'none' && <PriorityIcon priority={item.priority} />}
                 {item.estimate !== null && (

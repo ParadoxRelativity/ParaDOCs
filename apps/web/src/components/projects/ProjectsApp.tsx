@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { activeSprint, usesSprints, type User, type WorkItemListing, type WorkspaceMember } from '@paradocs/shared';
+import {
+  activeSprint,
+  usesSprints,
+  type User,
+  isEpicType,
+  type WorkItemListing,
+  type WorkspaceMember,
+} from '@paradocs/shared';
 import {
   useMarkWorkItemsRead,
   useMembers,
@@ -15,6 +22,7 @@ import Icon, { type IconName } from '../Icon';
 import { Button, EmptyState, Spinner } from '../ui';
 import ProjectBacklog from './ProjectBacklog';
 import ProjectBoard from './ProjectBoard';
+import ProjectEpics from './ProjectEpics';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
 import ProjectSettings from './ProjectSettings';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
@@ -23,9 +31,10 @@ import ProjectWorkload from './ProjectWorkload';
 import WorkItemPanel, { type ProjectNavigation } from './WorkItemPanel';
 import { PriorityIcon, ProjectIcon, StatusPill, TypeIcon, formatDue, isOverdue, useMemberMap } from './projectUi';
 
-type View = 'backlog' | 'board' | 'list' | 'workload' | 'settings';
+type View = 'epics' | 'backlog' | 'board' | 'list' | 'workload' | 'settings';
 
 const VIEWS: { id: View; label: string; icon: IconName }[] = [
+  { id: 'epics', label: 'Epics', icon: 'lightning-charge' },
   { id: 'backlog', label: 'Backlog', icon: 'inbox' },
   { id: 'board', label: 'Board', icon: 'kanban' },
   { id: 'list', label: 'List', icon: 'list-ul' },
@@ -117,15 +126,16 @@ function ProjectView({
   const [storedView, setView] = useLocalStorage<View | null>(`paradocs.projectView.${projectId}`, null);
   const [text, setText] = useState('');
   const [person, setPerson] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<{ typeId?: string; epicId?: string } | null>(null);
 
   const data = project.data;
   const sprints = data ? usesSprints(data) : false;
   const running = data && sprints ? activeSprint(data) : null;
   // With sprints on, the backlog is where they are planned, whatever the statuses are.
   const hasBacklog = sprints || (data?.statuses.some((s) => s.category === 'backlog') ?? false);
-  // A backlog view with no backlog status to show falls back to the board.
-  const chosen = storedView === 'backlog' && !hasBacklog ? null : storedView;
+  const hasEpics = data?.kind === 'project' && data.itemTypes.some((t) => t.epic);
+  // A view with nothing to show — no backlog status, no epic-kind type — falls back to the default.
+  const chosen = (storedView === 'backlog' && !hasBacklog) || (storedView === 'epics' && !hasEpics) ? null : storedView;
   const view: View = chosen ?? (data?.kind === 'queue' ? 'list' : 'board');
   // The workspace role, and then any lock on the project.
   const canEdit = workspace.role !== 'viewer' && data?.permission === 'edit';
@@ -141,10 +151,17 @@ function ProjectView({
     );
   }, [items.data, text, person, user.id]);
 
+  // A project's epics are followed in their own view, not worked on the board,
+  // in the backlog or in workload; a queue has no such view, so shows them all.
+  const worked = useMemo(
+    () => (data?.kind === 'project' ? filtered.filter((item) => !isEpicType(data, item.typeId)) : filtered),
+    [filtered, data],
+  );
+
   // With sprints on, the board is the running sprint's work and nothing else.
   const onBoard = useMemo(
-    () => (sprints ? (running ? filtered.filter((item) => item.sprintId === running.id) : []) : filtered),
-    [filtered, sprints, running],
+    () => (sprints ? (running ? worked.filter((item) => item.sprintId === running.id) : []) : worked),
+    [worked, sprints, running],
   );
   const sprintItems = useMemo(
     () => (running ? (items.data ?? []).filter((item) => item.sprintId === running.id) : []),
@@ -163,13 +180,16 @@ function ProjectView({
   }
 
   const byId = (id: View) => VIEWS.find((v) => v.id === id)!;
+  const epicType = data.kind === 'project' ? data.itemTypes.find((t) => t.epic) : undefined;
   // A queue is worked as a list; a backlog tab only appears where there is one.
   const views = (
     data.kind === 'queue'
       ? (['list', 'board', 'backlog', 'workload', 'settings'] as View[])
-      : (['backlog', 'board', 'list', 'workload', 'settings'] as View[])
+      : (['epics', 'backlog', 'board', 'list', 'workload', 'settings'] as View[])
   )
     .filter((id) => id !== 'backlog' || hasBacklog)
+    // Only a project with an epic-kind type has epics to follow.
+    .filter((id) => id !== 'epics' || epicType !== undefined)
     .map(byId);
   // New work filed from the backlog goes there; from anywhere else, onto the board.
   const newStatusId =
@@ -239,7 +259,7 @@ function ProjectView({
             </>
           )}
           {canEdit && !data.archivedAt && (
-            <Button variant="primary" className="text-xs" onClick={() => setCreating(true)}>
+            <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
               <Icon name="plus-lg" /> New
             </Button>
           )}
@@ -262,10 +282,22 @@ function ProjectView({
               canManageAccess={canManageAccess}
               onDeleted={onProjectDeleted}
             />
+          ) : view === 'epics' && epicType ? (
+            <ProjectEpics
+              project={data}
+              items={items.data ?? []}
+              visible={filtered}
+              filtering={filtering}
+              memberMap={memberMap}
+              canEdit={canEdit}
+              activeItemId={itemId}
+              onOpenItem={onOpenItem}
+              onNewItem={setCreating}
+            />
           ) : view === 'backlog' && sprints ? (
             <SprintBacklog
               project={data}
-              items={filtered}
+              items={worked}
               memberMap={memberMap}
               canEdit={canEdit}
               activeItemId={itemId}
@@ -275,7 +307,7 @@ function ProjectView({
           ) : view === 'backlog' ? (
             <ProjectBacklog
               project={data}
-              items={filtered}
+              items={worked}
               memberMap={memberMap}
               canEdit={canEdit}
               activeItemId={itemId}
@@ -326,7 +358,7 @@ function ProjectView({
           ) : (
             <ProjectWorkload
               project={data}
-              items={filtered}
+              items={worked}
               members={members}
               memberMap={memberMap}
               activeItemId={itemId}
@@ -359,9 +391,11 @@ function ProjectView({
           initialStatusId={newStatusId}
           // Filed from the board while a sprint runs, it joins that sprint so it shows up there.
           initialSprintId={view === 'board' ? running?.id : undefined}
-          onClose={() => setCreating(false)}
+          initialTypeId={creating.typeId ?? (view === 'epics' && !creating.epicId ? epicType?.id : undefined)}
+          initialEpicId={creating.epicId}
+          onClose={() => setCreating(null)}
           onCreated={(id) => {
-            setCreating(false);
+            setCreating(null);
             onOpenItem(id);
           }}
         />
@@ -408,7 +442,7 @@ function MyWork({
         onClick={() => onOpenItem(item.project.id, item.id)}
         className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm hover:bg-[var(--color-surface)]"
       >
-        <TypeIcon type={item.type} />
+        <TypeIcon type={item.itemType} />
         <PriorityIcon priority={item.priority} className="w-4 justify-center" />
         <span className="w-20 shrink-0 text-xs text-[var(--color-muted)]">{item.key}</span>
         <span className={cx('min-w-0 flex-1 truncate', item.status.category === 'done' && 'text-[var(--color-muted)] line-through')}>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
+  itemTypeOf,
   type Project,
   type WorkItemSummary,
   type WorkspaceMember,
@@ -9,7 +10,7 @@ import { useUpdateWorkItem } from '../../api/hooks';
 import { cx, formatRelative } from '../../lib/util';
 import Icon from '../Icon';
 import { useToast } from '../Toast';
-import { PeopleStack, PriorityIcon, TypeIcon, formatDue, isOverdue } from './projectUi';
+import { BlockedBadge, PeopleStack, PriorityIcon, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 type SortKey = 'key' | 'title' | 'status' | 'priority' | 'due' | 'estimate' | 'updated' | 'created';
 
@@ -115,8 +116,9 @@ export default function ProjectTable({
               >
                 <td className="whitespace-nowrap py-1.5 pl-4 pr-2 text-xs text-[var(--color-muted)]">
                   <span className="inline-flex items-center gap-1.5">
-                    <TypeIcon type={item.type} />
+                    <TypeIcon type={itemTypeOf(project, item.typeId)} />
                     {item.key}
+                    {!done && <BlockedBadge count={item.blockedBy} />}
                   </span>
                 </td>
                 <td className={cx('max-w-0 truncate px-2 py-1.5', done && 'text-[var(--color-muted)] line-through')}>

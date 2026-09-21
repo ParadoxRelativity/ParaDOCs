@@ -241,6 +241,8 @@ export function useChatEvents({
           void qc.invalidateQueries({ queryKey: keys.project(event.projectId) });
           void qc.invalidateQueries({ queryKey: keys.workItems(event.projectId) });
           void qc.invalidateQueries({ queryKey: ['workItemListing', event.workspaceId] });
+          // Any item may be linked to one that changed, and shows its status.
+          void qc.invalidateQueries({ queryKey: ['workItemLinks'] });
           if (event.itemId) {
             void qc.invalidateQueries({ queryKey: keys.workItem(event.itemId) });
             void qc.invalidateQueries({ queryKey: keys.workItemTimeline(event.itemId) });

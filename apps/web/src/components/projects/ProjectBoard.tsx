@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useRef, useState, type DragEvent } from 'react';
 import {
   boardLanes,
+  itemTypeOf,
   cellTarget,
   cellTargets,
   layoutOf,
@@ -17,7 +18,7 @@ import Icon from '../Icon';
 import { Popover } from '../Popover';
 import { useToast } from '../Toast';
 import { IconButton } from '../ui';
-import { PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue, isOverdue } from './projectUi';
+import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 /** What a dragged card carries, so nothing else can be dropped on a column. */
 const DRAG_TYPE = 'application/x-paradocs-work-item';
@@ -709,7 +710,7 @@ function Column({
                     {item.title}
                   </p>
                   <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
-                    <TypeIcon type={item.type} />
+                    <TypeIcon type={itemTypeOf(project, item.typeId)} />
                     <span>{item.key}</span>
                     {/* A merged column holds work from several statuses, so each card says which. */}
                     {cell.merged && (
@@ -719,6 +720,7 @@ function Column({
                       </span>
                     )}
                     {item.priority !== 'none' && <PriorityIcon priority={item.priority} />}
+                    {status.category !== 'done' && <BlockedBadge count={item.blockedBy} />}
                     {item.dueDate && (
                       <span className={cx('flex items-center gap-0.5', overdue && 'text-red-500')}>
                         <Icon name="calendar-event" className="text-[10px]" />

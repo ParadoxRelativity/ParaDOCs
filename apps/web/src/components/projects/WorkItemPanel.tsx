@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
-  WORK_ITEM_TYPES,
+  WORK_ITEM_LINK_LABELS,
+  WORK_ITEM_LINK_OPTIONS,
+  canHaveEpic,
+  isEpicType,
+  itemTypeOf,
+  rolesForType,
   canMoveTo,
   usesSprints,
   type MessageReferences,
@@ -11,8 +16,11 @@ import {
   type WorkItem,
   type WorkItemActivity,
   type WorkItemComment,
+  type WorkItemLink,
+  type WorkItemLinkDirection,
+  type WorkItemLinkType,
   type WorkItemPriority,
-  type WorkItemType,
+  type WorkItemSummary,
   type WorkspaceMember,
 } from '@paradocs/shared';
 import {
@@ -22,7 +30,11 @@ import {
   useWorkItem,
   useWorkItemBacklinks,
   useWorkItemComments,
+  useWorkItemLinking,
+  useWorkItemLinks,
+  useWorkItemListing,
   useWorkItemTimeline,
+  useWorkItems,
 } from '../../api/hooks';
 import { cx, formatDateTime, formatRelative } from '../../lib/util';
 import { shareOrigin } from '../../lib/server';
@@ -35,11 +47,12 @@ import { EmptyState, IconButton, Spinner } from '../ui';
 import ReferenceEditor from './ReferenceEditor';
 import {
   DueDatePicker,
-  ITEM_TYPE,
+  EpicProgressBar,
   PRIORITY,
   PeoplePicker,
   PeopleStack,
   PriorityIcon,
+  StatusPill,
   TypeIcon,
   holderLabel,
   isOverdue,
@@ -144,10 +157,12 @@ function ItemDetail({
 }) {
   const update = useUpdateWorkItem(project.id);
   const remove = useDeleteWorkItem(project.id);
+  const siblings = useWorkItems(project.id);
   const toast = useToast();
   const [title, setTitle] = useState(item.title);
   const [editingDescription, setEditingDescription] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingType, setConfirmingType] = useState<{ typeId: string; losing: string[] } | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => setTitle(item.title), [item.title]);
@@ -168,6 +183,19 @@ function ItemDetail({
     );
   }
 
+  /**
+   * Changes the type, first asking when the new one does not offer a role
+   * someone holds here, since changing takes them off it.
+   */
+  function changeType(typeId: string) {
+    const offered = new Set(itemTypeOf(project, typeId)?.roleIds ?? []);
+    const losing = project.roles.filter(
+      (role) => !offered.has(role.id) && ((item.roles[role.id]?.length ?? 0) > 0 || (item.roleNames[role.id]?.length ?? 0) > 0),
+    );
+    if (losing.length > 0) setConfirmingType({ typeId, losing: losing.map((role) => role.name) });
+    else patch({ typeId });
+  }
+
   function commitTitle() {
     const trimmed = title.trim();
     if (!trimmed) setTitle(item.title);
@@ -185,8 +213,16 @@ function ItemDetail({
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--color-line)] px-3">
-        <TypeIcon type={item.type} />
+        <TypeIcon type={itemTypeOf(project, item.typeId)} />
         <span className="ml-1 text-sm font-medium text-[var(--color-muted)]">{item.key}</span>
+        {item.blockedBy > 0 && !done && (
+          <span
+            className="ml-1 flex items-center gap-1 rounded bg-red-500/10 px-1.5 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400"
+            title={`${item.blockedBy} open ${item.blockedBy === 1 ? 'item blocks' : 'items block'} this`}
+          >
+            <Icon name="slash-circle" /> Blocked
+          </span>
+        )}
         <span className="flex-1" />
         <IconButton label="Copy link" onClick={copyLink}>
           <Icon name="link-45deg" />
@@ -237,7 +273,7 @@ function ItemDetail({
             >
               {/* Where it is, and wherever its workflow lets it go from there. */}
               {project.statuses
-                .filter((s) => canMoveTo(project, item.type, item.statusId, s.id))
+                .filter((s) => canMoveTo(project, item.typeId, item.statusId, s.id))
                 .map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -264,21 +300,24 @@ function ItemDetail({
             </div>
           </Property>
           <Property label="Type">
-            <select
-              value={item.type}
-              disabled={!canEdit}
-              onChange={(e) => patch({ type: e.target.value as WorkItemType })}
-              className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
-              aria-label="Type"
-            >
-              {WORK_ITEM_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {ITEM_TYPE[t].label}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1">
+              <TypeIcon type={itemTypeOf(project, item.typeId)} className="pl-2" />
+              <select
+                value={item.typeId}
+                disabled={!canEdit}
+                onChange={(e) => changeType(e.target.value)}
+                className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
+                aria-label="Type"
+              >
+                {project.itemTypes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </Property>
-          {project.roles.map((role) => (
+          {rolesForType(project, item.typeId).map((role) => (
             <RoleProperty
               key={role.id}
               item={item}
@@ -290,7 +329,28 @@ function ItemDetail({
               canEdit={canEdit}
             />
           ))}
-          {usesSprints(project) && (
+          {project.kind === 'project' && canHaveEpic(project, item.typeId) && (
+            <Property label="Epic">
+              <select
+                value={item.epicId ?? ''}
+                disabled={!canEdit}
+                onChange={(e) => patch({ epicId: e.target.value || null })}
+                className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
+                aria-label="Epic"
+              >
+                <option value="">None</option>
+                {(siblings.data ?? [])
+                  .filter((other) => isEpicType(project, other.typeId))
+                  .map((epic) => (
+                    <option key={epic.id} value={epic.id}>
+                      {epic.key} {epic.title}
+                    </option>
+                  ))}
+              </select>
+            </Property>
+          )}
+          {/* Epics are not planned in sprints; the work under them is. */}
+          {usesSprints(project) && !isEpicType(project, item.typeId) && (
             <Property label="Sprint">
               <select
                 value={item.sprintId ?? ''}
@@ -378,6 +438,17 @@ function ItemDetail({
           <p className="text-sm text-[var(--color-muted)]">No description.</p>
         )}
 
+        <Links workspaceId={workspaceId} item={item} canEdit={canEdit} navigation={navigation} />
+
+        {isEpicType(project, item.typeId) && (
+          <EpicChildren
+            project={project}
+            epicId={item.id}
+            items={siblings.data ?? []}
+            onOpen={(id) => navigation.onOpenWorkItem({ id, projectId: project.id })}
+          />
+        )}
+
         <Backlinks itemId={item.id} navigation={navigation} />
 
         <Timeline
@@ -392,6 +463,18 @@ function ItemDetail({
         <History item={item} memberMap={memberMap} />
       </div>
 
+      {confirmingType && (
+        <ConfirmDialog
+          title={`Make ${item.key} a ${itemTypeOf(project, confirmingType.typeId)?.name ?? 'different type'}?`}
+          description={`${confirmingType.losing.join(', ')} ${confirmingType.losing.length === 1 ? 'is not a role' : 'are not roles'} on that type, so whoever holds ${confirmingType.losing.length === 1 ? 'it' : 'them'} here will be taken off.`}
+          confirmLabel="Change type"
+          onCancel={() => setConfirmingType(null)}
+          onConfirm={() => {
+            patch({ typeId: confirmingType.typeId });
+            setConfirmingType(null);
+          }}
+        />
+      )}
       {confirmingDelete && (
         <ConfirmDialog
           title={`Delete ${item.key}?`}
@@ -418,6 +501,240 @@ function Property({ label, children }: { label: string; children: ReactNode }) {
     <>
       <dt className="truncate text-xs text-[var(--color-muted)]">{label}</dt>
       <dd className="min-w-0">{children}</dd>
+    </>
+  );
+}
+
+/**
+ * The work items this one is linked to — what blocks it, what it blocks,
+ * duplicates, caused, or is simply related to — grouped by how each reads from
+ * here, with a search to link another.
+ */
+function Links({
+  workspaceId,
+  item,
+  canEdit,
+  navigation,
+}: {
+  workspaceId: string;
+  item: WorkItem;
+  canEdit: boolean;
+  navigation: ProjectNavigation;
+}) {
+  const links = useWorkItemLinks(item.id);
+  const { link, unlink } = useWorkItemLinking(item.id);
+  const toast = useToast();
+  const [adding, setAdding] = useState(false);
+  const [choice, setChoice] = useState(() => optionKey('blocks', 'inward'));
+  const [search, setSearch] = useState('');
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(search.trim()), 200);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const results = useWorkItemListing(adding && debounced ? workspaceId : undefined, { q: debounced, limit: 8 });
+
+  const all = links.data ?? [];
+  // Grouped by how the link reads from here, in the order the picker offers them.
+  const groups = useMemo(() => {
+    const byLabel = new Map<string, WorkItemLink[]>();
+    for (const option of WORK_ITEM_LINK_OPTIONS) byLabel.set(option.label, []);
+    for (const entry of all) byLabel.get(WORK_ITEM_LINK_LABELS[entry.type][entry.direction])?.push(entry);
+    return [...byLabel].filter(([, entries]) => entries.length > 0);
+  }, [all]);
+
+  const [type, direction] = choice.split(':') as [WorkItemLinkType, WorkItemLinkDirection];
+  const taken = new Set(all.filter((entry) => entry.type === type).map((entry) => entry.item.id));
+  const candidates = (results.data ?? []).filter((other) => other.id !== item.id && !taken.has(other.id));
+
+  function add(targetId: string, targetKey: string) {
+    link.mutate(
+      { type, direction, targetId },
+      {
+        onSuccess: () => {
+          toast(`${item.key} ${WORK_ITEM_LINK_LABELS[type][direction]} ${targetKey}`);
+          setSearch('');
+          setAdding(false);
+        },
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not link the work items', 'error'),
+      },
+    );
+  }
+
+  if (all.length === 0 && !canEdit) return null;
+
+  return (
+    <>
+      <div className="mt-6 flex items-center">
+        <h3 className="flex flex-1 items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          Links
+          {all.length > 0 && <span className="font-normal normal-case">{all.length}</span>}
+        </h3>
+        {canEdit && !adding && (
+          <button
+            onClick={() => setAdding(true)}
+            className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+          >
+            <Icon name="link-45deg" /> Link work item
+          </button>
+        )}
+      </div>
+
+      {adding && (
+        <div className="mt-1.5 rounded-lg border border-[var(--color-line)] p-2">
+          <div className="flex gap-2">
+            <select
+              value={choice}
+              onChange={(e) => setChoice(e.target.value)}
+              className="shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+              aria-label="How they are linked"
+            >
+              {WORK_ITEM_LINK_OPTIONS.map((option) => (
+                <option key={optionKey(option.type, option.direction)} value={optionKey(option.type, option.direction)}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <input
+              autoFocus
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setAdding(false);
+                if (e.key === 'Enter' && candidates[0]) add(candidates[0].id, candidates[0].key);
+              }}
+              placeholder="Search by key or title"
+              className="min-w-0 flex-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+            />
+            <IconButton label="Cancel" onClick={() => setAdding(false)}>
+              <Icon name="x-lg" />
+            </IconButton>
+          </div>
+          {debounced && (
+            <ul className="mt-1.5">
+              {results.isLoading ? (
+                <li className="px-2 py-1 text-xs text-[var(--color-muted)]">Searching…</li>
+              ) : candidates.length === 0 ? (
+                <li className="px-2 py-1 text-xs text-[var(--color-muted)]">No work items match.</li>
+              ) : (
+                candidates.map((other) => (
+                  <li key={other.id}>
+                    <button
+                      disabled={link.isPending}
+                      onClick={() => add(other.id, other.key)}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-[var(--color-surface)] disabled:opacity-50"
+                    >
+                      <TypeIcon type={other.itemType} />
+                      <span className="shrink-0 text-xs text-[var(--color-muted)]">{other.key}</span>
+                      <span className="min-w-0 flex-1 truncate">{other.title}</span>
+                      <StatusPill status={other.status} className="shrink-0" />
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {groups.map(([label, entries]) => (
+        <div key={label} className="mt-2">
+          <p className="mb-0.5 text-xs text-[var(--color-muted)]">{label[0].toUpperCase() + label.slice(1)}</p>
+          <ul className="-mx-2">
+            {entries.map((entry) => {
+              const done = entry.item.status.category === 'done';
+              return (
+                <li key={entry.id} className="group flex items-center gap-1">
+                  <button
+                    onClick={() => navigation.onOpenWorkItem(entry.item)}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-[var(--color-surface)]"
+                  >
+                    <TypeIcon type={entry.item.itemType} />
+                    <span className="shrink-0 text-xs text-[var(--color-muted)]">{entry.item.key}</span>
+                    <span className={cx('min-w-0 flex-1 truncate', done && 'text-[var(--color-muted)] line-through')}>
+                      {entry.item.title}
+                    </span>
+                    <StatusPill status={entry.item.status} className="shrink-0" />
+                  </button>
+                  {canEdit && (
+                    <button
+                      onClick={() =>
+                        unlink.mutate(entry.id, {
+                          onError: (err) => toast(err instanceof Error ? err.message : 'Could not remove the link', 'error'),
+                        })
+                      }
+                      title="Remove link"
+                      aria-label={`Remove link to ${entry.item.key}`}
+                      className="rounded p-1 text-xs text-[var(--color-muted)] opacity-0 hover:text-[var(--color-ink)] focus:opacity-100 group-hover:opacity-100"
+                    >
+                      <Icon name="x-lg" />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function optionKey(type: WorkItemLinkType, direction: WorkItemLinkDirection): string {
+  return `${type}:${direction}`;
+}
+
+/** The work organised under an epic, and how far along it is. */
+function EpicChildren({
+  project,
+  epicId,
+  items,
+  onOpen,
+}: {
+  project: Project;
+  epicId: string;
+  items: WorkItemSummary[];
+  onOpen: (itemId: string) => void;
+}) {
+  const children = items.filter((other) => other.epicId === epicId);
+  const statuses = new Map(project.statuses.map((s) => [s.id, s]));
+  return (
+    <>
+      <Heading count={children.length}>Work in this epic</Heading>
+      {children.length === 0 ? (
+        <p className="text-sm text-[var(--color-muted)]">
+          Nothing yet. Choose this epic on a story, task or bug to organise it here.
+        </p>
+      ) : (
+        <>
+          <EpicProgressBar project={project} items={children} className="mb-2" />
+          <ul className="-mx-2">
+            {children.map((child) => {
+              const status = statuses.get(child.statusId);
+              return (
+                <li key={child.id}>
+                  <button
+                    onClick={() => onOpen(child.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-[var(--color-surface)]"
+                  >
+                    <TypeIcon type={itemTypeOf(project, child.typeId)} />
+                    <span className="shrink-0 text-xs text-[var(--color-muted)]">{child.key}</span>
+                    <span
+                      className={cx(
+                        'min-w-0 flex-1 truncate',
+                        status?.category === 'done' && 'text-[var(--color-muted)] line-through',
+                      )}
+                    >
+                      {child.title}
+                    </span>
+                    {status && <StatusPill status={status} className="shrink-0" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
     </>
   );
 }
@@ -789,6 +1106,13 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
       return `changed the priority from ${PRIORITY[activity.from].label.toLowerCase()} to ${PRIORITY[activity.to].label.toLowerCase()}`;
     case 'title':
       return `renamed this from "${activity.from}"`;
+    case 'link':
+      return activity.added
+        ? `noted that this ${activity.label} ${activity.key} ${activity.title}`
+        : `removed the link: this ${activity.label} ${activity.key} ${activity.title}`;
+    case 'epic':
+      if (!activity.to) return `took this out of the epic ${activity.from ?? ''}`.trimEnd();
+      return activity.from ? `moved this from the epic ${activity.from} to ${activity.to}` : `put this under the epic ${activity.to}`;
     case 'sprint':
       if (!activity.to) return `took this out of ${activity.from ?? 'its sprint'}, back to the backlog`;
       return activity.from ? `moved this from ${activity.from} to ${activity.to}` : `added this to ${activity.to}`;

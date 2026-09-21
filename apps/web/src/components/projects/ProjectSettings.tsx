@@ -3,8 +3,11 @@ import {
   STATUS_CATEGORIES,
   STATUS_CATEGORY_LABELS,
   STATUS_COLORS,
-  WORK_ITEM_TYPES,
+  ITEM_TYPE_COLORS,
+  ITEM_TYPE_ICONS,
+  defaultableTypes,
   type Project,
+  type ProjectItemType,
   type ProjectRole,
   type ProjectStatus,
   type ProjectWorkflow,
@@ -14,12 +17,12 @@ import {
 import { useDeleteProject, useProjectSetup, useUpdateProject } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import { AccessDialog } from '../AccessDialog';
-import Icon from '../Icon';
+import Icon, { type IconName } from '../Icon';
 import { ConfirmDialog, Modal } from '../Modal';
 import { FIELD, FIELD_BASE, Section } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
-import { CATEGORY_ICON, ITEM_TYPE, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
+import { CATEGORY_ICON, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
 
 /**
@@ -51,6 +54,7 @@ export default function ProjectSettings({
     <div className="scroll-thin h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-6">
         <GeneralSection project={project} canEdit={canEdit} />
+        <ItemTypeSection project={project} items={items} canEdit={canEdit} />
         <StatusSection project={project} items={items} canEdit={canEdit} />
         <WorkflowSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
@@ -201,6 +205,354 @@ function SprintSection({ project, canEdit }: { project: Project; canEdit: boolea
         </button>
       </div>
     </Section>
+  );
+}
+
+/**
+ * The kinds of work the project holds: what each is called and looks like,
+ * which roles apply to its items, and which one new work starts as. Every
+ * project starts with Task, Bug, Story, Epic and Request, and any of them can
+ * go. An epic-kind type holds other work instead of being worked on, so its
+ * items stay off the board and out of sprints; that is chosen when a type is
+ * made, since changing it would reshuffle the work already filed as it.
+ */
+function ItemTypeSection({ project, items, canEdit }: { project: Project; items: WorkItemSummary[]; canEdit: boolean }) {
+  const setup = useProjectSetup(project.workspaceId, project.id);
+  const update = useUpdateProject(project.workspaceId, project.id);
+  const toast = useToast();
+  const [newName, setNewName] = useState('');
+  const [newEpic, setNewEpic] = useState(false);
+  const [editingRoles, setEditingRoles] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<ProjectItemType | null>(null);
+  const [narrowing, setNarrowing] = useState<{ type: ProjectItemType; roleIds: string[]; role: string; affected: number } | null>(
+    null,
+  );
+  const fail = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
+
+  const types = project.itemTypes;
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.typeId, (counts.get(item.typeId) ?? 0) + 1);
+  const workTypes = defaultableTypes(project);
+
+  function move(index: number, by: -1 | 1) {
+    const target = index + by;
+    if (target < 0 || target >= types.length) return;
+    const others = types.filter((_, i) => i !== index);
+    const position = positionBetween(others[target - 1]?.position, others[target]?.position);
+    setup.updateItemType.mutate({ id: types[index].id, position }, { onError: fail('Could not move the type') });
+  }
+
+  function add() {
+    const name = newName.trim();
+    if (!name) return;
+    setup.addItemType.mutate(
+      {
+        name,
+        epic: newEpic,
+        icon: newEpic ? 'flag' : 'check2-square',
+        color: ITEM_TYPE_COLORS[types.length % ITEM_TYPE_COLORS.length],
+      },
+      {
+        onSuccess: () => {
+          setNewName('');
+          setNewEpic(false);
+        },
+        onError: fail('Could not add the type'),
+      },
+    );
+  }
+
+  /** Turns a role on or off for a type, asking first when that takes people off its items. */
+  function toggleRole(type: ProjectItemType, roleId: string, on: boolean) {
+    const roleIds = on ? [...type.roleIds, roleId] : type.roleIds.filter((id) => id !== roleId);
+    const affected = on
+      ? 0
+      : items.filter(
+          (item) =>
+            item.typeId === type.id && ((item.roles[roleId]?.length ?? 0) > 0 || (item.roleNames[roleId]?.length ?? 0) > 0),
+        ).length;
+    if (affected > 0) {
+      const role = project.roles.find((r) => r.id === roleId)?.name ?? 'that role';
+      setNarrowing({ type, roleIds, role, affected });
+    } else {
+      setup.updateItemType.mutate({ id: type.id, roleIds }, { onError: fail('Could not change the roles') });
+    }
+  }
+
+  function remove(type: ProjectItemType) {
+    if ((counts.get(type.id) ?? 0) > 0) setRemoving(type);
+    else setup.deleteItemType.mutate({ id: type.id }, { onError: fail('Could not delete the type') });
+  }
+
+  return (
+    <Section
+      title="Work item types"
+      hint="The kinds of work filed here, and which roles apply to each. An epic-kind type holds other work — stories, tasks, bugs — and is followed in the Epics view instead of on the board or in sprints."
+    >
+      <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
+        {types.map((type, index) => {
+          const lastWorkType = !type.epic && workTypes.length <= 1;
+          const expanded = editingRoles === type.id;
+          const roleCount = project.roles.filter((role) => type.roleIds.includes(role.id)).length;
+          return (
+            <li key={type.id}>
+              <div className="flex items-center gap-2 px-2 py-1.5">
+                <IconPicker
+                  icon={type.icon}
+                  color={type.color}
+                  disabled={!canEdit}
+                  onChange={(icon) => setup.updateItemType.mutate({ id: type.id, icon }, { onError: fail('Could not change the icon') })}
+                />
+                <ColorSwatch
+                  color={type.color}
+                  disabled={!canEdit}
+                  onChange={(color) => setup.updateItemType.mutate({ id: type.id, color }, { onError: fail('Could not change the colour') })}
+                />
+                <RenameField
+                  value={type.name}
+                  disabled={!canEdit}
+                  onCommit={(name) => setup.updateItemType.mutate({ id: type.id, name }, { onError: fail('Could not rename the type') })}
+                />
+                {type.epic && (
+                  <span
+                    className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-300"
+                    title="Holds other work: kept off the board and out of sprints, and followed in the Epics view"
+                  >
+                    Epic-kind
+                  </span>
+                )}
+                {type.id === project.defaultTypeId && (
+                  <span className="shrink-0 rounded bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
+                    Default
+                  </span>
+                )}
+                <span className="w-14 shrink-0 text-right text-xs text-[var(--color-muted)]">{counts.get(type.id) ?? 0} items</span>
+                <Button variant="subtle" className="shrink-0 text-xs" onClick={() => setEditingRoles(expanded ? null : type.id)}>
+                  {expanded ? 'Done' : `${roleCount} of ${project.roles.length} roles`}
+                </Button>
+                {canEdit && (
+                  <>
+                    <IconButton label="Move earlier" disabled={index === 0} onClick={() => move(index, -1)}>
+                      <Icon name="chevron-up" />
+                    </IconButton>
+                    <IconButton label="Move later" disabled={index === types.length - 1} onClick={() => move(index, 1)}>
+                      <Icon name="chevron-down" />
+                    </IconButton>
+                    <IconButton
+                      label={lastWorkType ? 'A project needs at least one type that is not epic-kind' : 'Delete type'}
+                      disabled={lastWorkType}
+                      onClick={() => remove(type)}
+                    >
+                      <Icon name="trash3" />
+                    </IconButton>
+                  </>
+                )}
+              </div>
+              {expanded && (
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--color-line)] bg-[var(--color-surface)]/40 px-9 py-2">
+                  {project.roles.length === 0 && <span className="text-xs text-[var(--color-muted)]">The project has no roles yet.</span>}
+                  {project.roles.map((role) => (
+                    <label key={role.id} className="flex items-center gap-1.5 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={type.roleIds.includes(role.id)}
+                        disabled={!canEdit}
+                        onChange={(e) => toggleRole(type, role.id, e.target.checked)}
+                      />
+                      {role.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </li>
+          );
+        })}
+        {canEdit && (
+          <li className="flex items-center gap-2 px-2 py-1.5">
+            <Icon name="plus-circle" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && add()}
+              placeholder={newEpic ? 'New epic-kind type, such as Initiative' : 'New type, such as Spike'}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+            />
+            <label
+              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+              title="Holds other work, as an epic does: kept off the board and out of sprints, and followed in the Epics view. Cannot be changed once the type is made."
+            >
+              <input type="checkbox" checked={newEpic} onChange={(e) => setNewEpic(e.target.checked)} />
+              Epic-kind
+            </label>
+            <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
+              Add
+            </Button>
+          </li>
+        )}
+      </ul>
+
+      <label className="mt-3 flex items-center gap-2 text-xs text-[var(--color-muted)]">
+        New work starts as
+        <select
+          value={project.defaultTypeId}
+          disabled={!canEdit || update.isPending}
+          onChange={(e) =>
+            update.mutate(
+              { defaultTypeId: e.target.value },
+              {
+                onSuccess: (saved) =>
+                  toast(`New work starts as ${saved.itemTypes.find((t) => t.id === saved.defaultTypeId)?.name ?? 'that type'}`),
+                onError: fail('Could not change the project'),
+              },
+            )
+          }
+          className={cx(FIELD_BASE, 'w-44 py-1 text-xs text-[var(--color-ink)]')}
+          aria-label="Default work item type"
+        >
+          {workTypes.map((type) => (
+            <option key={type.id} value={type.id}>
+              {type.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {removing && (
+        <RemoveTypeDialog
+          type={removing}
+          count={counts.get(removing.id) ?? 0}
+          others={types.filter((t) => t.id !== removing.id)}
+          onCancel={() => setRemoving(null)}
+          onConfirm={(moveTo) => {
+            setRemoving(null);
+            setup.deleteItemType.mutate({ id: removing.id, moveTo }, { onError: fail('Could not delete the type') });
+          }}
+        />
+      )}
+      {narrowing && (
+        <ConfirmDialog
+          title={`Take ${narrowing.role} off ${narrowing.type.name}?`}
+          description={`${narrowing.affected === 1 ? 'One' : narrowing.affected} ${narrowing.type.name} ${narrowing.affected === 1 ? 'item has' : 'items have'} someone in ${narrowing.role}. They will be taken off, and each item's history will say so.`}
+          confirmLabel="Take off"
+          onCancel={() => setNarrowing(null)}
+          onConfirm={() => {
+            const { type, roleIds } = narrowing;
+            setNarrowing(null);
+            setup.updateItemType.mutate({ id: type.id, roleIds }, { onError: fail('Could not change the roles') });
+          }}
+        />
+      )}
+    </Section>
+  );
+}
+
+function RemoveTypeDialog({
+  type,
+  count,
+  others,
+  onCancel,
+  onConfirm,
+}: {
+  type: ProjectItemType;
+  count: number;
+  others: ProjectItemType[];
+  onCancel: () => void;
+  onConfirm: (moveTo: string) => void;
+}) {
+  // Work of the same kind first: an epic becoming a task has to let go of what was under it.
+  const sorted = [...others.filter((t) => t.epic === type.epic), ...others.filter((t) => t.epic !== type.epic)];
+  const [moveTo, setMoveTo] = useState(sorted[0]?.id ?? '');
+  const target = others.find((t) => t.id === moveTo);
+  return (
+    <Modal
+      title={`Delete ${type.name}?`}
+      description={`${count === 1 ? 'One work item is' : `${count} work items are`} ${type.name}. Choose what ${count === 1 ? 'it becomes' : 'they become'}.`}
+      onClose={onCancel}
+      footer={
+        <>
+          <Button variant="subtle" className="text-xs" onClick={onCancel}>
+            Cancel
+          </Button>
+          <button
+            onClick={() => onConfirm(moveTo)}
+            disabled={!moveTo}
+            className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
+          >
+            Change and delete
+          </button>
+        </>
+      }
+    >
+      <select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} className={FIELD} aria-label="Change items to">
+        {sorted.map((other) => (
+          <option key={other.id} value={other.id}>
+            {other.name}
+            {other.epic ? ' (epic-kind)' : ''}
+          </option>
+        ))}
+      </select>
+      {target && target.epic !== type.epic && (
+        <p className="mt-2 text-xs text-amber-600">
+          {type.epic
+            ? `${target.name} is not epic-kind, so the work organised under these items will no longer be under anything.`
+            : `${target.name} is epic-kind, so these items will be taken out of their sprints and epics.`}
+        </p>
+      )}
+      <p className="mt-2 text-xs text-[var(--color-muted)]">Anyone in a role {target?.name ?? 'the new type'} does not offer is taken off.</p>
+    </Modal>
+  );
+}
+
+/** Picks a type's icon from the set offered, drawn in the type's colour. */
+function IconPicker({
+  icon,
+  color,
+  disabled,
+  onChange,
+}: {
+  icon: string;
+  color: string;
+  disabled: boolean;
+  onChange: (icon: (typeof ITEM_TYPE_ICONS)[number]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      <button
+        disabled={disabled}
+        onClick={() => setOpen(!open)}
+        aria-label="Icon"
+        className="grid h-6 w-6 place-items-center rounded-md hover:bg-[var(--color-surface)]"
+        style={{ color }}
+      >
+        <Icon name={icon as IconName} />
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 top-full z-20 mt-1 grid w-max grid-cols-6 gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] p-2 shadow-lg"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {ITEM_TYPE_ICONS.map((option) => (
+            <button
+              key={option}
+              onClick={() => {
+                setOpen(false);
+                if (option !== icon) onChange(option);
+              }}
+              aria-label={option}
+              title={option}
+              className={cx(
+                'grid h-7 w-7 place-items-center rounded-md hover:bg-[var(--color-surface)]',
+                option === icon && 'ring-2 ring-[var(--color-accent)]',
+              )}
+              style={{ color }}
+            >
+              <Icon name={option} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -571,21 +923,21 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
         <div className="mt-3">
           <h4 className="text-xs font-semibold">What each type follows</h4>
           <ul className="mt-1 divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
-            {WORK_ITEM_TYPES.map((type) => (
-              <li key={type} className="flex items-center gap-2 px-2 py-1.5">
+            {project.itemTypes.map((type) => (
+              <li key={type.id} className="flex items-center gap-2 px-2 py-1.5">
                 <TypeIcon type={type} className="w-5 shrink-0 justify-center" />
-                <span className="min-w-0 flex-1 text-sm">{ITEM_TYPE[type].label}</span>
+                <span className="min-w-0 flex-1 text-sm">{type.name}</span>
                 <select
-                  value={project.typeWorkflows[type] ?? ''}
+                  value={type.workflowId ?? ''}
                   disabled={!canEdit}
                   onChange={(e) =>
-                    setup.setTypeWorkflow.mutate(
-                      { type, workflowId: e.target.value || null },
+                    setup.updateItemType.mutate(
+                      { id: type.id, workflowId: e.target.value || null },
                       { onError: fail('Could not change what this type follows') },
                     )
                   }
                   className={cx(FIELD_BASE, 'w-44 shrink-0 py-1 text-xs')}
-                  aria-label={`Workflow ${ITEM_TYPE[type].label} items follow`}
+                  aria-label={`Workflow ${type.name} items follow`}
                 >
                   <option value="">Moves anywhere</option>
                   {workflows.map((workflow) => (
@@ -722,7 +1074,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   return (
     <Section
       title="Roles"
-      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here."
+      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. Which types each role applies to is set under Work item types; a new role applies to every type."
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {roles.map((role, index) => (

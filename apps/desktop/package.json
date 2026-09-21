@@ -1,6 +1,6 @@
 {
   "name": "@paradocs/desktop",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "private": true,
   "productName": "ParaDOCs",
   "description": "ParaDOCs desktop app for macOS and Windows",

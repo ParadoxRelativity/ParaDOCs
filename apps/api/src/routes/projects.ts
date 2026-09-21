@@ -1,26 +1,34 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  STANDARD_ITEM_TYPES,
+  WORK_ITEM_LINK_LABELS,
   canMoveTo,
   completeSprintSchema,
   createProjectSchema,
   createSprintSchema,
   createRoleSchema,
   createStatusSchema,
+  createItemTypeSchema,
+  createWorkItemLinkSchema,
   createWorkItemSchema,
   createWorkflowSchema,
+  isEpicType,
+  isSymmetricLink,
+  itemTypeOf,
+  deleteItemTypeSchema,
   deleteStatusSchema,
   MAX_ROLE_HOLDERS,
   memberRef,
   moveWorkItemsSchema,
   resolveWorkItemsSchema,
-  setTypeWorkflowSchema,
   setWorkItemRoleSchema,
   setWorkItemsSprintSchema,
   sprintEntryStatus,
   startSprintSchema,
   textMembers,
   textWorkItems,
+  updateItemTypeSchema,
   updateProjectSchema,
   updateRoleSchema,
   updateSprintSchema,
@@ -30,6 +38,7 @@ import {
   workItemCommentSchema,
   workflowForType,
   type Project,
+  type ProjectItemType,
   type ProjectKind,
   type ProjectRole,
   type ProjectSprint,
@@ -42,10 +51,12 @@ import {
   type WorkItemActivityData,
   type WorkItemBacklinks,
   type WorkItemComment,
+  type WorkItemLink,
+  type WorkItemLinkDirection,
+  type WorkItemLinkType,
   type WorkItemListing,
   type WorkItemSummary,
   type WorkItemTimeline,
-  type WorkItemType,
 } from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
@@ -54,6 +65,7 @@ import {
   assertProjectAccess,
   assertWorkItemAccess,
   channelLevelSql,
+  workItemAccess,
   documentLevelSql,
   managesAccess,
   permissionSql,
@@ -134,8 +146,8 @@ function projectColumns(user: string, role: string): string {
 
 /** A work item's summary. Items aliased `i`, their project `p`. */
 const ITEM_COLUMNS = `
-  i.id, i.project_id AS "projectId", i.number, p.key || '-' || i.number AS key, i.title, i.type, i.priority,
-  i.status_id AS "statusId", i.position, i.sprint_id AS "sprintId", to_char(i.due_date, 'YYYY-MM-DD') AS "dueDate",
+  i.id, i.project_id AS "projectId", i.number, p.key || '-' || i.number AS key, i.title, i.type_id AS "typeId", i.priority,
+  i.status_id AS "statusId", i.position, i.sprint_id AS "sprintId", i.epic_id AS "epicId", to_char(i.due_date, 'YYYY-MM-DD') AS "dueDate",
   i.estimate::float8 AS estimate,
   COALESCE((
     SELECT json_object_agg(g.role_id, g.users)
@@ -152,6 +164,10 @@ const ITEM_COLUMNS = `
              GROUP BY wr.role_id) g
   ), '{}'::json) AS "roleNames",
   (SELECT count(*)::int FROM work_item_comments c WHERE c.work_item_id = i.id) AS "commentCount",
+  (SELECT count(*)::int FROM work_item_links l
+     JOIN work_items b ON b.id = l.source_id
+     JOIN project_statuses bs ON bs.id = b.status_id
+    WHERE l.target_id = i.id AND l.type = 'blocks' AND bs.category <> 'done') AS "blockedBy",
   i.created_at AS "createdAt", i.updated_at AS "updatedAt", i.completed_at AS "completedAt"`;
 
 function authorJson(alias: string): string {
@@ -159,6 +175,18 @@ function authorJson(alias: string): string {
     ELSE json_build_object('id', ${alias}.id, 'name', ${alias}.name, 'email', ${alias}.email,
                            'avatarUrl', ${uploadUrlSql(`${alias}.avatar_key`)}) END`;
 }
+
+/** How the type of the item aliased `i` looks, as JSON, for showing it outside its project. */
+const ITEM_TYPE_LOOK = `(SELECT json_build_object('name', t.name, 'icon', t.icon, 'color', t.color, 'epic', t.epic)
+                          FROM project_item_types t WHERE t.id = i.type_id)`;
+
+/** Whether the item aliased `i` is of an epic-kind type. */
+const IS_EPIC = `EXISTS (SELECT 1 FROM project_item_types t WHERE t.id = i.type_id AND t.epic)`;
+
+/** An item type as the client wants it. The table must be aliased `t`. */
+const ITEM_TYPE_JSON = `json_build_object('id', t.id, 'name', t.name, 'icon', t.icon, 'color', t.color, 'epic', t.epic,
+  'workflowId', t.workflow_id, 'position', t.position,
+  'roleIds', COALESCE((SELECT json_agg(tr.role_id) FROM project_item_type_roles tr WHERE tr.type_id = t.id), '[]'::json))`;
 
 /** A sprint as the client wants it. The table must be aliased `sp`. */
 const SPRINT_COLUMNS = `
@@ -195,10 +223,13 @@ async function fetchProject(id: string, userId: string): Promise<Project> {
                                                         'transitions', ${TRANSITIONS_JSON})
                                       ORDER BY w.position, w.created_at)
                         FROM project_workflows w WHERE w.project_id = p.id), '[]'::json) AS workflows,
-            COALESCE((SELECT json_object_agg(tw.type, tw.workflow_id)
-                        FROM project_type_workflows tw WHERE tw.project_id = p.id), '{}'::json) AS "typeWorkflows",
+            COALESCE((SELECT json_agg(${ITEM_TYPE_JSON} ORDER BY t.position, t.created_at)
+                        FROM project_item_types t WHERE t.project_id = p.id), '[]'::json) AS "itemTypes",
             p.board_layout AS "boardLayout",
             p.kind = 'project' AND p.sprints_enabled AS "sprintsEnabled",
+            COALESCE(p.default_type_id,
+                     (SELECT t.id FROM project_item_types t WHERE t.project_id = p.id AND NOT t.epic
+                       ORDER BY t.position, t.created_at LIMIT 1)) AS "defaultTypeId",
             COALESCE((SELECT json_agg(to_jsonb(s) - 'ord' ORDER BY s.ord)
                         FROM (SELECT ${SPRINT_COLUMNS}, row_number() OVER (ORDER BY ${SPRINT_ORDER}) AS ord
                                 FROM project_sprints sp WHERE sp.project_id = p.id) s), '[]'::json) AS sprints,
@@ -253,16 +284,63 @@ async function assertWorkflowNameFree(projectId: string, name: string, exceptId?
 function assertMoveAllowed(
   project: Project,
   role: string | null,
-  moves: { key: string; type: WorkItemType; from: string; to: string }[],
+  moves: { key: string; typeId: string; from: string; to: string }[],
 ): void {
   if (role === 'owner' || role === 'admin') return;
   const name = (id: string) => project.statuses.find((s) => s.id === id)?.name ?? 'that status';
   for (const move of moves) {
-    if (canMoveTo(project, move.type, move.from, move.to)) continue;
-    const workflow = workflowForType(project, move.type)!;
+    if (canMoveTo(project, move.typeId, move.from, move.to)) continue;
+    const workflow = workflowForType(project, move.typeId)!;
     throw badRequest(
       `${move.key} cannot go from ${name(move.from)} to ${name(move.to)}: the ${workflow.name} workflow does not allow it`,
     );
+  }
+}
+
+type ItemTypeRow = { id: string; projectId: string; name: string; epic: boolean };
+
+async function itemTypeRow(typeId: string): Promise<ItemTypeRow> {
+  if (!UUID.test(typeId)) throw notFound('Type not found');
+  const { rows } = await query<ItemTypeRow>(
+    'SELECT id, project_id AS "projectId", name, epic FROM project_item_types WHERE id = $1',
+    [typeId],
+  );
+  if (!rows[0]) throw notFound('Type not found');
+  return rows[0];
+}
+
+async function assertItemTypeNameFree(projectId: string, name: string, exceptId?: string): Promise<void> {
+  const { rows } = await query(
+    'SELECT 1 FROM project_item_types WHERE project_id = $1 AND lower(name) = lower($2) AND id IS DISTINCT FROM $3',
+    [projectId, name, exceptId ?? null],
+  );
+  if (rows.length) throw conflict(`This project already has a type called ${name}`);
+}
+
+/**
+ * Takes people off roles that no longer apply to the type of the items `where`
+ * picks out (items aliased `i`), and notes it in each item's history. It is what
+ * keeps an item's roles to those its type offers, after the type changes or
+ * the roles the type offers do.
+ */
+async function pruneRoles(db: Queryable, where: string, params: unknown[], actorId: string): Promise<void> {
+  const { rows } = await db.query<{ work_item_id: string; role_id: string; role_name: string; holders: string[] }>(
+    `DELETE FROM work_item_roles wr
+      USING work_items i, project_roles r
+      WHERE wr.work_item_id = i.id AND r.id = wr.role_id AND ${where}
+        AND NOT EXISTS (SELECT 1 FROM project_item_type_roles tr WHERE tr.type_id = i.type_id AND tr.role_id = wr.role_id)
+      RETURNING wr.work_item_id, wr.role_id, r.name AS role_name, ARRAY[COALESCE(wr.user_id::text, wr.name)] AS holders`,
+    params,
+  );
+  const grouped = new Map<string, { itemId: string; role: string; removed: string[] }>();
+  for (const row of rows) {
+    const key = `${row.work_item_id}:${row.role_id}`;
+    const entry = grouped.get(key) ?? { itemId: row.work_item_id, role: row.role_name, removed: [] };
+    entry.removed.push(...row.holders);
+    grouped.set(key, entry);
+  }
+  for (const entry of grouped.values()) {
+    await logActivity(db, entry.itemId, actorId, { kind: 'role', role: entry.role, added: [], removed: entry.removed });
   }
 }
 
@@ -386,6 +464,36 @@ async function logActivity(db: Queryable, itemId: string, actorId: string, data:
   ]);
 }
 
+/** Notes a link made or removed in the history of both its items, each reading it its own way. */
+async function logLinkBothWays(
+  db: Queryable,
+  link: { id: string; target: string },
+  type: WorkItemLinkType,
+  items: { id: string; key: string; title: string }[],
+  actorId: string,
+  added: boolean,
+): Promise<void> {
+  const source = items.find((i) => i.id === link.id)!;
+  const target = items.find((i) => i.id === link.target)!;
+  const labels = WORK_ITEM_LINK_LABELS[type];
+  await logActivity(db, source.id, actorId, { kind: 'link', label: labels.outward, key: target.key, title: target.title, added });
+  await logActivity(db, target.id, actorId, { kind: 'link', label: labels.inward, key: source.key, title: source.title, added });
+}
+
+/**
+ * Tells whoever is looking at the projects of the items linked to this one
+ * that it changed, since each shows it — and whether it still blocks them.
+ */
+async function linkedChanged(itemId: string, workspaceId: string): Promise<void> {
+  const { rows } = await query<{ id: string; project_id: string }>(
+    `SELECT i.id, i.project_id FROM work_item_links l
+       JOIN work_items i ON i.id = CASE WHEN l.source_id = $1 THEN l.target_id ELSE l.source_id END
+      WHERE l.source_id = $1 OR l.target_id = $1`,
+    [itemId],
+  );
+  for (const row of rows) projectChanged(workspaceId, row.project_id, row.id);
+}
+
 /**
  * Records the items an item's description and comments mention, so each of
  * those lists this one. Losing a backlink is not worth failing the request.
@@ -451,12 +559,29 @@ async function openSprintOf(projectId: string, sprintId: string): Promise<Sprint
   return sprint;
 }
 
+// --- epics ---------------------------------------------------------------------
+
+type EpicRow = { id: string; title: string };
+
+/** An epic of this project that work can be put under. */
+async function epicOf(projectId: string, epicId: string): Promise<EpicRow> {
+  const { rows } = await query<EpicRow & { epic: boolean }>(
+    `SELECT i.id, i.title, t.epic FROM work_items i JOIN project_item_types t ON t.id = i.type_id
+      WHERE i.id = $1 AND i.project_id = $2`,
+    [epicId, projectId],
+  );
+  if (!rows[0]) throw badRequest('That epic is not in this project');
+  if (!rows[0].epic) throw badRequest(`"${rows[0].title}" is not an epic`);
+  return { id: rows[0].id, title: rows[0].title };
+}
+
 /** One item as putting it in a sprint needs it. */
-type Placing = { id: string; key: string; type: WorkItemType; statusId: string; sprintId: string | null };
+type Placing = { id: string; key: string; typeId: string; epic: boolean; statusId: string; sprintId: string | null };
 
 async function placingItems(db: Queryable, projectId: string, itemIds: string[]): Promise<Placing[]> {
   const { rows } = await db.query<Placing>(
-    `SELECT i.id, p.key || '-' || i.number AS key, i.type, i.status_id AS "statusId", i.sprint_id AS "sprintId"
+    `SELECT i.id, p.key || '-' || i.number AS key, i.type_id AS "typeId", ${IS_EPIC} AS epic,
+            i.status_id AS "statusId", i.sprint_id AS "sprintId"
        FROM unnest($1::uuid[]) WITH ORDINALITY AS picked(id, n)
        JOIN work_items i ON i.id = picked.id AND i.project_id = $2
        JOIN projects p ON p.id = i.project_id
@@ -532,6 +657,8 @@ async function placeInSprint(
 ): Promise<number> {
   const moving = items.filter((item) => item.sprintId !== (sprint?.id ?? null));
   if (moving.length === 0) return 0;
+  const epic = sprint && moving.find((item) => item.epic);
+  if (epic) throw badRequest(`${epic.key} is an epic. Epics are not planned in sprints; put the work under it in one instead.`);
   const entries = sprint?.state === 'active' ? boardEntries(project, role, moving) : new Map<string, ProjectStatus>();
 
   await db.query('UPDATE work_items SET sprint_id = $2, updated_at = now() WHERE id = ANY($1::uuid[])', [
@@ -610,6 +737,31 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           defaults.roles.map((r) => r.freeForm ?? false),
         ],
       );
+      // The five standard types, each taking every role.
+      const { rows: types } = await client.query<{ id: string; name: string }>(
+        `INSERT INTO project_item_types (project_id, name, icon, color, epic, position)
+         SELECT $1, t.name, t.icon, t.color, t.epic, t.position
+           FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS t(name, icon, color, epic, position)
+         RETURNING id, name`,
+        [
+          projectId,
+          STANDARD_ITEM_TYPES.map((t) => t.name),
+          STANDARD_ITEM_TYPES.map((t) => t.icon),
+          STANDARD_ITEM_TYPES.map((t) => t.color),
+          STANDARD_ITEM_TYPES.map((t) => t.epic),
+        ],
+      );
+      await client.query(
+        `INSERT INTO project_item_type_roles (type_id, role_id)
+         SELECT t.id, r.id FROM project_item_types t JOIN project_roles r ON r.project_id = t.project_id
+          WHERE t.project_id = $1`,
+        [projectId],
+      );
+      const defaultName = kind === 'queue' ? 'Request' : 'Task';
+      await client.query('UPDATE projects SET default_type_id = $2 WHERE id = $1', [
+        projectId,
+        types.find((t) => t.name === defaultName)!.id,
+      ]);
       return projectId;
     });
 
@@ -627,6 +779,11 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
     const input = parse(updateProjectSchema, req.body ?? {});
     if (input.key) await assertKeyFree(workspaceId, input.key, req.params.id);
+    if (input.defaultTypeId) {
+      const type = await itemTypeRow(input.defaultTypeId);
+      if (type.projectId !== req.params.id) throw badRequest('That type is not in this project');
+      if (type.epic) throw badRequest(`New work cannot start as ${type.name}: it holds other work, as epics do`);
+    }
     if (input.sprintsEnabled) {
       const { rows } = await query<{ kind: ProjectKind }>('SELECT kind FROM projects WHERE id = $1', [req.params.id]);
       if (rows[0]?.kind === 'queue') throw badRequest('A queue is worked through in order, not in sprints');
@@ -645,6 +802,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
               END,
               board_layout = COALESCE($8::jsonb, board_layout),
               sprints_enabled = COALESCE($9, sprints_enabled),
+              default_type_id = COALESCE($10, default_type_id),
               updated_at = now()
         WHERE id = $1`,
       [
@@ -657,6 +815,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         input.archived ?? null,
         input.boardLayout ? JSON.stringify(input.boardLayout) : null,
         input.sprintsEnabled ?? null,
+        input.defaultTypeId ?? null,
       ],
     );
     projectChanged(workspaceId, req.params.id);
@@ -771,6 +930,12 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
        VALUES ($1, $2, $3, $4, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
        RETURNING id, name, multiple, free_form AS "freeForm", position`,
       [req.params.id, input.name, input.multiple, input.freeForm],
+    );
+    // A new role applies to every type until someone says otherwise.
+    await query(
+      `INSERT INTO project_item_type_roles (type_id, role_id)
+       SELECT t.id, $2 FROM project_item_types t WHERE t.project_id = $1`,
+      [req.params.id, rows[0].id],
     );
     projectChanged(workspaceId, req.params.id);
     reply.status(201);
@@ -903,24 +1068,149 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     reply.status(204);
   });
 
-  /** Points one item type at a workflow, or at none. */
-  app.put<{ Params: { id: string } }>('/projects/:id/type-workflows', async (req) => {
+  // --- item types --------------------------------------------------------------
+
+  async function fetchItemType(id: string): Promise<ProjectItemType> {
+    const { rows } = await query<{ type: ProjectItemType }>(
+      `SELECT ${ITEM_TYPE_JSON} AS type FROM project_item_types t WHERE t.id = $1`,
+      [id],
+    );
+    if (!rows[0]) throw notFound('Type not found');
+    return rows[0].type;
+  }
+
+  /** The role ids given, checked to be this project's; every role when none are given. */
+  async function projectRoleIds(projectId: string, roleIds: string[] | undefined): Promise<string[]> {
+    const { rows } = await query<{ id: string }>('SELECT id FROM project_roles WHERE project_id = $1', [projectId]);
+    const all = rows.map((r) => r.id);
+    if (roleIds === undefined) return all;
+    const wanted = [...new Set(roleIds)];
+    if (wanted.some((id) => !all.includes(id))) throw badRequest('That role is not in this project');
+    return wanted;
+  }
+
+  app.post<{ Params: { id: string } }>('/projects/:id/item-types', async (req, reply) => {
     const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
-    const input = parse(setTypeWorkflowSchema, req.body ?? {});
-    if (input.workflowId) {
-      if ((await projectOfWorkflow(input.workflowId)) !== req.params.id) {
-        throw badRequest('That workflow is in another project');
-      }
-      await query(
-        `INSERT INTO project_type_workflows (project_id, type, workflow_id) VALUES ($1, $2, $3)
-         ON CONFLICT (project_id, type) DO UPDATE SET workflow_id = EXCLUDED.workflow_id`,
-        [req.params.id, input.type, input.workflowId],
+    const input = parse(createItemTypeSchema, req.body ?? {});
+    await assertItemTypeNameFree(req.params.id, input.name);
+    const roleIds = await projectRoleIds(req.params.id, input.roleIds);
+    const id = await transaction(async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO project_item_types (project_id, name, icon, color, epic, position)
+         VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(max(position), 0) + 1 FROM project_item_types WHERE project_id = $1))
+         RETURNING id`,
+        [req.params.id, input.name, input.icon ?? 'check2-square', input.color ?? '#0ea5e9', input.epic ?? false],
       );
-    } else {
-      await query('DELETE FROM project_type_workflows WHERE project_id = $1 AND type = $2', [req.params.id, input.type]);
-    }
+      await client.query(
+        'INSERT INTO project_item_type_roles (type_id, role_id) SELECT $1, unnest($2::uuid[])',
+        [rows[0].id, roleIds],
+      );
+      return rows[0].id;
+    });
     projectChanged(workspaceId, req.params.id);
-    return fetchProject(req.params.id, req.user!.id);
+    reply.status(201);
+    return fetchItemType(id);
+  });
+
+  /**
+   * Changes a type: how it looks, where it sits, the workflow its items follow,
+   * and which roles apply to them. A role taken away is taken off every item of
+   * the type that had someone in it, and each item's history says so.
+   */
+  app.patch<{ Params: { id: string } }>('/project-item-types/:id', async (req) => {
+    const type = await itemTypeRow(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, type.projectId, 'edit');
+    const input = parse(updateItemTypeSchema, req.body ?? {});
+    if (input.name) await assertItemTypeNameFree(type.projectId, input.name, req.params.id);
+    if (input.workflowId && (await projectOfWorkflow(input.workflowId)) !== type.projectId) {
+      throw badRequest('That workflow is in another project');
+    }
+    const roleIds = input.roleIds ? await projectRoleIds(type.projectId, input.roleIds) : null;
+
+    await transaction(async (client) => {
+      await client.query(
+        `UPDATE project_item_types
+            SET name = COALESCE($2, name), icon = COALESCE($3, icon), color = COALESCE($4, color),
+                position = COALESCE($5, position),
+                workflow_id = CASE WHEN $6::boolean THEN $7::uuid ELSE workflow_id END
+          WHERE id = $1`,
+        [
+          req.params.id,
+          input.name ?? null,
+          input.icon ?? null,
+          input.color ?? null,
+          input.position ?? null,
+          input.workflowId !== undefined,
+          input.workflowId ?? null,
+        ],
+      );
+      if (roleIds) {
+        await client.query('DELETE FROM project_item_type_roles WHERE type_id = $1', [req.params.id]);
+        await client.query('INSERT INTO project_item_type_roles (type_id, role_id) SELECT $1, unnest($2::uuid[])', [
+          req.params.id,
+          roleIds,
+        ]);
+        await pruneRoles(client, `i.type_id = $1`, [req.params.id], req.user!.id);
+      }
+    });
+    projectChanged(workspaceId, type.projectId);
+    return fetchItemType(req.params.id);
+  });
+
+  /**
+   * Deletes a type. Its items become another type, which must be given when
+   * there are any; becoming or ceasing to be epic-kind takes them out of
+   * sprints and epics, or lets go of what was under them, as changing one
+   * item's type would. A project keeps at least one type new work can start as.
+   */
+  app.delete<{ Params: { id: string }; Querystring: { moveTo?: string } }>('/project-item-types/:id', async (req, reply) => {
+    const type = await itemTypeRow(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, type.projectId, 'edit');
+    const input = parse(deleteItemTypeSchema, req.query ?? {});
+    const project = await fetchProject(type.projectId, req.user!.id);
+    const others = project.itemTypes.filter((t) => t.id !== type.id);
+    if (!type.epic && !others.some((t) => !t.epic)) {
+      throw badRequest('A project needs at least one type that is not an epic, for new work to start as');
+    }
+
+    const { rows } = await query<{ count: number }>('SELECT count(*)::int AS count FROM work_items WHERE type_id = $1', [
+      req.params.id,
+    ]);
+    const target = input.moveTo ? others.find((t) => t.id === input.moveTo) : null;
+    if (input.moveTo && !target) throw badRequest('Move its work to another type in this project');
+    if (rows[0].count > 0 && !target) throw badRequest(`Choose a type for the ${rows[0].count} work items that are ${type.name}`);
+
+    await transaction(async (client) => {
+      if (target && rows[0].count > 0) {
+        if (type.epic && !target.epic) {
+          await client.query(
+            `UPDATE work_items SET epic_id = NULL, updated_at = now()
+              WHERE epic_id IN (SELECT id FROM work_items WHERE type_id = $1)`,
+            [req.params.id],
+          );
+        }
+        await client.query(
+          `UPDATE work_items
+              SET type_id = $2,
+                  sprint_id = CASE WHEN $3 THEN NULL ELSE sprint_id END,
+                  epic_id = CASE WHEN $3 THEN NULL ELSE epic_id END,
+                  updated_at = now()
+            WHERE type_id = $1`,
+          [req.params.id, target.id, target.epic && !type.epic],
+        );
+        await pruneRoles(client, 'i.type_id = $1', [target.id], req.user!.id);
+      }
+      // The default moves on with the work, or to the first type that can be one.
+      const fallback = target && !target.epic ? target : others.find((t) => !t.epic)!;
+      await client.query('UPDATE projects SET default_type_id = $2 WHERE id = $1 AND default_type_id = $3', [
+        type.projectId,
+        fallback.id,
+        req.params.id,
+      ]);
+      await client.query('DELETE FROM project_item_types WHERE id = $1', [req.params.id]);
+    });
+    projectChanged(workspaceId, type.projectId);
+    reply.status(204);
   });
 
   // --- sprints -----------------------------------------------------------------
@@ -1008,7 +1298,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       if (input.includeBoard) {
         const { rows } = await client.query<{ id: string }>(
           `SELECT i.id FROM work_items i JOIN project_statuses st ON st.id = i.status_id
-            WHERE i.project_id = $1 AND i.sprint_id IS NULL AND st.category IN ('todo', 'active')
+            WHERE i.project_id = $1 AND i.sprint_id IS NULL AND NOT ${IS_EPIC} AND st.category IN ('todo', 'active')
             ORDER BY i.position, i.number`,
           [sprint.projectId],
         );
@@ -1109,9 +1399,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const project = await fetchProject(req.params.id, req.user!.id);
     if (project.archivedAt) throw badRequest('This project is archived. Restore it to add work to it.');
 
+    const type = itemTypeOf(project, input.typeId ?? project.defaultTypeId);
+    if (!type) throw badRequest('That type is not in this project');
     let status = input.statusId ? project.statuses.find((s) => s.id === input.statusId) : project.statuses[0];
     if (!status) throw badRequest('That status is not in this project');
+    if (type.epic && input.sprintId) throw badRequest(`${type.name} items are not planned in sprints; put the work under one in a sprint instead.`);
+    if (type.epic && input.epicId) throw badRequest(`${type.name} items cannot be put under an epic`);
     const sprint = input.sprintId ? await openSprintOf(req.params.id, input.sprintId) : null;
+    const epic = input.epicId ? await epicOf(req.params.id, input.epicId) : null;
     // New work in a running sprint starts on the board, where the sprint is worked.
     if (sprint?.state === 'active' && status.category === 'backlog') {
       const entry = project.statuses.find((s) => s.category === 'todo') ?? project.statuses.find((s) => s.category !== 'backlog');
@@ -1122,6 +1417,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const roles = [...roleIds].map((roleId) => {
       const role = project.roles.find((r) => r.id === roleId);
       if (!role) throw badRequest('That role is not in this project');
+      if (!type.roleIds.includes(role.id)) throw badRequest(`${role.name} is not a role on ${type.name} items`);
       const userIds = [...new Set(input.roles?.[roleId] ?? [])];
       const names = uniqueNames(input.roleNames?.[roleId]);
       assertRoleFits(role, userIds, names);
@@ -1135,9 +1431,9 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         [req.params.id],
       );
       const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO work_items (project_id, workspace_id, number, title, description, type, priority, status_id,
-                                 position, due_date, estimate, created_by, completed_at, sprint_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $13 THEN now() END, $14)
+        `INSERT INTO work_items (project_id, workspace_id, number, title, description, type_id, priority, status_id,
+                                 position, due_date, estimate, created_by, completed_at, sprint_id, epic_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $13 THEN now() END, $14, $15)
          RETURNING id`,
         [
           req.params.id,
@@ -1145,7 +1441,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           numbered[0].number,
           input.title,
           input.description,
-          input.type,
+          type.id,
           input.priority,
           status.id,
           await endOfStatus(client, status.id),
@@ -1154,6 +1450,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           req.user!.id,
           status.category === 'done',
           sprint?.id ?? null,
+          epic?.id ?? null,
         ],
       );
       const itemId = rows[0].id;
@@ -1185,8 +1482,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     if (!target) throw badRequest('That status is not in this project');
     const itemIds = [...new Set(input.itemIds)];
 
-    const { rows: moving } = await query<{ key: string; type: WorkItemType; status_id: string }>(
-      `SELECT p.key || '-' || i.number AS key, i.type, i.status_id
+    const { rows: moving } = await query<{ key: string; type_id: string; status_id: string }>(
+      `SELECT p.key || '-' || i.number AS key, i.type_id, i.status_id
          FROM work_items i JOIN projects p ON p.id = i.project_id
         WHERE i.id = ANY($1::uuid[]) AND i.project_id = $2`,
       [itemIds, req.params.id],
@@ -1194,7 +1491,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     assertMoveAllowed(
       project,
       role,
-      moving.map((item) => ({ key: item.key, type: item.type, from: item.status_id, to: target.id })),
+      moving.map((item) => ({ key: item.key, typeId: item.type_id, from: item.status_id, to: target.id })),
     );
 
     const moved = await transaction(async (client) => {
@@ -1245,38 +1542,56 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       key: string;
       title: string;
       description: string;
-      type: WorkItemType;
+      type_id: string;
       priority: WorkItem['priority'];
       status_id: string;
       status_name: string;
       status_category: StatusCategory;
       sprint_id: string | null;
+      epic_id: string | null;
+      epic_title: string | null;
     }>(
-      `SELECT p.key || '-' || i.number AS key, i.title, i.description, i.type, i.priority, i.status_id,
-              st.name AS status_name, st.category AS status_category, i.sprint_id
+      `SELECT p.key || '-' || i.number AS key, i.title, i.description, i.type_id, i.priority, i.status_id,
+              st.name AS status_name, st.category AS status_category, i.sprint_id, i.epic_id, e.title AS epic_title
          FROM work_items i
          JOIN projects p ON p.id = i.project_id
          JOIN project_statuses st ON st.id = i.status_id
+         LEFT JOIN work_items e ON e.id = i.epic_id
         WHERE i.id = $1`,
       [req.params.id],
     );
     const current = before[0];
+    const project = await fetchProject(projectId, req.user!.id);
+    const type = itemTypeOf(project, input.typeId ?? current.type_id);
+    if (!type) throw badRequest('That type is not in this project');
+    const changingType = type.id !== current.type_id;
 
     let target: { id: string; name: string; category: StatusCategory } | null = null;
     if (input.statusId && input.statusId !== current.status_id) {
-      const project = await fetchProject(projectId, req.user!.id);
       const status = project.statuses.find((s) => s.id === input.statusId);
       if (!status) throw badRequest('That status is not in this project');
       // The type it is being given, if it is being given one, is the type it moves as.
-      const type = input.type ?? current.type;
-      assertMoveAllowed(project, role, [{ key: current.key, type, from: current.status_id, to: status.id }]);
+      assertMoveAllowed(project, role, [{ key: current.key, typeId: type.id, from: current.status_id, to: status.id }]);
       target = status;
     }
 
+    // An epic sits above sprints and other epics: becoming one leaves both.
+    const wasEpic = isEpicType(project, current.type_id);
+    const becomingEpic = type.epic && !wasEpic;
+    const leavingEpic = wasEpic && !type.epic;
+    if (type.epic && input.sprintId) throw badRequest(`${type.name} items are not planned in sprints; put the work under one in a sprint instead.`);
+    if (type.epic && input.epicId) throw badRequest(`${type.name} items cannot be put under an epic`);
+    if (input.epicId === req.params.id) throw badRequest('A work item cannot be put under itself');
+    const changingEpic =
+      (input.epicId !== undefined && (input.epicId ?? null) !== current.epic_id) || (becomingEpic && current.epic_id !== null);
+    const epic = changingEpic && input.epicId ? await epicOf(projectId, input.epicId) : null;
+
     // Changing sprint is done after everything else, from wherever that left it.
-    const changingSprint = input.sprintId !== undefined && (input.sprintId ?? null) !== current.sprint_id;
+    const changingSprint =
+      (input.sprintId !== undefined && (input.sprintId ?? null) !== current.sprint_id) ||
+      (becomingEpic && current.sprint_id !== null);
     const sprint = changingSprint && input.sprintId ? await openSprintOf(projectId, input.sprintId) : null;
-    const sprintProject = changingSprint ? await fetchProject(projectId, req.user!.id) : null;
+    const sprintProject = changingSprint ? project : null;
 
     await transaction(async (client) => {
       // Moved into another status with nowhere in particular to go: the end of it.
@@ -1285,7 +1600,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         `UPDATE work_items
             SET title = COALESCE($2, title),
                 description = COALESCE($3, description),
-                type = COALESCE($4, type),
+                type_id = COALESCE($4, type_id),
                 priority = COALESCE($5, priority),
                 status_id = COALESCE($6, status_id),
                 position = COALESCE($7, position),
@@ -1302,7 +1617,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           req.params.id,
           input.title ?? null,
           input.description ?? null,
-          input.type ?? null,
+          changingType ? type.id : null,
           input.priority ?? null,
           target?.id ?? null,
           position,
@@ -1321,7 +1636,24 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       if (input.title && input.title !== current.title) {
         await logActivity(client, req.params.id, actor, { kind: 'title', from: current.title, to: input.title });
       }
+      // Roles its new type does not offer are taken off it.
+      if (changingType) await pruneRoles(client, 'i.id = $1', [req.params.id], actor);
+      if (changingEpic) {
+        await client.query('UPDATE work_items SET epic_id = $2 WHERE id = $1', [req.params.id, epic?.id ?? null]);
+        await logActivity(client, req.params.id, actor, { kind: 'epic', from: current.epic_title, to: epic?.title ?? null });
+      }
+      // No longer an epic: what was under it is under nothing now, and each says so.
+      if (leavingEpic) {
+        const { rows: freed } = await client.query<{ id: string }>(
+          'UPDATE work_items SET epic_id = NULL, updated_at = now() WHERE epic_id = $1 RETURNING id',
+          [req.params.id],
+        );
+        for (const child of freed) {
+          await logActivity(client, child.id, actor, { kind: 'epic', from: input.title ?? current.title, to: null });
+        }
+      }
       if (sprintProject) {
+        // The type was written above, so an item becoming an epic leaves its sprint as one.
         const items = await placingItems(client, projectId, [req.params.id]);
         await placeInSprint(client, sprintProject, role, items, sprint, actor);
       }
@@ -1334,19 +1666,137 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       await tell(req, req.params.id, textMembers([input.description]).filter((id) => !already.has(id)), 'mention');
     }
     projectChanged(workspaceId, projectId, req.params.id);
+    // Its status and title are shown on every item linked to it.
+    if (target || (input.title && input.title !== current.title)) await linkedChanged(req.params.id, workspaceId);
     return fetchItem(req.params.id, workspaceId, req.user!.id);
+  });
+
+  // --- links -------------------------------------------------------------------
+
+  /** The items this one is linked to, those the reader may see, grouped the way the panel lists them. */
+  app.get<{ Params: { id: string } }>('/work-items/:id/links', async (req): Promise<WorkItemLink[]> => {
+    const { workspaceId } = await assertWorkItemAccess(req, req.params.id);
+    const role = roleSql('$2', '$3');
+    const { rows } = await query<WorkItemLink>(
+      `SELECT l.id, l.type,
+              CASE WHEN l.source_id = $1 THEN 'outward' ELSE 'inward' END AS direction,
+              json_build_object('id', i.id, 'projectId', i.project_id, 'key', p.key || '-' || i.number,
+                                'title', i.title, 'itemType', ${ITEM_TYPE_LOOK},
+                                'status', json_build_object('name', st.name, 'color', st.color, 'category', st.category)) AS item,
+              l.created_at AS "createdAt"
+         FROM work_item_links l
+         JOIN work_items i ON i.id = CASE WHEN l.source_id = $1 THEN l.target_id ELSE l.source_id END
+         JOIN projects p ON p.id = i.project_id
+         JOIN project_statuses st ON st.id = i.status_id
+        WHERE (l.source_id = $1 OR l.target_id = $1) AND p.workspace_id = $3 AND ${projectLevelSql('$2', role)} > 0
+        ORDER BY l.created_at`,
+      [req.params.id, req.user!.id, workspaceId],
+    );
+    return rows;
+  });
+
+  /**
+   * Links this item to another. Changing this item takes edit; the other only
+   * has to be one the reader can see, in the same workspace, since the link is
+   * as much a note on this item as a change to that one.
+   */
+  app.post<{ Params: { id: string } }>('/work-items/:id/links', async (req, reply) => {
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const input = parse(createWorkItemLinkSchema, req.body ?? {});
+    const type: WorkItemLinkType = input.type;
+    if (input.targetId === req.params.id) throw badRequest('A work item cannot be linked to itself');
+    const other = await workItemAccess(req.user!.id, input.targetId);
+    if (!other || other.workspaceId !== workspaceId) throw badRequest('That work item is not in this workspace');
+
+    // Stored pointing the way it reads outward; related-to either way, so from the lesser id.
+    let direction: WorkItemLinkDirection = input.direction ?? 'outward';
+    if (isSymmetricLink(type)) direction = req.params.id < input.targetId ? 'outward' : 'inward';
+    const [source, target] = direction === 'outward' ? [req.params.id, input.targetId] : [input.targetId, req.params.id];
+
+    const { rows: items } = await query<{ id: string; key: string; title: string }>(
+      `SELECT i.id, p.key || '-' || i.number AS key, i.title
+         FROM work_items i JOIN projects p ON p.id = i.project_id WHERE i.id = ANY($1::uuid[])`,
+      [[req.params.id, input.targetId]],
+    );
+    const self = items.find((i) => i.id === req.params.id)!;
+    const that = items.find((i) => i.id === input.targetId)!;
+
+    const { rows: existing } = await query<{ type: WorkItemLinkType; source_id: string }>(
+      `SELECT type, source_id FROM work_item_links
+        WHERE LEAST(source_id, target_id) = LEAST($1::uuid, $2::uuid)
+          AND GREATEST(source_id, target_id) = GREATEST($1::uuid, $2::uuid) AND type = $3`,
+      [source, target, type],
+    );
+    if (existing[0]) {
+      const reads = WORK_ITEM_LINK_LABELS[type][existing[0].source_id === req.params.id ? 'outward' : 'inward'];
+      throw conflict(`${self.key} already ${reads} ${that.key}`);
+    }
+
+    const id = await transaction(async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        'INSERT INTO work_item_links (source_id, target_id, type, created_by) VALUES ($1, $2, $3, $4) RETURNING id',
+        [source, target, type, req.user!.id],
+      );
+      await logLinkBothWays(client, { id: source, target }, type, items, req.user!.id, true);
+      await client.query('UPDATE work_items SET updated_at = now() WHERE id = ANY($1::uuid[])', [[source, target]]);
+      return rows[0].id;
+    });
+
+    projectChanged(workspaceId, projectId, req.params.id);
+    projectChanged(workspaceId, other.projectId, input.targetId);
+    reply.status(201);
+    return { id };
+  });
+
+  app.delete<{ Params: { id: string } }>('/work-item-links/:id', async (req, reply) => {
+    if (!UUID.test(req.params.id)) throw notFound('Link not found');
+    const { rows } = await query<{ source_id: string; target_id: string; type: WorkItemLinkType }>(
+      'SELECT source_id, target_id, type FROM work_item_links WHERE id = $1',
+      [req.params.id],
+    );
+    const link = rows[0];
+    if (!link) throw notFound('Link not found');
+    // Either end's editors may take a link off; the other end only has to be visible.
+    const [a, b] = await Promise.all([
+      workItemAccess(req.user!.id, link.source_id),
+      workItemAccess(req.user!.id, link.target_id),
+    ]);
+    if (!a || !b) throw notFound('Link not found');
+    if (a.level < 2 && b.level < 2) throw forbidden('You can view these work items but not change them');
+
+    const { rows: items } = await query<{ id: string; key: string; title: string }>(
+      `SELECT i.id, p.key || '-' || i.number AS key, i.title
+         FROM work_items i JOIN projects p ON p.id = i.project_id WHERE i.id = ANY($1::uuid[])`,
+      [[link.source_id, link.target_id]],
+    );
+    await transaction(async (client) => {
+      await client.query('DELETE FROM work_item_links WHERE id = $1', [req.params.id]);
+      await logLinkBothWays(client, { id: link.source_id, target: link.target_id }, link.type, items, req.user!.id, false);
+      await client.query('UPDATE work_items SET updated_at = now() WHERE id = ANY($1::uuid[])', [
+        [link.source_id, link.target_id],
+      ]);
+    });
+    projectChanged(a.workspaceId, a.projectId, link.source_id);
+    projectChanged(b.workspaceId, b.projectId, link.target_id);
+    reply.status(204);
   });
 
   app.put<{ Params: { id: string; roleId: string } }>('/work-items/:id/roles/:roleId', async (req) => {
     const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
     const input = parse(setWorkItemRoleSchema, req.body ?? {});
     if (!UUID.test(req.params.roleId)) throw notFound('Role not found');
-    const { rows: roles } = await query<{ name: string; multiple: boolean; freeForm: boolean }>(
-      'SELECT name, multiple, free_form AS "freeForm" FROM project_roles WHERE id = $1 AND project_id = $2',
-      [req.params.roleId, projectId],
+    const { rows: roles } = await query<{ name: string; multiple: boolean; freeForm: boolean; applies: boolean }>(
+      `SELECT r.name, r.multiple, r.free_form AS "freeForm",
+              EXISTS (SELECT 1 FROM project_item_type_roles tr JOIN work_items i ON i.type_id = tr.type_id
+                       WHERE i.id = $3 AND tr.role_id = r.id) AS applies
+         FROM project_roles r WHERE r.id = $1 AND r.project_id = $2`,
+      [req.params.roleId, projectId, req.params.id],
     );
     const role = roles[0];
     if (!role) throw notFound('Role not found');
+    if (!role.applies && (input.userIds.length > 0 || (input.names ?? []).length > 0)) {
+      throw badRequest(`${role.name} is not a role on this type of work item`);
+    }
     const userIds = [...new Set(input.userIds)];
     const names = uniqueNames(input.names);
     assertRoleFits(role, userIds, names);
@@ -1572,6 +2022,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                 json_build_object('id', p.id, 'key', p.key, 'name', p.name, 'icon', p.icon, 'kind', p.kind) AS project,
                 json_build_object('id', st.id, 'name', st.name, 'category', st.category, 'color', st.color,
                                   'position', st.position) AS status,
+                ${ITEM_TYPE_LOOK} AS "itemType",
                 COALESCE((SELECT json_agg(r.name ORDER BY r.position)
                             FROM project_roles r
                            WHERE EXISTS (SELECT 1 FROM work_item_roles wr

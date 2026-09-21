@@ -20,6 +20,11 @@
  * with it on, the board shows only the running sprint's work, and the backlog
  * becomes where the sprints after it are planned. See `ProjectSprint`.
  *
+ * An epic is a larger objective a project's other work is organised under,
+ * each item in at most one. Nobody works on an epic itself, so it never goes
+ * in a sprint and is kept off the board; it is followed in a view of its own,
+ * where how far along it is comes from the work under it.
+ *
  * Work items are referenced from elsewhere by id, the way documents and
  * spreadsheets are: `<item:uuid>` in chat, in canvas text and in other work
  * items, and an inline `workItem` node in a document. What a reference shows —
@@ -46,8 +51,87 @@ export const STATUS_CATEGORY_LABELS: Record<StatusCategory, string> = {
   done: 'Done',
 };
 
-export type WorkItemType = 'task' | 'bug' | 'story' | 'epic' | 'request';
-export const WORK_ITEM_TYPES: WorkItemType[] = ['task', 'bug', 'story', 'epic', 'request'];
+/**
+ * A kind of work item a project has set up: Task, Bug, Story, or whatever the
+ * project adds. Every project starts with the five in `STANDARD_ITEM_TYPES` and
+ * may rename, recolour or delete them, and add its own.
+ *
+ * What the app itself understands about a type is `epic`: an epic-kind type
+ * holds other work rather than being worked on, so its items are kept off the
+ * board and out of sprints and followed in the Epics view. Which of the
+ * project's roles apply to its items, and which workflow they follow, are the
+ * project's to choose per type.
+ */
+export interface ProjectItemType {
+  id: string;
+  name: string;
+  /** A Bootstrap Icons name, one of `ITEM_TYPE_ICONS`. */
+  icon: string;
+  /** #rrggbb. */
+  color: string;
+  /** Whether its items hold other work, as epics do. Fixed once the type is made. */
+  epic: boolean;
+  /** The workflow its items follow. Null: they move freely. */
+  workflowId: string | null;
+  /** The roles offered on its items, in no particular order. */
+  roleIds: string[];
+  position: number;
+}
+
+/** What an item's type looks like, for showing it outside its project. */
+export type ItemTypeLook = Pick<ProjectItemType, 'name' | 'icon' | 'color' | 'epic'>;
+
+/** What a project starts with. Request is the default in a queue, Task elsewhere. */
+export const STANDARD_ITEM_TYPES: (ItemTypeLook & { key: 'task' | 'bug' | 'story' | 'epic' | 'request' })[] = [
+  { key: 'task', name: 'Task', icon: 'check2-square', color: '#0ea5e9', epic: false },
+  { key: 'bug', name: 'Bug', icon: 'bug', color: '#ef4444', epic: false },
+  { key: 'story', name: 'Story', icon: 'bookmark', color: '#10b981', epic: false },
+  { key: 'epic', name: 'Epic', icon: 'lightning-charge', color: '#8b5cf6', epic: true },
+  { key: 'request', name: 'Request', icon: 'chat-square-text', color: '#f59e0b', epic: false },
+];
+
+/** The icons a type can be given. */
+export const ITEM_TYPE_ICONS = [
+  'check2-square',
+  'bug',
+  'bookmark',
+  'lightning-charge',
+  'chat-square-text',
+  'flag',
+  'bullseye',
+  'rocket-takeoff',
+  'lightbulb',
+  'gear',
+  'wrench',
+  'shield-check',
+  'palette',
+  'file-earmark-text',
+  'question-circle',
+  'exclamation-triangle',
+  'star',
+  'heart',
+  'people',
+  'box-seam',
+  'diagram-3',
+  'layers',
+  'puzzle',
+  'megaphone',
+] as const;
+
+/** Colours offered for a type: the same as for a status. */
+export const ITEM_TYPE_COLORS = [
+  '#8f8f9c',
+  '#6366f1',
+  '#0ea5e9',
+  '#10b981',
+  '#f59e0b',
+  '#ef4444',
+  '#ec4899',
+  '#8b5cf6',
+];
+
+/** Shown for a type that cannot be found, such as one deleted a moment ago. */
+export const UNKNOWN_ITEM_TYPE: ItemTypeLook = { name: 'Work item', icon: 'square', color: '#8f8f9c', epic: false };
 
 export type WorkItemPriority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 /** Highest first, the order a list sorted by priority reads in. */
@@ -185,14 +269,16 @@ export interface Project extends ProjectSummary {
   roles: ProjectRole[];
   /** What routes through the board the project offers. Empty until one is made. */
   workflows: ProjectWorkflow[];
-  /** The workflow each item type follows, by workflow id. A type left out moves freely. */
-  typeWorkflows: Partial<Record<WorkItemType, string>>;
+  /** The kinds of work it holds, in the order they are offered. At least one is not epic-kind. */
+  itemTypes: ProjectItemType[];
   /** How the board's columns are arranged. Empty lanes: one per status, in order. */
   boardLayout: BoardLayout;
   /** Whether the board is run in sprints. Always false for a queue. */
   sprintsEnabled: boolean;
   /** Running first, then planned in the order they were made, then completed, newest first. */
   sprints: ProjectSprint[];
+  /** The type a new work item is unless someone picks otherwise. Never an epic-kind one. */
+  defaultTypeId: string;
   /** Deleting is for owners, admins, and whoever made the project. */
   canDelete: boolean;
 }
@@ -204,13 +290,16 @@ export interface WorkItemSummary {
   /** `ENG-12`. Follows the project's key if that changes. */
   key: string;
   title: string;
-  type: WorkItemType;
+  /** One of its project's `itemTypes`. */
+  typeId: string;
   priority: WorkItemPriority;
   statusId: string;
   /** Order within its status, fractional like a status's. */
   position: number;
-  /** The sprint it is in, if the project runs in sprints and it has been put in one. */
+  /** The sprint it is in, if the project runs in sprints and it has been put in one. Never set on an epic. */
   sprintId: string | null;
+  /** The epic it is organised under, if any. Never set on an epic. */
+  epicId: string | null;
   /** YYYY-MM-DD. */
   dueDate: string | null;
   /** In whatever unit the team estimates in: points, hours, days. */
@@ -223,6 +312,8 @@ export interface WorkItemSummary {
    */
   roleNames: Record<string, string[]>;
   commentCount: number;
+  /** How many items that block it are not done yet. */
+  blockedBy: number;
   createdAt: string;
   updatedAt: string;
   /** When it last moved into a done status. Null while it is open. */
@@ -242,6 +333,7 @@ export interface WorkItem extends WorkItemSummary {
 export interface WorkItemListing extends WorkItemSummary {
   project: Pick<ProjectSummary, 'id' | 'key' | 'name' | 'icon' | 'kind'>;
   status: ProjectStatus;
+  itemType: ItemTypeLook;
   /** The roles the signed-in person holds on it, by name. */
   myRoles: string[];
 }
@@ -262,7 +354,11 @@ export type WorkItemActivityData =
   | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority }
   | { kind: 'title'; from: string; to: string }
   /** Sprint names as they were at the time; null is the backlog. */
-  | { kind: 'sprint'; from: string | null; to: string | null };
+  | { kind: 'sprint'; from: string | null; to: string | null }
+  /** Epic titles as they were at the time; null is no epic. */
+  | { kind: 'epic'; from: string | null; to: string | null }
+  /** A link made or removed, read from this item: "blocks ENG-4". Key and title as they were at the time. */
+  | { kind: 'link'; label: string; key: string; title: string; added: boolean };
 
 export type WorkItemActivity = {
   id: string;
@@ -275,6 +371,59 @@ export interface WorkItemTimeline {
   activity: WorkItemActivity[];
   /** What the comments point at, and the people named in the history. */
   references: MessageReferences;
+}
+
+// --- links -------------------------------------------------------------------
+
+/**
+ * How two work items are linked. Each reads one way from the item it starts
+ * at and the other way from the item it points to: A blocks B, so B is blocked
+ * by A. Related-to reads the same both ways.
+ */
+export type WorkItemLinkType = 'blocks' | 'relates' | 'duplicates' | 'causes' | 'clones';
+export const WORK_ITEM_LINK_TYPES: WorkItemLinkType[] = ['blocks', 'relates', 'duplicates', 'causes', 'clones'];
+
+/** Which end of a link an item is at: where it starts, or where it points. */
+export type WorkItemLinkDirection = 'outward' | 'inward';
+
+export const WORK_ITEM_LINK_LABELS: Record<WorkItemLinkType, Record<WorkItemLinkDirection, string>> = {
+  blocks: { outward: 'blocks', inward: 'is blocked by' },
+  relates: { outward: 'relates to', inward: 'relates to' },
+  duplicates: { outward: 'duplicates', inward: 'is duplicated by' },
+  causes: { outward: 'causes', inward: 'is caused by' },
+  clones: { outward: 'clones', inward: 'is cloned by' },
+};
+
+/** Whether a link type reads the same from both ends. */
+export function isSymmetricLink(type: WorkItemLinkType): boolean {
+  return type === 'relates';
+}
+
+/** Every way a link can be read, in the order a picker offers them. */
+export const WORK_ITEM_LINK_OPTIONS: { type: WorkItemLinkType; direction: WorkItemLinkDirection; label: string }[] =
+  WORK_ITEM_LINK_TYPES.flatMap((type) =>
+    (isSymmetricLink(type) ? (['outward'] as const) : (['outward', 'inward'] as const)).map((direction) => ({
+      type,
+      direction,
+      label: WORK_ITEM_LINK_LABELS[type][direction],
+    })),
+  );
+
+/** A link as one of its items sees it. */
+export interface WorkItemLink {
+  id: string;
+  type: WorkItemLinkType;
+  /** Outward: this item is the one that blocks, duplicates, causes. */
+  direction: WorkItemLinkDirection;
+  item: {
+    id: string;
+    projectId: string;
+    key: string;
+    title: string;
+    itemType: ItemTypeLook;
+    status: Pick<ProjectStatus, 'name' | 'color' | 'category'>;
+  };
+  createdAt: string;
 }
 
 /** Where a work item is mentioned, for those the reader may see. */
@@ -304,10 +453,10 @@ export interface WorkItemNotification {
 
 /** The workflow an item of this type follows here, or null when none is set. */
 export function workflowForType(
-  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
-  type: WorkItemType,
+  project: Pick<Project, 'workflows' | 'itemTypes'>,
+  typeId: string,
 ): ProjectWorkflow | null {
-  const id = project.typeWorkflows[type];
+  const id = project.itemTypes.find((t) => t.id === typeId)?.workflowId;
   return (id && project.workflows.find((w) => w.id === id)) || null;
 }
 
@@ -318,11 +467,11 @@ export function workflowForType(
  * dead end, no workflow is anywhere.
  */
 export function allowedMoves(
-  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
-  type: WorkItemType,
+  project: Pick<Project, 'workflows' | 'itemTypes'>,
+  typeId: string,
   fromStatusId: string,
 ): string[] | null {
-  const workflow = workflowForType(project, type);
+  const workflow = workflowForType(project, typeId);
   return workflow ? (workflow.transitions[fromStatusId] ?? []) : null;
 }
 
@@ -331,13 +480,13 @@ export function allowedMoves(
  * always allowed: reordering within a status is not a move.
  */
 export function canMoveTo(
-  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
-  type: WorkItemType,
+  project: Pick<Project, 'workflows' | 'itemTypes'>,
+  typeId: string,
   fromStatusId: string,
   toStatusId: string,
 ): boolean {
   if (fromStatusId === toStatusId) return true;
-  const allowed = allowedMoves(project, type, fromStatusId);
+  const allowed = allowedMoves(project, typeId, fromStatusId);
   return allowed === null || allowed.includes(toStatusId);
 }
 
@@ -445,11 +594,11 @@ export function layoutOf(lanes: BoardLaneView[]): BoardLayout {
  * whichever it is dropped in. Empty means the column cannot take the card.
  */
 export function cellTargets(
-  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  project: Pick<Project, 'workflows' | 'itemTypes'>,
   cell: Pick<BoardCellView, 'statuses'>,
-  item: Pick<WorkItemSummary, 'type' | 'statusId'>,
+  item: Pick<WorkItemSummary, 'typeId' | 'statusId'>,
 ): ProjectStatus[] {
-  return cell.statuses.filter((status) => canMoveTo(project, item.type, item.statusId, status.id));
+  return cell.statuses.filter((status) => canMoveTo(project, item.typeId, item.statusId, status.id));
 }
 
 /**
@@ -459,9 +608,9 @@ export function cellTargets(
  * the drop say which, since the first is only a guess when there are several.
  */
 export function cellTarget(
-  project: Pick<Project, 'workflows' | 'typeWorkflows'>,
+  project: Pick<Project, 'workflows' | 'itemTypes'>,
   cell: Pick<BoardCellView, 'statuses'>,
-  item: Pick<WorkItemSummary, 'type' | 'statusId'>,
+  item: Pick<WorkItemSummary, 'typeId' | 'statusId'>,
 ): string | null {
   const offered = cellTargets(project, cell, item);
   // Staying put beats moving when the card is already here.
@@ -488,15 +637,75 @@ export function usesSprints(project: Pick<Project, 'kind' | 'sprintsEnabled'>): 
  * An item already on the board stays where it is, which is also null.
  */
 export function sprintEntryStatus(
-  project: Pick<Project, 'statuses' | 'workflows' | 'typeWorkflows'>,
-  item: Pick<WorkItemSummary, 'type' | 'statusId'>,
+  project: Pick<Project, 'statuses' | 'workflows' | 'itemTypes'>,
+  item: Pick<WorkItemSummary, 'typeId' | 'statusId'>,
 ): ProjectStatus | null {
   const current = project.statuses.find((s) => s.id === item.statusId);
   if (!current || current.category !== 'backlog') return null;
   const open = project.statuses.filter(
-    (s) => s.category !== 'backlog' && canMoveTo(project, item.type, item.statusId, s.id),
+    (s) => s.category !== 'backlog' && canMoveTo(project, item.typeId, item.statusId, s.id),
   );
   return open.find((s) => s.category === 'todo') ?? open[0] ?? null;
+}
+
+// --- item types ----------------------------------------------------------------
+
+/** One of the project's types by id, or null when it has none by that id. */
+export function itemTypeOf(project: Pick<Project, 'itemTypes'>, typeId: string): ProjectItemType | null {
+  return project.itemTypes.find((t) => t.id === typeId) ?? null;
+}
+
+/** Whether items of this type hold other work, as epics do. */
+export function isEpicType(project: Pick<Project, 'itemTypes'>, typeId: string): boolean {
+  return itemTypeOf(project, typeId)?.epic ?? false;
+}
+
+/**
+ * Whether an item of this type can be put under an epic. Anything but an
+ * epic-kind type can: epics do not nest.
+ */
+export function canHaveEpic(project: Pick<Project, 'itemTypes'>, typeId: string): boolean {
+  return !isEpicType(project, typeId);
+}
+
+/** The roles offered on items of this type, in the project's order. */
+export function rolesForType(project: Pick<Project, 'roles' | 'itemTypes'>, typeId: string): ProjectRole[] {
+  const ids = new Set(itemTypeOf(project, typeId)?.roleIds ?? []);
+  return project.roles.filter((role) => ids.has(role.id));
+}
+
+/** The types a project's work can start as by default: every one but the epic-kind. */
+export function defaultableTypes(project: Pick<Project, 'itemTypes'>): ProjectItemType[] {
+  return project.itemTypes.filter((t) => !t.epic);
+}
+
+// --- epics -------------------------------------------------------------------
+
+/** How far along an epic is, from the work under it. */
+export interface EpicProgress {
+  total: number;
+  done: number;
+  /** Estimates summed, for the work that has one. */
+  estimate: number;
+  doneEstimate: number;
+}
+
+export function epicProgress(
+  project: Pick<Project, 'statuses'>,
+  children: Pick<WorkItemSummary, 'statusId' | 'estimate'>[],
+): EpicProgress {
+  const doneIds = new Set(project.statuses.filter((s) => s.category === 'done').map((s) => s.id));
+  const progress: EpicProgress = { total: 0, done: 0, estimate: 0, doneEstimate: 0 };
+  for (const child of children) {
+    const finished = doneIds.has(child.statusId);
+    progress.total += 1;
+    progress.estimate += child.estimate ?? 0;
+    if (finished) {
+      progress.done += 1;
+      progress.doneEstimate += child.estimate ?? 0;
+    }
+  }
+  return progress;
 }
 
 /** Whole days from today to a YYYY-MM-DD date: negative once it has passed. */
@@ -596,7 +805,6 @@ export function suggestProjectKey(name: string): string {
 }
 
 export const statusCategorySchema = z.enum(['backlog', 'todo', 'active', 'done']);
-export const workItemTypeSchema = z.enum(['task', 'bug', 'story', 'epic', 'request']);
 export const workItemPrioritySchema = z.enum(['none', 'low', 'medium', 'high', 'urgent']);
 
 export const createProjectSchema = z.object({
@@ -643,6 +851,7 @@ export const updateProjectSchema = z.object({
   archived: z.boolean().optional(),
   boardLayout: boardLayoutSchema.optional(),
   sprintsEnabled: z.boolean().optional(),
+  defaultTypeId: uuid.optional(),
 });
 
 export const createStatusSchema = z.object({
@@ -693,10 +902,35 @@ export const updateWorkflowSchema = z.object({
   transitions: z.record(uuid, z.array(uuid).max(MAX_TRANSITIONS)).optional(),
 });
 
-/** Points one item type at a workflow, or at none with a null. */
-export const setTypeWorkflowSchema = z.object({
-  type: workItemTypeSchema,
-  workflowId: uuid.nullable(),
+const itemTypeIconSchema = z.enum(ITEM_TYPE_ICONS);
+
+export const createItemTypeSchema = z.object({
+  name: z.string().trim().min(1, 'Name the type').max(40),
+  icon: itemTypeIconSchema.default('check2-square'),
+  color: hexColor.default('#0ea5e9'),
+  /** Whether its items hold other work, as epics do. Cannot be changed later. */
+  epic: z.boolean().default(false),
+  /** The roles that apply to its items. Every role when left out. */
+  roleIds: z.array(uuid).max(100).optional(),
+});
+
+export const updateItemTypeSchema = z.object({
+  name: z.string().trim().min(1, 'Name the type').max(40).optional(),
+  icon: itemTypeIconSchema.optional(),
+  color: hexColor.optional(),
+  position: z.number().finite().optional(),
+  /** The workflow its items follow, or null for none. */
+  workflowId: uuid.nullish(),
+  /**
+   * Replaces the roles that apply to its items. A role taken away is taken off
+   * every item of the type that had someone in it.
+   */
+  roleIds: z.array(uuid).max(100).optional(),
+});
+
+export const deleteItemTypeSchema = z.object({
+  /** The type its items become. Required when it has any. */
+  moveTo: uuid.optional(),
 });
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD');
@@ -752,7 +986,8 @@ const estimateSchema = z.number().finite().min(0).max(100_000);
 export const createWorkItemSchema = z.object({
   title: z.string().trim().min(1, 'Give it a title').max(300),
   description: z.string().max(20_000).default(''),
-  type: workItemTypeSchema.default('task'),
+  /** The project's default type when left out. */
+  typeId: uuid.optional(),
   priority: workItemPrioritySchema.default('none'),
   /** The project's first status when left out. */
   statusId: uuid.optional(),
@@ -762,14 +997,17 @@ export const createWorkItemSchema = z.object({
   roles: z.record(uuid, z.array(uuid).max(MAX_ROLE_HOLDERS)).optional(),
   /** Names typed into free-form roles from the start, keyed by role id. */
   roleNames: z.record(uuid, roleNamesSchema).optional(),
-  /** The sprint it starts in. A running sprint takes it onto the board. */
+  /** The sprint it starts in. A running sprint takes it onto the board. Not for an epic. */
   sprintId: uuid.nullish(),
+  /** The epic it starts under. Not for an epic. */
+  epicId: uuid.nullish(),
 });
 
 export const updateWorkItemSchema = z.object({
   title: z.string().trim().min(1, 'Give it a title').max(300).optional(),
   description: z.string().max(20_000).optional(),
-  type: workItemTypeSchema.optional(),
+  /** Roles that do not apply to the new type are taken off it. */
+  typeId: uuid.optional(),
   priority: workItemPrioritySchema.optional(),
   statusId: uuid.optional(),
   /** Pass null to clear. */
@@ -778,6 +1016,8 @@ export const updateWorkItemSchema = z.object({
   position: z.number().finite().optional(),
   /** Pass null to send it back to the backlog. */
   sprintId: uuid.nullish(),
+  /** Pass null to take it out of its epic. */
+  epicId: uuid.nullish(),
 });
 
 /** Moving many items at once, such as from the backlog onto the board. */
@@ -797,6 +1037,13 @@ export const workItemCommentSchema = z.object({
   body: z.string().trim().min(1, 'Write something first').max(10_000),
 });
 
+export const createWorkItemLinkSchema = z.object({
+  type: z.enum(['blocks', 'relates', 'duplicates', 'causes', 'clones']),
+  /** Outward: the item linked from blocks the target. Inward: the target blocks it. */
+  direction: z.enum(['outward', 'inward']).default('outward'),
+  targetId: uuid,
+});
+
 export const resolveWorkItemsSchema = z.object({
   ids: z.array(uuid).max(300),
 });
@@ -807,3 +1054,6 @@ export type CreateSprintInput = z.input<typeof createSprintSchema>;
 export type UpdateSprintInput = z.infer<typeof updateSprintSchema>;
 export type CreateWorkItemInput = z.input<typeof createWorkItemSchema>;
 export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;
+export type CreateWorkItemLinkInput = z.input<typeof createWorkItemLinkSchema>;
+export type CreateItemTypeInput = z.input<typeof createItemTypeSchema>;
+export type UpdateItemTypeInput = z.infer<typeof updateItemTypeSchema>;

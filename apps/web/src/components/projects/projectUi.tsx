@@ -1,11 +1,15 @@
 import { useMemo, useState } from 'react';
-import type {
-  ProjectKind,
-  ProjectStatus,
-  StatusCategory,
-  WorkItemPriority,
-  WorkItemType,
-  WorkspaceMember,
+import {
+  UNKNOWN_ITEM_TYPE,
+  epicProgress,
+  type ItemTypeLook,
+  type Project,
+  type ProjectKind,
+  type ProjectStatus,
+  type StatusCategory,
+  type WorkItemPriority,
+  type WorkItemSummary,
+  type WorkspaceMember,
 } from '@paradocs/shared';
 import { cx, todayISO, toISODate } from '../../lib/util';
 import Avatar from '../Avatar';
@@ -25,13 +29,6 @@ export const PRIORITY: Record<WorkItemPriority, { label: string; icon: IconName;
   none: { label: 'No priority', icon: 'dash', className: 'text-[var(--color-muted)]' },
 };
 
-export const ITEM_TYPE: Record<WorkItemType, { label: string; icon: IconName; className: string }> = {
-  task: { label: 'Task', icon: 'check2-square', className: 'text-sky-500' },
-  bug: { label: 'Bug', icon: 'bug', className: 'text-red-500' },
-  story: { label: 'Story', icon: 'bookmark', className: 'text-emerald-500' },
-  epic: { label: 'Epic', icon: 'lightning-charge', className: 'text-violet-500' },
-  request: { label: 'Request', icon: 'chat-square-text', className: 'text-amber-500' },
-};
 
 export const PROJECT_KIND: Record<ProjectKind, { label: string; icon: IconName }> = {
   project: { label: 'Project', icon: 'kanban' },
@@ -60,11 +57,68 @@ export function PriorityIcon({ priority, className }: { priority: WorkItemPriori
   );
 }
 
-export function TypeIcon({ type, className }: { type: WorkItemType; className?: string }) {
-  const { icon, label, className: tone } = ITEM_TYPE[type];
+/**
+ * A work item type's icon in its colour. Takes the type itself, which callers
+ * look up in the item's project (`itemTypeOf`) or get alongside it in a listing.
+ */
+export function TypeIcon({ type, className }: { type: ItemTypeLook | null | undefined; className?: string }) {
+  const { icon, name, color } = type ?? UNKNOWN_ITEM_TYPE;
   return (
-    <span title={label} className={cx('inline-flex', tone, className)}>
-      <Icon name={icon} />
+    <span title={name} className={cx('inline-flex', className)} style={{ color }}>
+      <Icon name={icon as IconName} />
+    </span>
+  );
+}
+
+/**
+ * How far along an epic is: a bar filled by the share of its work that is
+ * done, with the count beside it and the estimates too when any are set.
+ */
+export function EpicProgressBar({
+  project,
+  items,
+  className,
+}: {
+  project: Pick<Project, 'statuses'>;
+  items: Pick<WorkItemSummary, 'statusId' | 'estimate'>[];
+  className?: string;
+}) {
+  const progress = epicProgress(project, items);
+  const share = progress.total === 0 ? 0 : progress.done / progress.total;
+  const percent = Math.round(share * 100);
+  return (
+    <div className={cx('flex items-center gap-2 text-xs text-[var(--color-muted)]', className)}>
+      <div
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-label="Done"
+        className="h-1.5 min-w-16 flex-1 overflow-hidden rounded-full bg-[var(--color-line)]"
+      >
+        <div className="h-full rounded-full bg-emerald-500 transition-[width]" style={{ width: `${percent}%` }} />
+      </div>
+      <span className="shrink-0 tabular-nums">
+        {progress.done}/{progress.total} done
+        {progress.estimate > 0 && ` · ${progress.doneEstimate}/${progress.estimate} est.`}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Says an item is waiting on others: shown while work that blocks it is still
+ * open, and never on work that is itself done.
+ */
+export function BlockedBadge({ count, className }: { count: number; className?: string }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      title={`Blocked by ${count} open ${count === 1 ? 'item' : 'items'}`}
+      className={cx('inline-flex items-center gap-0.5 text-red-500', className)}
+    >
+      <Icon name="slash-circle" className="text-[10px]" />
+      {count > 1 && <span className="tabular-nums">{count}</span>}
     </span>
   );
 }

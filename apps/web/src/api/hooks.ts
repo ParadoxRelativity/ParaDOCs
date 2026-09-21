@@ -35,7 +35,12 @@ import type {
   WorkspaceMember,
   CreateProjectInput,
   CreateSprintInput,
+  CreateItemTypeInput,
+  ProjectItemType,
+  UpdateItemTypeInput,
   CreateWorkItemInput,
+  CreateWorkItemLinkInput,
+  WorkItemLink,
   Project,
   ProjectRole,
   ProjectSprint,
@@ -51,7 +56,6 @@ import type {
   WorkItemSearchHit,
   WorkItemSummary,
   WorkItemTimeline,
-  WorkItemType,
 } from '@paradocs/shared';
 import { WORKSPACE_APPS } from '@paradocs/shared';
 import { formatBytes } from '../lib/util';
@@ -113,6 +117,7 @@ export const keys = {
   workItem: (id: string) => ['workItem', id] as const,
   workItemTimeline: (id: string) => ['workItemTimeline', id] as const,
   workItemBacklinks: (id: string) => ['workItemBacklinks', id] as const,
+  workItemLinks: (id: string) => ['workItemLinks', id] as const,
   access: (kind: string, id: string) => ['access', kind, id] as const,
 };
 
@@ -697,6 +702,7 @@ export function useUpdateProject(workspaceId: string, projectId: string) {
       archived?: boolean;
       boardLayout?: BoardLayout;
       sprintsEnabled?: boolean;
+      defaultTypeId?: string;
     }) => api.patch<Project>(`/projects/${projectId}`, patch),
     onSuccess: (project) => {
       qc.setQueryData(keys.project(project.id), project);
@@ -776,10 +782,26 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
       mutationFn: (id: string) => api.delete(`/project-workflows/${id}`),
       onSuccess: settle,
     }),
-    setTypeWorkflow: useMutation({
-      mutationFn: (input: { type: WorkItemType; workflowId: string | null }) =>
-        api.put<Project>(`/projects/${projectId}/type-workflows`, input),
+    addItemType: useMutation({
+      mutationFn: (input: CreateItemTypeInput) => api.post<ProjectItemType>(`/projects/${projectId}/item-types`, input),
       onSuccess: settle,
+    }),
+    updateItemType: useMutation({
+      mutationFn: ({ id, ...patch }: UpdateItemTypeInput & { id: string }) =>
+        api.patch<ProjectItemType>(`/project-item-types/${id}`, patch),
+      onSuccess: () => {
+        settle();
+        // Taking a role off a type takes people off its items.
+        void qc.invalidateQueries({ queryKey: ['workItem'] });
+      },
+    }),
+    deleteItemType: useMutation({
+      mutationFn: ({ id, moveTo }: { id: string; moveTo?: string }) => api.delete(`/project-item-types/${id}${qs({ moveTo })}`),
+      onSuccess: () => {
+        settle();
+        void qc.invalidateQueries({ queryKey: ['workItem'] });
+        void qc.invalidateQueries({ queryKey: ['workItemListing'] });
+      },
     }),
   };
 }
@@ -971,6 +993,38 @@ export function useWorkItemTimeline(id: string | undefined) {
     queryFn: () => api.get<WorkItemTimeline>(`/work-items/${id}/timeline`),
     enabled: Boolean(id),
   });
+}
+
+export function useWorkItemLinks(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.workItemLinks(id ?? ''),
+    queryFn: () => api.get<WorkItemLink[]>(`/work-items/${id}/links`),
+    enabled: Boolean(id),
+  });
+}
+
+/**
+ * Linking a work item to another and taking links off. Both ends show the
+ * link, and whether one blocks the other shows on boards, so every list of
+ * items and every open item's links are asked for again.
+ */
+export function useWorkItemLinking(itemId: string) {
+  const qc = useQueryClient();
+  const settle = () => {
+    void qc.invalidateQueries({ queryKey: ['workItemLinks'] });
+    void qc.invalidateQueries({ queryKey: ['workItems'] });
+    void qc.invalidateQueries({ queryKey: ['workItemTimeline'] });
+  };
+  return {
+    link: useMutation({
+      mutationFn: (input: CreateWorkItemLinkInput) => api.post<{ id: string }>(`/work-items/${itemId}/links`, input),
+      onSuccess: settle,
+    }),
+    unlink: useMutation({
+      mutationFn: (linkId: string) => api.delete(`/work-item-links/${linkId}`),
+      onSuccess: settle,
+    }),
+  };
 }
 
 export function useWorkItemBacklinks(id: string | undefined) {

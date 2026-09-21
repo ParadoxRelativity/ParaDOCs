@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
-  WORK_ITEM_TYPES,
+  canHaveEpic,
+  isEpicType,
+  rolesForType,
   suggestProjectKey,
   type Project,
   type ProjectKind,
   type WorkItemPriority,
-  type WorkItemType,
   type WorkspaceMember,
 } from '@paradocs/shared';
-import { useCreateProject, useCreateWorkItem } from '../../api/hooks';
+import { useCreateProject, useCreateWorkItem, useWorkItems } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import { Modal } from '../Modal';
@@ -18,7 +19,6 @@ import { useToast } from '../Toast';
 import { Button } from '../ui';
 import {
   DueDatePicker,
-  ITEM_TYPE,
   PRIORITY,
   PROJECT_KIND,
   PeoplePicker,
@@ -157,6 +157,8 @@ export function NewWorkItemDialog({
   selfId,
   initialStatusId,
   initialSprintId,
+  initialTypeId,
+  initialEpicId,
   onCreated,
   onClose,
 }: {
@@ -165,8 +167,12 @@ export function NewWorkItemDialog({
   selfId: string;
   /** Where it starts; the project's first status when not given. */
   initialStatusId?: string;
-  /** The sprint it starts in, if any. */
+  /** The sprint it starts in, if any. An epic never goes in one. */
   initialSprintId?: string;
+  /** What type it is; the project's default type when not given. */
+  initialTypeId?: string;
+  /** The epic it starts under, if any. */
+  initialEpicId?: string;
   onCreated: (itemId: string) => void;
   onClose: () => void;
 }) {
@@ -174,7 +180,11 @@ export function NewWorkItemDialog({
   const toast = useToast();
   const memberMap = useMemberMap(members);
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<WorkItemType>(project.kind === 'queue' ? 'request' : 'task');
+  const items = useWorkItems(project.id);
+  const epics = (items.data ?? []).filter((item) => isEpicType(project, item.typeId));
+  const [type, setType] = useState(initialTypeId ?? project.defaultTypeId);
+  const typeRoles = rolesForType(project, type);
+  const [epicId, setEpicId] = useState(initialEpicId ?? '');
   const [priority, setPriority] = useState<WorkItemPriority>('none');
   const [statusId, setStatusId] = useState(initialStatusId ?? project.statuses[0]?.id ?? '');
   const [dueDate, setDueDate] = useState('');
@@ -196,14 +206,17 @@ export function NewWorkItemDialog({
     try {
       const item = await create.mutateAsync({
         title: title.trim(),
-        type,
         priority,
         statusId,
         dueDate: dueDate || null,
         estimate: parsedEstimate !== null && Number.isFinite(parsedEstimate) ? parsedEstimate : null,
-        roles,
-        roleNames,
-        sprintId: initialSprintId ?? null,
+        // Only the roles its type offers; one filled in and then hidden by a type change is dropped.
+        roles: Object.fromEntries(Object.entries(roles).filter(([id]) => typeRoles.some((r) => r.id === id))),
+        roleNames: Object.fromEntries(Object.entries(roleNames).filter(([id]) => typeRoles.some((r) => r.id === id))),
+        typeId: type,
+        // Epics sit above sprints and other epics.
+        sprintId: isEpicType(project, type) ? null : (initialSprintId ?? null),
+        epicId: canHaveEpic(project, type) ? epicId || null : null,
       });
       toast(`Created ${item.key}`);
       onCreated(item.id);
@@ -241,10 +254,10 @@ export function NewWorkItemDialog({
         <div className="grid grid-cols-3 gap-2">
           <label className="text-xs text-[var(--color-muted)]">
             Type
-            <select value={type} onChange={(e) => setType(e.target.value as WorkItemType)} className={cx(FIELD, 'mt-1')}>
-              {WORK_ITEM_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {ITEM_TYPE[t].label}
+            <select value={type} onChange={(e) => setType(e.target.value)} className={cx(FIELD, 'mt-1')}>
+              {project.itemTypes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
                 </option>
               ))}
             </select>
@@ -277,6 +290,19 @@ export function NewWorkItemDialog({
               className={cx(FIELD, 'mt-1 text-[var(--color-ink)]')}
             />
           </div>
+          {project.kind === 'project' && epics.length > 0 && canHaveEpic(project, type) && (
+            <label className="text-xs text-[var(--color-muted)]">
+              Epic
+              <select value={epicId} onChange={(e) => setEpicId(e.target.value)} className={cx(FIELD, 'mt-1')}>
+                <option value="">None</option>
+                {epics.map((epic) => (
+                  <option key={epic.id} value={epic.id}>
+                    {epic.key} {epic.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="text-xs text-[var(--color-muted)]">
             Estimate
             <input
@@ -290,9 +316,9 @@ export function NewWorkItemDialog({
             />
           </label>
         </div>
-        {project.roles.length > 0 && (
+        {typeRoles.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
-            {project.roles.map((role) => {
+            {typeRoles.map((role) => {
               const holders = roles[role.id] ?? [];
               const names = role.freeForm ? (roleNames[role.id] ?? []) : [];
               return (

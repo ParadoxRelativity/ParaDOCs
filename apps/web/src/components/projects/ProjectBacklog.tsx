@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { allowedMoves, type Project, type ProjectStatus, type WorkItemSummary, type WorkspaceMember } from '@paradocs/shared';
+import { allowedMoves, itemTypeOf, type Project, type ProjectStatus, type WorkItemSummary, type WorkspaceMember } from '@paradocs/shared';
 import { useCreateWorkItem, useMoveWorkItems, useUpdateWorkItem } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
@@ -7,7 +7,7 @@ import { Popover } from '../Popover';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
 import { positionBetween } from './ProjectBoard';
-import { PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue } from './projectUi';
+import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue } from './projectUi';
 
 const DRAG_TYPE = 'application/x-paradocs-backlog-item';
 
@@ -82,7 +82,7 @@ export default function ProjectBacklog({
     if (picked.length === 0) return [];
     return boardStatuses.filter((status) =>
       picked.every((item) => {
-        const allowed = allowedMoves(project, item.type, item.statusId);
+        const allowed = allowedMoves(project, item.typeId, item.statusId);
         return allowed === null || allowed.includes(status.id);
       }),
     );
@@ -383,9 +383,10 @@ function BacklogGroup({
                 <span className="w-[13px]" />
               )}
               {canEdit && <Icon name="grip-vertical" className="cursor-grab text-xs text-[var(--color-muted)] opacity-0 group-hover:opacity-100" />}
-              <TypeIcon type={item.type} />
+              <TypeIcon type={itemTypeOf(project, item.typeId)} />
               <span className="w-16 shrink-0 text-xs text-[var(--color-muted)]">{item.key}</span>
               <span className="min-w-0 flex-1 truncate">{item.title}</span>
+              <BlockedBadge count={item.blockedBy} className="text-xs" />
               {item.priority !== 'none' && <PriorityIcon priority={item.priority} />}
               {item.dueDate && <span className="text-xs text-[var(--color-muted)]">{formatDue(item.dueDate)}</span>}
               {item.estimate !== null && (
