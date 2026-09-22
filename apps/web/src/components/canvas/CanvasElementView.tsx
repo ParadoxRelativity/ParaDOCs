@@ -168,7 +168,7 @@ export default function CanvasElementView({
       return (
         <div className="flex h-full w-full flex-col justify-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] px-3">
           {element.title && <span className="truncate text-xs font-medium">{element.title}</span>}
-          <audio src={assetUrl(element.url)} controls className="w-full" />
+          <audio src={assetUrl(element.url)} controls draggable={false} className="w-full" />
         </div>
       );
 
@@ -177,6 +177,7 @@ export default function CanvasElementView({
         <video
           src={assetUrl(element.url)}
           controls
+          draggable={false}
           // The surface keeps the controls inert until the element is selected,
           // so a press on an unselected video still selects and drags it.
           className="h-full w-full rounded-lg bg-black object-contain"

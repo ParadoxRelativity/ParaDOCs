@@ -115,6 +115,11 @@ export default function CanvasSurface(props: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  // The element under a press that is still held. Selected media stays inert
+  // until the press ends: going live mid-press handed the rest of the gesture
+  // to the video or iframe, which swallowed the release (or began a native
+  // drag), so the element went on following the cursor after the button was up.
+  const [pressedId, setPressedId] = useState<string | null>(null);
   const [pending, setPending] = useState<{
     fromId: string;
     fromSide: Exclude<AnchorSide, 'auto'>;
@@ -274,6 +279,12 @@ export default function CanvasSurface(props: Props) {
     function onMove(e: PointerEvent) {
       const g = gesture.current;
       if (!g) return;
+      // A mouse moving with no button down means the release was missed
+      // (it happened over an iframe, or outside the window), so end it here.
+      if (e.pointerType === 'mouse' && e.buttons === 0) {
+        onUp(e);
+        return;
+      }
 
       if (g.kind === 'pan') {
         onViewportChange({
@@ -336,6 +347,7 @@ export default function CanvasSurface(props: Props) {
     function onUp(e: PointerEvent) {
       const g = gesture.current;
       gesture.current = null;
+      setPressedId(null);
       if (!g) return;
 
       if (g.kind === 'draw') {
@@ -411,11 +423,32 @@ export default function CanvasSurface(props: Props) {
       }
     }
 
+    // The browser took the pointer (a native drag, a touch scroll): drop the
+    // gesture and put everything back rather than committing a guessed position.
+    function onCancel() {
+      const g = gesture.current;
+      gesture.current = null;
+      setPressedId(null);
+      if (!g) return;
+      setDrawBox(null);
+      setMarquee(null);
+      if (g.kind === 'move') clearDragStyles(g.origins.keys());
+      if (g.kind === 'resize') {
+        const node = nodes.current.get(g.id);
+        if (node) {
+          node.style.width = '';
+          node.style.height = '';
+        }
+      }
+    }
+
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
   }, [viewport, boxes, onViewportChange, onSelectionChange, applyDragStyles, clearDragStyles, props]);
 
@@ -621,6 +654,7 @@ export default function CanvasSurface(props: Props) {
       if (el && el.type !== 'connector') origins.set(id, { x: el.x, y: el.y });
     }
     gesture.current = { kind: 'move', startX: e.clientX, startY: e.clientY, origins, moved: false };
+    setPressedId(element.id);
   }
 
   function startBackgroundGesture(e: React.PointerEvent) {
@@ -724,7 +758,8 @@ export default function CanvasSurface(props: Props) {
           const selected = selectedIds.has(element.id);
           const editing = editingId === element.id;
           // Media plays in place once selected; before that a press selects and drags it.
-          const live = editing || (selected && LIVE_WHEN_SELECTED.has(element.type));
+          const live =
+            editing || (selected && LIVE_WHEN_SELECTED.has(element.type) && pressedId !== element.id);
           return (
             <div
               key={element.id}
@@ -736,6 +771,9 @@ export default function CanvasSurface(props: Props) {
               onPointerEnter={() => props.connectorTool && setHoverId(element.id)}
               onPointerLeave={() => !pending && setHoverId((id) => (id === element.id ? null : id))}
               onPointerDown={(e) => startElementGesture(e, element)}
+              // Media and links are natively draggable; a native drag cancels
+              // the pointer stream, so it must never start from an element.
+              onDragStart={(e) => e.preventDefault()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 if (!editable) return;
