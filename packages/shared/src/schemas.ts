@@ -20,6 +20,8 @@ export const updateProfileSchema = z
   .object({
     name: z.string().min(1).max(80).optional(),
     email: z.string().email().max(254).optional(),
+    /** Needed to change the email, by accounts that have a password. */
+    currentPassword: z.string().max(200).optional(),
   })
   .refine((v) => v.name !== undefined || v.email !== undefined, {
     message: 'Nothing to update',

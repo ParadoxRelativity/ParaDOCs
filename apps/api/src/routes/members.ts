@@ -106,7 +106,9 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
             WHERE e.user_id = $2
               AND (e.folder_id IN (SELECT id FROM folders WHERE workspace_id = $1)
                 OR e.document_id IN (SELECT id FROM documents WHERE workspace_id = $1)
-                OR e.channel_id IN (SELECT id FROM channels WHERE workspace_id = $1))`,
+                OR e.spreadsheet_id IN (SELECT id FROM spreadsheets WHERE workspace_id = $1)
+                OR e.channel_id IN (SELECT id FROM channels WHERE workspace_id = $1)
+                OR e.project_id IN (SELECT id FROM projects WHERE workspace_id = $1))`,
           [req.params.id, req.params.userId],
         );
       });
@@ -146,10 +148,16 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
       if (rows.length) throw conflict('That person is already a member of this workspace');
     }
 
+    // Tied to whoever has the address now; see migration 0028. Nobody else
+    // is shown it, whatever address they give themselves later.
+    const { rows: invitee } = input.email
+      ? await query<{ id: string }>('SELECT id FROM users WHERE lower(email) = lower($1)', [input.email])
+      : { rows: [] };
+
     const token = randomBytes(24).toString('base64url');
     const { rows } = await query(
-      `INSERT INTO workspace_invites (workspace_id, email, role, token, invited_by, expires_at)
-       VALUES ($1, $2, $3, $4, $5, now() + ($6 || ' days')::interval)
+      `INSERT INTO workspace_invites (workspace_id, email, role, token, invited_by, expires_at, invitee_id)
+       VALUES ($1, $2, $3, $4, $5, now() + ($6 || ' days')::interval, $7)
        RETURNING id, workspace_id AS "workspaceId", email, role, token,
                  expires_at AS "expiresAt", accepted_at AS "acceptedAt", created_at AS "createdAt"`,
       [
@@ -159,6 +167,7 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
         token,
         req.user!.id,
         String(input.expiresInDays),
+        invitee[0]?.id ?? null,
       ],
     );
     reply.status(201);
@@ -184,6 +193,7 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     id: string;
     workspace_id: string;
     email: string | null;
+    invitee_id: string | null;
     role: Role;
     expires_at: string;
     accepted_at: string | null;
@@ -195,7 +205,7 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
 
   async function loadInvite(token: string): Promise<InviteRow> {
     const { rows } = await query<InviteRow>(
-      `SELECT i.id, i.workspace_id, i.email, i.role, i.expires_at, i.accepted_at,
+      `SELECT i.id, i.workspace_id, i.email, i.invitee_id, i.role, i.expires_at, i.accepted_at,
               w.name AS workspace_name, w.icon AS workspace_icon,
               ${uploadUrlSql('w.avatar_key')} AS workspace_avatar_url, u.name AS invited_by_name
          FROM workspace_invites i
@@ -233,8 +243,9 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     if (!req.user) throw forbidden('Sign in to accept this invite');
     const invite = await loadInvite(req.params.token);
 
-    // An invite addressed to a specific address may only be used by that address.
-    if (invite.email && invite.email.toLowerCase() !== req.user.email.toLowerCase()) {
+    // An invite for someone in particular is theirs alone: the account it was
+    // sent to when it had one, otherwise the address, from its link.
+    if (invite.invitee_id ? invite.invitee_id !== req.user.id : invite.email && invite.email.toLowerCase() !== req.user.email.toLowerCase()) {
       throw forbidden(`This invite was sent to ${invite.email}`);
     }
 

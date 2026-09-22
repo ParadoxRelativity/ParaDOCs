@@ -27,6 +27,7 @@ export const nativePlatform = capacitor?.getPlatform?.() ?? 'web';
 
 const ORIGIN_KEY = 'paradocs.server';
 const TOKEN_KEY = 'paradocs.sessionToken';
+const MEDIA_KEY = 'paradocs.mediaToken';
 
 function read(key: string): string | null {
   try {
@@ -47,6 +48,7 @@ function write(key: string, value: string | null) {
 
 let origin: string | null = isNativeApp ? read(ORIGIN_KEY) : null;
 let token: string | null = isNativeApp ? read(TOKEN_KEY) : null;
+let mediaToken: string | null = isNativeApp ? read(MEDIA_KEY) : null;
 
 /** The server this client talks to across origins, or null when it is its own page's. */
 export function serverOrigin(): string | null {
@@ -70,6 +72,18 @@ export function sessionToken(): string | null {
 export function setSessionToken(next: string | null) {
   token = next;
   write(TOKEN_KEY, next);
+  // The files-only token belongs to the session, and goes with it.
+  if (next === null) setMediaToken(null);
+}
+
+/**
+ * The server serves a file only to someone who may see it, and a picture
+ * cannot send the bearer token. So the server gives the mobile app a second
+ * token that reads files and nothing else, and file addresses carry it.
+ */
+export function setMediaToken(next: string | null) {
+  mediaToken = next;
+  write(MEDIA_KEY, next);
 }
 
 /**
@@ -143,15 +157,22 @@ const UPLOADS = '/uploads/';
 /** A path the server gave, made loadable from this page. */
 export function assetUrl<T extends string | null | undefined>(url: T): T {
   if (!origin || !url || !url.startsWith(UPLOADS)) return url;
-  return `${origin}${url}` as T;
+  const access = mediaToken ? `${url.includes('?') ? '&' : '?'}${MEDIA_PARAM}=${encodeURIComponent(mediaToken)}` : '';
+  return `${origin}${url}${access}` as T;
 }
+
+const MEDIA_PARAM = 'media';
 
 /**
  * The reverse of `assetUrl`, for anything sent back: what the server keeps
  * stays a path, so it still resolves if the server moves to another address.
  */
 export function serverPath(url: string): string {
-  return origin && url.startsWith(`${origin}${UPLOADS}`) ? url.slice(origin.length) : url;
+  if (!origin || !url.startsWith(`${origin}${UPLOADS}`)) return url;
+  // The files-only token is this device's, and must never be saved into a document.
+  const path = new URL(url);
+  path.searchParams.delete(MEDIA_PARAM);
+  return `${path.pathname}${path.search}${path.hash}`;
 }
 
 /**

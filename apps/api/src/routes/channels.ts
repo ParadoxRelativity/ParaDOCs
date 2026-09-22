@@ -19,7 +19,15 @@ import { assertWorkspaceAccess, roleAtLeast, type Role } from '../plugins/sessio
 import { resolveReferences } from '../lib/chatReferences.js';
 import { channelAccessFor, mentionsUserSql, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { channelLevelSql, permissionSql } from '../lib/access.js';
-import { removeStoredFile, removeStoredFiles, storeUpload, uploadLimits, uploadUrlSql } from '../lib/storage.js';
+import {
+  dimension,
+  displayName,
+  removeStoredFile,
+  removeStoredFiles,
+  storeUpload,
+  uploadLimits,
+  uploadUrlSql,
+} from '../lib/storage.js';
 import { publishToWorkspace } from '../chat/hub.js';
 import { syncWorkItemMentions } from '../lib/workItems.js';
 
@@ -541,18 +549,6 @@ async function sweepUnsentFiles(req: FastifyRequest): Promise<void> {
   } catch (err) {
     req.log.warn({ err }, 'could not remove unsent chat files');
   }
-}
-
-function dimension(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 && n <= 30000 ? n : null;
-}
-
-/** The name a file is shown and downloaded under. It is never used as a path. */
-function displayName(filename: string): string {
-  // eslint-disable-next-line no-control-regex
-  const clean = filename.replace(/[ -/\\]/g, '').trim();
-  return clean.slice(0, 200) || 'file';
 }
 
 async function messageRow(id: string) {

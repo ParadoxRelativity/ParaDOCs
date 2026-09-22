@@ -46,6 +46,7 @@ import { ConfirmDialog } from '../Modal';
 import { useToast } from '../Toast';
 import { EmptyState, IconButton, Spinner } from '../ui';
 import ReferenceEditor from './ReferenceEditor';
+import WorkItemAttachments from './WorkItemAttachments';
 import {
   DueDatePicker,
   EpicProgressBar,
@@ -440,6 +441,8 @@ function ItemDetail({
           <p className="text-sm text-[var(--color-muted)]">No description.</p>
         )}
 
+        <WorkItemAttachments item={item} canEdit={canEdit} />
+
         <Links workspaceId={workspaceId} item={item} canEdit={canEdit} navigation={navigation} />
 
         {isEpicType(project, item.typeId) && (
@@ -480,7 +483,7 @@ function ItemDetail({
       {confirmingDelete && (
         <ConfirmDialog
           title={`Delete ${item.key}?`}
-          description={`"${item.title}" and its comments and history will be deleted for everyone. Links to it will stop working.`}
+          description={`"${item.title}" and its comments, files and history will be deleted for everyone. Links to it will stop working.`}
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={() => {
             setConfirmingDelete(false);
@@ -1112,6 +1115,8 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
       return activity.added
         ? `noted that this ${activity.label} ${activity.key} ${activity.title}`
         : `removed the link: this ${activity.label} ${activity.key} ${activity.title}`;
+    case 'attachment':
+      return activity.added ? `attached ${activity.filename}` : `removed the file ${activity.filename}`;
     case 'epic':
       if (!activity.to) return `took this out of the epic ${activity.from ?? ''}`.trimEnd();
       return activity.from ? `moved this from the epic ${activity.from} to ${activity.to}` : `put this under the epic ${activity.to}`;

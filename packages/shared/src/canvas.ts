@@ -218,16 +218,28 @@ export const DEFAULT_SIZE: Record<CanvasElementType, { width: number; height: nu
 };
 
 /**
- * Turns a shareable URL into one that can be framed. Providers that block
- * framing on their watch pages allow it on a dedicated embed path.
+ * Whether a URL is a web page, and so safe to put in an iframe or hand to a
+ * link. The URL is whatever an editor typed, or wrote into the shared document
+ * directly: a `javascript:` URL in a frame runs as this app, for whoever opens
+ * the canvas.
  */
-export function toEmbedUrl(raw: string): string {
-  let url: URL;
+export function isWebUrl(raw: string): boolean {
   try {
-    url = new URL(raw);
+    const { protocol } = new URL(raw);
+    return protocol === 'https:' || protocol === 'http:';
   } catch {
-    return raw;
+    return false;
   }
+}
+
+/**
+ * Turns a shareable URL into one that can be framed, or null for anything that
+ * is not a web page. Providers that block framing on their watch pages allow
+ * it on a dedicated embed path.
+ */
+export function toEmbedUrl(raw: string): string | null {
+  if (!isWebUrl(raw)) return null;
+  const url = new URL(raw);
   const host = url.hostname.replace(/^www\./, '');
 
   if (host === 'youtube.com' && url.pathname === '/watch') {

@@ -7,6 +7,8 @@ export class HttpError extends Error {
     readonly statusCode: number,
     message: string,
     readonly code?: string,
+    /** Seconds before trying again is worthwhile, sent as Retry-After. */
+    readonly retryAfter?: number,
   ) {
     super(message);
   }
@@ -48,12 +50,30 @@ export function registerJsonBodyParser(app: FastifyInstance): void {
   });
 }
 
+/** Postgres's error code for a row a unique index refused. */
+const UNIQUE_VIOLATION = '23505';
+
+/** What to say when a particular unique index refuses a row; others get a general message. */
+const UNIQUE_MESSAGES: Record<string, string> = {
+  users_email_lower_idx: 'An account with that email already exists',
+};
+
 export function registerErrorHandler(app: {
   setErrorHandler: (fn: (err: Error, req: FastifyRequest, reply: FastifyReply) => void) => void;
 }) {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) {
+      if (err.retryAfter) reply.header('Retry-After', String(err.retryAfter));
       reply.status(err.statusCode).send({ error: err.message, code: err.code });
+      return;
+    }
+    // Two requests can both pass a route's own "is it taken?" check and race
+    // to insert; the unique index stops the second, which is a conflict like
+    // any other rather than a server fault.
+    const pg = err as { code?: string; constraint?: string };
+    if (pg.code === UNIQUE_VIOLATION) {
+      const message = (pg.constraint && UNIQUE_MESSAGES[pg.constraint]) ?? 'That already exists';
+      reply.status(409).send({ error: message, code: 'conflict' });
       return;
     }
     const status = (err as { statusCode?: number }).statusCode;

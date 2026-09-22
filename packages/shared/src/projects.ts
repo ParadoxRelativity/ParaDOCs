@@ -32,7 +32,7 @@
  */
 
 import { z } from 'zod';
-import { parseMessage, type MessageAuthor, type MessageReferences } from './chat.js';
+import { parseMessage, type MessageAttachment, type MessageAuthor, type MessageReferences } from './chat.js';
 import type { CanvasElement } from './canvas.js';
 import { canvasTextOf, walkInlineNodes } from './mentions.js';
 import type { AccessMode, NotificationWorkspace, Permission } from './types.js';
@@ -358,7 +358,9 @@ export type WorkItemActivityData =
   /** Epic titles as they were at the time; null is no epic. */
   | { kind: 'epic'; from: string | null; to: string | null }
   /** A link made or removed, read from this item: "blocks ENG-4". Key and title as they were at the time. */
-  | { kind: 'link'; label: string; key: string; title: string; added: boolean };
+  | { kind: 'link'; label: string; key: string; title: string; added: boolean }
+  /** A file attached or taken off, by the name it had. */
+  | { kind: 'attachment'; filename: string; added: boolean };
 
 export type WorkItemActivity = {
   id: string;
@@ -371,6 +373,14 @@ export interface WorkItemTimeline {
   activity: WorkItemActivity[];
   /** What the comments point at, and the people named in the history. */
   references: MessageReferences;
+}
+
+// --- attachments -------------------------------------------------------------
+
+/** A file on a work item: a screenshot, a recording, a log or a note. */
+export interface WorkItemAttachment extends MessageAttachment {
+  uploader: MessageAuthor | null;
+  createdAt: string;
 }
 
 // --- links -------------------------------------------------------------------

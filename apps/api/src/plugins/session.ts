@@ -113,6 +113,29 @@ export async function resolveSession(token: string): Promise<SessionUser | null>
   return rows[0] ?? null;
 }
 
+/**
+ * The user behind a files-only token, for serving uploads to a client that
+ * cannot send its session with a picture. See migration 0029.
+ */
+export async function resolveMediaToken(mediaToken: string): Promise<SessionUser | null> {
+  const { rows } = await query<SessionUser>(
+    `SELECT u.id, u.email, u.name, ${uploadUrlSql('u.avatar_key')} AS "avatarUrl"
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+      WHERE s.media_token = $1 AND s.expires_at > now() AND u.disabled_at IS NULL`,
+    [mediaToken],
+  );
+  return rows[0] ?? null;
+}
+
+/** The files-only token of a session, for handing to the client that holds it. */
+export async function mediaTokenFor(sessionToken: string): Promise<string | null> {
+  const { rows } = await query<{ media_token: string }>('SELECT media_token FROM sessions WHERE token = $1', [
+    sessionToken,
+  ]);
+  return rows[0]?.media_token ?? null;
+}
+
 export function sessionCookieOptions() {
   return {
     httpOnly: true,

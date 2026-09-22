@@ -120,17 +120,23 @@ function AccountSection({ user }: { user: User }) {
 
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
+  // Changing the email address takes the password, as changing the password does.
+  const [emailPassword, setEmailPassword] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
-  const profileDirty = name.trim() !== user.name || email.trim() !== user.email;
+  const emailChanged = email.trim() !== user.email;
+  const profileDirty = name.trim() !== user.name || emailChanged;
 
   function saveProfile(e: React.FormEvent) {
     e.preventDefault();
     updateProfile.mutate(
-      { name: name.trim(), email: email.trim() },
+      { name: name.trim(), email: email.trim(), ...(emailChanged ? { currentPassword: emailPassword } : {}) },
       {
-        onSuccess: () => toast('Profile updated'),
+        onSuccess: () => {
+          setEmailPassword('');
+          toast('Profile updated');
+        },
         onError: (err) => toast(err instanceof Error ? err.message : 'Could not save profile', 'error'),
       },
     );
@@ -192,6 +198,19 @@ function AccountSection({ user }: { user: User }) {
               required
             />
           </label>
+          {emailChanged && (
+            <label className="block">
+              <span className="mb-1 block text-xs text-[var(--color-muted)]">Current password</span>
+              <input
+                className={FIELD}
+                type="password"
+                autoComplete="current-password"
+                value={emailPassword}
+                onChange={(e) => setEmailPassword(e.target.value)}
+                required
+              />
+            </label>
+          )}
           <Button
             variant="primary"
             type="submit"

@@ -65,6 +65,11 @@ services:
       # SECURE_COOKIES=true with the https profile. Over plain HTTP leave it
       # false, or nobody stays signed in.
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      # With the https profile and BIND_ADDR=127.0.0.1, set TRUST_PROXY=true so
+      # sign-in limits count each person's address rather than Caddy's. Leave
+      # it false while the app is published directly, or anyone can claim to
+      # be any address.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
       UPLOAD_DIR: /data/uploads
       # Largest file anyone can upload, in megabytes: chat, documents and
       # canvases alike. Set for the whole server; workspaces cannot change it.
@@ -180,10 +185,6 @@ configs:
     content: |
       {$$DOMAIN} {
         encode zstd gzip
-
-        # Uploaded files can be cached; they are content-addressed by a random name.
-        @uploads path /uploads/*
-        header @uploads Cache-Control "public, max-age=31536000, immutable"
 
         # Everything is the app: the SPA, /api, /uploads, and the collaboration,
         # chat and voice signalling websockets, which reverse_proxy passes through.

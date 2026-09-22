@@ -177,8 +177,8 @@ export default function CanvasElementView({
         <video
           src={assetUrl(element.url)}
           controls
-          // Controls only respond once the element is selected, so a click on an
-          // unselected video still selects and drags it.
+          // The surface keeps the controls inert until the element is selected,
+          // so a press on an unselected video still selects and drags it.
           className="h-full w-full rounded-lg bg-black object-contain"
         />
       ) : (
@@ -361,10 +361,13 @@ function Placeholder({ label }: { label: string }) {
 /** Embeds stay inert until selected, so an iframe cannot swallow a drag. */
 function Embed({ element, interactive }: { element: CanvasElement & { type: 'embed' }; interactive: boolean }) {
   if (!element.url) return <Placeholder label="Embed" />;
+  const src = toEmbedUrl(element.url);
+  // Only a web page is framed; anything else could run script as this app.
+  if (!src) return <Placeholder label="This embed is not a web address" />;
   return (
     <div className="relative h-full w-full overflow-hidden rounded-lg border border-[var(--color-line)] bg-black">
       <iframe
-        src={toEmbedUrl(element.url)}
+        src={src}
         title={element.title ?? element.url}
         className="h-full w-full"
         allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"

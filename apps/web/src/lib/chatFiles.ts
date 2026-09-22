@@ -5,7 +5,7 @@ import { api } from '../api/client';
  * The pixel size of an image or video, read locally before upload so the
  * message list can reserve the right space before the file loads for anyone.
  */
-async function measure(file: File): Promise<{ width: number; height: number } | null> {
+export async function measure(file: File): Promise<{ width: number; height: number } | null> {
   const kind = attachmentKind(file.name);
   try {
     if (kind === 'image') {

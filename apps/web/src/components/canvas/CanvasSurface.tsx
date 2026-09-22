@@ -69,6 +69,9 @@ interface Props {
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 3;
 
+/** Elements whose own controls take clicks once selected: players and framed pages. */
+const LIVE_WHEN_SELECTED = new Set<CanvasElement['type']>(['video', 'audio', 'embed']);
+
 export function toCanvasPoint(viewport: Viewport, clientX: number, clientY: number, rect: DOMRect) {
   return {
     x: (clientX - rect.left - viewport.x) / viewport.scale,
@@ -691,7 +694,9 @@ export default function CanvasSurface(props: Props) {
         props.onCreateNoteAt(toCanvasPoint(viewport, e.clientX, e.clientY, rect));
       }}
       className={cx(
-        'relative h-full w-full touch-none overflow-hidden bg-[var(--color-canvas)]',
+        // No text selection: in a browser a drag would otherwise highlight
+        // the text it passes over instead of moving the element.
+        'relative h-full w-full touch-none select-none overflow-hidden bg-[var(--color-canvas)]',
         props.connectorTool || props.shapeTool || (props.placing && editable)
           ? 'cursor-crosshair'
           : spaceHeld
@@ -718,6 +723,8 @@ export default function CanvasSurface(props: Props) {
         {boxes.map((element) => {
           const selected = selectedIds.has(element.id);
           const editing = editingId === element.id;
+          // Media plays in place once selected; before that a press selects and drags it.
+          const live = editing || (selected && LIVE_WHEN_SELECTED.has(element.type));
           return (
             <div
               key={element.id}
@@ -762,13 +769,22 @@ export default function CanvasSurface(props: Props) {
                 </span>
               )}
 
-              {/* Interiors stay inert unless this element is being edited, so a
-                  click always reaches the wrapper and starts a drag. */}
+              {/* Interiors stay inert unless this element is being edited (or is
+                  selected media), so a click always reaches the wrapper and starts a drag. */}
               <div
                 className={cx(
                   'h-full w-full',
-                  !editing && (element.type === 'link' ? '[&_*]:pointer-events-none' : 'pointer-events-none'),
+                  editing && 'select-text',
+                  !live && (element.type === 'link' ? '[&_*]:pointer-events-none' : 'pointer-events-none'),
                 )}
+                onPointerDown={
+                  live && !editing
+                    ? (e) => {
+                        // Scrubbing or pressing play must not also move the element.
+                        if ((e.target as HTMLElement).closest('video, audio')) e.stopPropagation();
+                      }
+                    : undefined
+                }
               >
                 <CanvasElementView
                   element={element}
@@ -823,6 +839,24 @@ export default function CanvasSurface(props: Props) {
                 >
                   <Icon name="plus-lg" />
                 </button>
+              )}
+
+              {/* A live video or embed fills its box with controls, so it gets a
+                  handle to move by. The press bubbles to the wrapper's drag. */}
+              {selected && editable && !editing && (element.type === 'video' || element.type === 'embed') && (
+                <div
+                  aria-hidden
+                  className="absolute left-1/2 grid -translate-x-1/2 cursor-move place-items-center rounded-full bg-[var(--color-accent)] text-white shadow"
+                  style={{
+                    // Sized in screen pixels so it stays usable at any zoom.
+                    width: 36 / viewport.scale,
+                    height: 16 / viewport.scale,
+                    fontSize: 14 / viewport.scale,
+                    top: -22 / viewport.scale,
+                  }}
+                >
+                  <Icon name="grip-horizontal" />
+                </div>
               )}
 
               {selected && editable && !editing && !props.connectorTool && (

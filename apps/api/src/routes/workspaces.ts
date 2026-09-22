@@ -228,7 +228,12 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
        UNION ALL
        SELECT a.storage_key FROM message_attachments a
          JOIN channels c ON c.id = a.channel_id
-        WHERE c.workspace_id = $1`,
+        WHERE c.workspace_id = $1
+       UNION ALL
+       SELECT a.storage_key FROM work_item_attachments a
+         JOIN work_items i ON i.id = a.work_item_id
+         JOIN projects p ON p.id = i.project_id
+        WHERE p.workspace_id = $1`,
       [req.params.id],
     );
     const { rows: deleted } = await query<{ avatar_key: string | null }>(

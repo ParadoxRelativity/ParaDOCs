@@ -37,13 +37,30 @@ export function confineNavigation(contents: WebContents, allowedOrigin: string):
   contents.on('will-navigate', (event, url) => {
     if (isAllowed(url)) return;
     event.preventDefault();
-    void shell.openExternal(url);
+    openOutside(url);
   });
 
   contents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) void shell.openExternal(url);
+    openOutside(url);
     return { action: 'deny' };
   });
+}
+
+/**
+ * Hands a link to the operating system, for web pages and email only. Anything
+ * else — file:, smb:, or a scheme some installed program registered — would
+ * let a link planted in a shared document start a program on this machine.
+ */
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+
+function openOutside(url: string): void {
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return;
+  }
+  if (EXTERNAL_SCHEMES.has(protocol)) void shell.openExternal(url);
 }
 
 /** Commands a page acts on; the desktop menu and the other windows send these. */

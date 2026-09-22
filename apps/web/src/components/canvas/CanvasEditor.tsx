@@ -19,6 +19,7 @@ import {
   type MindNodeElement,
   type ShapeElement,
   type ShapeKind,
+  isWebUrl,
 } from '@paradocs/shared';
 import type { CollabSession, Peer } from '../../lib/collaboration';
 import { boundsOf, useCanvasElements } from '../../lib/canvasStore';
@@ -1147,6 +1148,10 @@ function InsertDialog({
     link: 'Link a document',
   };
 
+  // Only a web page can be framed. Pictures and media may also be an uploaded
+  // file's path, which never runs as a page.
+  const notWebPage = kind === 'embed' && Boolean(url.trim()) && !isWebUrl(url.trim());
+
   function submit() {
     if (kind === 'link') {
       const chosen = documents.data?.documents.find((d) => d.id === documentId);
@@ -1154,7 +1159,7 @@ function InsertDialog({
       onInsert({ documentId: chosen.id, title: chosen.title });
       return;
     }
-    if (!url.trim()) return;
+    if (!url.trim() || notWebPage) return;
     onInsert({ url: url.trim() });
   }
 
@@ -1172,7 +1177,7 @@ function InsertDialog({
             variant="primary"
             className="text-xs"
             onClick={submit}
-            disabled={kind === 'link' ? !documentId : !url.trim()}
+            disabled={kind === 'link' ? !documentId : !url.trim() || notWebPage}
           >
             Add to canvas
           </Button>
@@ -1213,6 +1218,9 @@ function InsertDialog({
                     : 'https://example.com/image.png'
             }
           />
+          {notWebPage && (
+            <p className="text-xs text-[var(--color-muted)]">Enter a web address starting with https://</p>
+          )}
           {ACCEPT[kind] && (
             <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-[var(--color-line)] px-3 py-2 text-xs text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
               <input

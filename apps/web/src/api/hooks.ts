@@ -40,6 +40,7 @@ import type {
   UpdateItemTypeInput,
   CreateWorkItemInput,
   CreateWorkItemLinkInput,
+  WorkItemAttachment,
   WorkItemLink,
   Project,
   ProjectRole,
@@ -59,9 +60,10 @@ import type {
 } from '@paradocs/shared';
 import { WORKSPACE_APPS } from '@paradocs/shared';
 import { formatBytes } from '../lib/util';
+import { measure } from '../lib/chatFiles';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
-import { authHeaders, fromServer, serverUrl, setSessionToken } from '../lib/server';
+import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken } from '../lib/server';
 
 export interface WorkspaceSummary extends Workspace {
   documentCount: number;
@@ -118,6 +120,7 @@ export const keys = {
   workItemTimeline: (id: string) => ['workItemTimeline', id] as const,
   workItemBacklinks: (id: string) => ['workItemBacklinks', id] as const,
   workItemLinks: (id: string) => ['workItemLinks', id] as const,
+  workItemAttachments: (id: string) => ['workItemAttachments', id] as const,
   access: (kind: string, id: string) => ['access', kind, id] as const,
 };
 
@@ -126,12 +129,17 @@ export const keys = {
 export function useMe() {
   return useQuery({
     queryKey: keys.me,
-    queryFn: () =>
-      api.get<{
+    queryFn: async () => {
+      const me = await api.get<{
         user: User | null;
         allowRegistration: boolean;
         oidc: { enabled: boolean; configured: boolean; providerName: string };
-      }>('/auth/me'),
+        mediaToken?: string | null;
+      }>('/auth/me');
+      // Only the mobile app is given one; see lib/server.ts.
+      if (me.mediaToken) setMediaToken(me.mediaToken);
+      return me;
+    },
     staleTime: Infinity,
   });
 }
@@ -140,10 +148,11 @@ export function useLogin() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { email: string; password: string }) =>
-      api.post<{ user: User; token?: string }>('/auth/login', input),
+      api.post<{ user: User; token?: string; mediaToken?: string }>('/auth/login', input),
     onSuccess: (result) => {
       // Only the mobile app is handed its session to keep; see lib/server.ts.
       if (result.token) setSessionToken(result.token);
+      if (result.mediaToken) setMediaToken(result.mediaToken);
       return qc.invalidateQueries();
     },
   });
@@ -153,9 +162,10 @@ export function useRegister() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { email: string; password: string; name: string }) =>
-      api.post<{ user: User; token?: string }>('/auth/register', input),
+      api.post<{ user: User; token?: string; mediaToken?: string }>('/auth/register', input),
     onSuccess: (result) => {
       if (result.token) setSessionToken(result.token);
+      if (result.mediaToken) setMediaToken(result.mediaToken);
       return qc.invalidateQueries();
     },
   });
@@ -164,7 +174,7 @@ export function useRegister() {
 export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name?: string; email?: string }) =>
+    mutationFn: (input: { name?: string; email?: string; currentPassword?: string }) =>
       api.patch<{ user: User }>('/auth/me', input),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.me }),
   });
@@ -1022,6 +1032,49 @@ export function useWorkItemLinking(itemId: string) {
     }),
     unlink: useMutation({
       mutationFn: (linkId: string) => api.delete(`/work-item-links/${linkId}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
+export function useWorkItemAttachments(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.workItemAttachments(id ?? ''),
+    queryFn: () => api.get<WorkItemAttachment[]>(`/work-items/${id}/attachments`),
+    enabled: Boolean(id),
+  });
+}
+
+/** Attaching files to a work item, with progress, and taking them off. */
+export function useWorkItemAttaching(itemId: string) {
+  const qc = useQueryClient();
+  const settle = () => {
+    void qc.invalidateQueries({ queryKey: keys.workItemAttachments(itemId) });
+    void qc.invalidateQueries({ queryKey: keys.workItemTimeline(itemId) });
+  };
+  return {
+    attach: useMutation({
+      mutationFn: async ({ file, onProgress }: { file: File; onProgress: (fraction: number) => void }) => {
+        // Refused here as well as on the server, which cuts an oversized upload
+        // off partway and cannot always get its explanation back to the browser.
+        const limit = await qc.ensureQueryData(uploadConfigQuery).catch(() => null);
+        if (limit && file.size > limit.maxBytes) {
+          throw new Error(`${file.name} is larger than the ${formatBytes(limit.maxBytes)} limit`);
+        }
+        const size = await measure(file);
+        const form = new FormData();
+        // Fields must precede the file: the server reads those that arrived before it.
+        if (size) {
+          form.append('width', String(size.width));
+          form.append('height', String(size.height));
+        }
+        form.append('file', file);
+        return api.uploadWithProgress<WorkItemAttachment>(`/work-items/${itemId}/attachments`, form, onProgress);
+      },
+      onSuccess: settle,
+    }),
+    detach: useMutation({
+      mutationFn: (attachmentId: string) => api.delete(`/work-item-attachments/${attachmentId}`),
       onSuccess: settle,
     }),
   };

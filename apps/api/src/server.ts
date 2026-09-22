@@ -50,12 +50,13 @@ const sweep = setInterval(() => {
     app.log.warn({ err }, 'admin session sweep failed'),
   );
   void sweepRetention();
-
-// Started here rather than in buildApp, so the server the desktop app runs
-// locally, which updates with the app, never asks.
-scheduleServerUpdateChecks(app.log);
 }, 60 * 60 * 1000);
 sweep.unref();
+
+// Started here rather than in buildApp, so the server the desktop app runs
+// locally, which updates with the app, never asks. Once: it keeps its own
+// schedule from here on.
+scheduleServerUpdateChecks(app.log);
 
 try {
   if (admin && config.admin.port === config.port) {

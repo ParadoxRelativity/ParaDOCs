@@ -21,6 +21,7 @@ import { sweepExpiredMessages } from '../lib/retention.js';
 import { getServerSettings, updateServerSettings } from '../lib/serverSettings.js';
 import { checkForServerUpdate, versionStatus } from '../lib/releases.js';
 import { removeStoredFiles } from '../lib/storage.js';
+import { registrationLimits, signInLimits } from '../lib/rateLimit.js';
 import { ADMIN_COOKIE, endAdminSession, startAdminSession } from './session.js';
 
 const ADMIN_USER_COLUMNS = `u.id, u.email, u.name,
@@ -71,6 +72,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post('/login', async (req, reply): Promise<AdminStatus> => {
     const input = parse(loginSchema, req.body);
+    signInLimits.check(req.ip, input.email);
     const { rows } = await query<{
       id: string;
       email: string;
@@ -86,7 +88,11 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const row = rows[0];
     // Hash even when the user is missing, so timing does not reveal which emails exist.
     const ok = await verifyPassword(input.password, row?.password_hash ?? 'scrypt$00$00');
-    if (!row || !ok) throw unauthorized('Incorrect email or password');
+    if (!row || !ok) {
+      signInLimits.failed(input.email);
+      throw unauthorized('Incorrect email or password');
+    }
+    signInLimits.succeeded(input.email);
     if (row.disabled) throw forbidden('This account is disabled');
 
     if (!row.is_server_admin) {
@@ -108,6 +114,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   /** Creates the first administrator as a new account. Only while the server has none. */
   app.post('/setup', async (req, reply): Promise<AdminStatus> => {
     const input = parse(registerSchema, req.body);
+    registrationLimits.check(req.ip);
     const passwordHash = await hashPassword(input.password);
     const user = await transaction(async (client) => {
       await lockAdministrators(client);
@@ -308,6 +315,11 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
            SELECT a.storage_key FROM message_attachments a
              JOIN channels c ON c.id = a.channel_id
              JOIN workspaces w ON w.id = c.workspace_id WHERE w.owner_id = $1
+           UNION ALL
+           SELECT a.storage_key FROM work_item_attachments a
+             JOIN work_items i ON i.id = a.work_item_id
+             JOIN projects p ON p.id = i.project_id
+             JOIN workspaces w ON w.id = p.workspace_id WHERE w.owner_id = $1
            UNION ALL
            SELECT avatar_key FROM workspaces WHERE owner_id = $1 AND avatar_key IS NOT NULL
            UNION ALL

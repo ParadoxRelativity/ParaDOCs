@@ -147,15 +147,17 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
            FROM workspace_invites i
            JOIN workspaces w ON w.id = i.workspace_id
            LEFT JOIN users u ON u.id = i.invited_by
-          WHERE lower(i.email) = lower($1)
+          -- Only invitations tied to this account: an address alone proves
+          -- nothing, and this hands out the token that accepts it.
+          WHERE i.invitee_id = $1
             AND i.accepted_at IS NULL
             AND i.expires_at > now()
             -- An invitation to a workspace already joined some other way is moot.
             AND NOT EXISTS (
-              SELECT 1 FROM workspace_members m WHERE m.workspace_id = i.workspace_id AND m.user_id = $2
+              SELECT 1 FROM workspace_members m WHERE m.workspace_id = i.workspace_id AND m.user_id = $1
             )
           ORDER BY i.created_at DESC`,
-        [user.email, user.id],
+        [user.id],
       ),
       query<ChannelRow>(
         `SELECT c.id AS channel_id,
@@ -385,8 +387,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
     if (!z.string().uuid().safeParse(req.params.id).success) throw notFound('Invitation not found');
     const { rowCount } = await query(
       `DELETE FROM workspace_invites
-        WHERE id = $1 AND lower(email) = lower($2) AND accepted_at IS NULL`,
-      [req.params.id, req.user!.email],
+        WHERE id = $1 AND invitee_id = $2 AND accepted_at IS NULL`,
+      [req.params.id, req.user!.id],
     );
     if (!rowCount) throw notFound('Invitation not found');
     reply.status(204);

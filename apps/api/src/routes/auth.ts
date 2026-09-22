@@ -3,25 +3,33 @@ import { changePasswordSchema, loginSchema, registerSchema, updateProfileSchema 
 import { query, transaction } from '../db/pool.js';
 import { hashPassword, newSessionToken, verifyPassword } from '../lib/auth.js';
 import { badRequest, conflict, forbidden, parse, unauthorized } from '../lib/http.js';
-import { SESSION_COOKIE, sessionCookieOptions, sessionToken } from '../plugins/session.js';
+import { SESSION_COOKIE, mediaTokenFor, sessionCookieOptions, sessionToken } from '../plugins/session.js';
 import { config } from '../config.js';
 import { oidcStatus } from './oidc.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { createAccount } from '../lib/accounts.js';
 import { getServerSettings } from '../lib/serverSettings.js';
+import { passwordCheckLimits, registrationLimits, signInLimits } from '../lib/rateLimit.js';
 
 /** The account as the client sees it. */
 const USER_COLUMNS = `id, email, name, ${uploadUrlSql('avatar_key')} AS "avatarUrl"`;
 
-async function createSession(userId: string): Promise<string> {
+interface NewSession {
+  token: string;
+  /** Reads uploaded files and nothing else; see migration 0029. */
+  mediaToken: string;
+}
+
+async function createSession(userId: string): Promise<NewSession> {
   const token = newSessionToken();
-  await query(
+  const { rows } = await query<{ media_token: string }>(
     `INSERT INTO sessions (token, user_id, expires_at)
-     VALUES ($1, $2, now() + ($3 || ' days')::interval)`,
+     VALUES ($1, $2, now() + ($3 || ' days')::interval)
+     RETURNING media_token`,
     [token, userId, String(config.sessionTtlDays)],
   );
-  return token;
+  return { token, mediaToken: rows[0].media_token };
 }
 
 /**
@@ -32,21 +40,47 @@ async function createSession(userId: string): Promise<string> {
  */
 const TOKEN_HEADER = 'x-paradocs-session';
 
-function issueSession(req: FastifyRequest, reply: FastifyReply, token: string): { token?: string } {
-  if (req.headers[TOKEN_HEADER] === 'token') return { token };
-  reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions());
+function issueSession(req: FastifyRequest, reply: FastifyReply, session: NewSession): Partial<NewSession> {
+  if (req.headers[TOKEN_HEADER] === 'token') return session;
+  reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions());
   return {};
 }
 
+/**
+ * Checks the password of someone already signed in, before a change that
+ * should take more than a session. Accounts created through a provider have
+ * no password yet, so there is nothing to check for them.
+ */
+async function confirmPassword(userId: string, given: string | undefined): Promise<void> {
+  const { rows } = await query<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [
+    userId,
+  ]);
+  const current = rows[0]?.password_hash ?? null;
+  if (!current) return;
+  if (!given) throw badRequest('Enter your current password');
+  passwordCheckLimits.check(userId);
+  if (!(await verifyPassword(given, current))) {
+    passwordCheckLimits.failed(userId);
+    throw forbidden('That is not your current password');
+  }
+}
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/auth/me', async (req) => ({
-    user: req.user,
-    allowRegistration: (await getServerSettings()).allowRegistration,
-    oidc: oidcStatus(),
-  }));
+  app.get('/auth/me', async (req) => {
+    // A client signed in with a bearer token also needs the files-only token
+    // to load pictures with; a cookie does that by itself in a browser.
+    const bearer = req.user && req.headers.authorization?.startsWith('Bearer ') ? sessionToken(req) : undefined;
+    return {
+      user: req.user,
+      allowRegistration: (await getServerSettings()).allowRegistration,
+      oidc: oidcStatus(),
+      ...(bearer ? { mediaToken: await mediaTokenFor(bearer) } : {}),
+    };
+  });
 
   app.post('/auth/register', async (req, reply) => {
     const input = parse(registerSchema, req.body);
+    registrationLimits.check(req.ip);
 
     // Registration can be closed from the admin page, but the very first account
     // is always allowed so a fresh install is never locked out of itself.
@@ -60,12 +94,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       createAccount(client, { email: input.email, name: input.name, passwordHash }),
     );
 
-    const token = await createSession(user.id);
-    return { user: { ...user, avatarUrl: null }, ...issueSession(req, reply, token) };
+    const session = await createSession(user.id);
+    return { user: { ...user, avatarUrl: null }, ...issueSession(req, reply, session) };
   });
 
   app.post('/auth/login', async (req, reply) => {
     const input = parse(loginSchema, req.body);
+    signInLimits.check(req.ip, input.email);
     const { rows } = await query<{
       id: string;
       email: string;
@@ -81,14 +116,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const row = rows[0];
     // Hash even when the user is missing, so timing does not reveal which emails exist.
     const ok = await verifyPassword(input.password, row?.password_hash ?? 'scrypt$00$00');
-    if (!row || !ok) throw unauthorized('Incorrect email or password');
+    if (!row || !ok) {
+      signInLimits.failed(input.email);
+      throw unauthorized('Incorrect email or password');
+    }
+    signInLimits.succeeded(input.email);
     // Said only to someone who knows the password, so it reveals nothing to a guesser.
     if (row.disabled) throw forbidden('This account has been disabled. Contact the server administrator.');
 
-    const token = await createSession(row.id);
+    const session = await createSession(row.id);
     return {
       user: { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatarUrl },
-      ...issueSession(req, reply, token),
+      ...issueSession(req, reply, session),
     };
   });
 
@@ -97,6 +136,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const input = parse(updateProfileSchema, req.body);
 
     if (input.email && input.email.toLowerCase() !== req.user.email.toLowerCase()) {
+      // An email address is what invitations are addressed to, so taking a
+      // new one is guarded like a password change: a session left open on
+      // someone else's screen is not enough.
+      await confirmPassword(req.user.id, input.currentPassword);
       const { rows } = await query('SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2', [
         input.email,
         req.user.id,
@@ -128,20 +171,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     if (!req.user) throw unauthorized();
     const input = parse(changePasswordSchema, req.body);
 
-    const { rows } = await query<{ password_hash: string | null }>(
-      'SELECT password_hash FROM users WHERE id = $1',
-      [req.user.id],
-    );
-    const current = rows[0]?.password_hash ?? null;
-
-    // Accounts created through a provider have no password yet, so there is
-    // nothing to verify the first time they set one.
-    if (current) {
-      if (!input.currentPassword) throw badRequest('Enter your current password');
-      if (!(await verifyPassword(input.currentPassword, current))) {
-        throw forbidden('That is not your current password');
-      }
-    }
+    await confirmPassword(req.user.id, input.currentPassword);
 
     const hash = await hashPassword(input.newPassword);
     const keep = sessionToken(req) ?? '';

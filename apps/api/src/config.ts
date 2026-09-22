@@ -85,6 +85,19 @@ function megabytes(name: string, fallback: number): number {
   return Math.floor(value * 1024 * 1024);
 }
 
+/**
+ * Whether to believe X-Forwarded-For about who a request came from. Behind
+ * Caddy or another reverse proxy every request arrives from the proxy, so
+ * per-address limits would count the whole server as one address. Only set it
+ * when nothing can reach the app except through the proxy, or anyone can claim
+ * any address. `true`, or the proxy's addresses as a comma-separated list.
+ */
+function trustProxySetting(): boolean | string {
+  const raw = process.env.TRUST_PROXY?.trim() ?? '';
+  if (!raw || raw.toLowerCase() === 'false') return false;
+  return raw.toLowerCase() === 'true' ? true : raw;
+}
+
 /** Where the iOS and Android apps serve their bundled client from. */
 const MOBILE_APP_ORIGINS = ['capacitor://localhost', 'https://localhost'];
 
@@ -104,6 +117,7 @@ export const config = {
     ...(process.env.ALLOW_MOBILE_APP === 'false' ? [] : MOBILE_APP_ORIGINS),
   ],
   secureCookies: process.env.SECURE_COOKIES === 'true',
+  trustProxy: trustProxySetting(),
   uploadDir: path.resolve(here, '../../..', process.env.UPLOAD_DIR ?? './data/uploads'),
   /**
    * The largest file anyone can upload, whether to chat, a document or a

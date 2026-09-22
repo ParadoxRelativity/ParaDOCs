@@ -85,6 +85,7 @@ Settings Compose reads from `.env`:
 | `PORT` | `4000` | Host port the app is published on |
 | `BIND_ADDR` | `0.0.0.0` | Interface the app is published on. Use `127.0.0.1` behind HTTPS. |
 | `SECURE_COOKIES` | `false` | `true` in the HTTPS setup. Must stay `false` over plain HTTP. |
+| `TRUST_PROXY` | `false` | `true` in the HTTPS setup, so rate limits see client addresses. Leave `false` when the app is published directly. |
 | `ALLOW_REGISTRATION` | `true` | Whether sign-ups start open, until changed on the admin page (section 5) |
 | `ADMIN_ENABLED` | `true` | Set `false` to not serve the server admin page |
 | `ADMIN_PORT` | `4001` | Host port the server admin page is published on |
@@ -136,6 +137,9 @@ For anything reachable from the internet.
    BIND_ADDR=127.0.0.1
    # Session cookies must be marked Secure once traffic is HTTPS.
    SECURE_COOKIES=true
+   # Only Caddy reaches the app, so its X-Forwarded-For can be believed, and
+   # sign-in rate limits count each person's address rather than Caddy's.
+   TRUST_PROXY=true
    ```
 
 4. Start everything:

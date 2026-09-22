@@ -251,6 +251,7 @@ export function useChatEvents({
             void qc.invalidateQueries({ queryKey: keys.workItem(event.itemId) });
             void qc.invalidateQueries({ queryKey: keys.workItemTimeline(event.itemId) });
             void qc.invalidateQueries({ queryKey: keys.workItemBacklinks(event.itemId) });
+            void qc.invalidateQueries({ queryKey: keys.workItemAttachments(event.itemId) });
             void qc.invalidateQueries({ queryKey: ['workItemRef', event.itemId] });
           } else {
             // A status renamed or recoloured changes every chip in the project.

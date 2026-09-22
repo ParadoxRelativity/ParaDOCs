@@ -49,6 +49,7 @@ import {
   type WorkItem,
   type WorkItemActivity,
   type WorkItemActivityData,
+  type WorkItemAttachment,
   type WorkItemBacklinks,
   type WorkItemComment,
   type WorkItemLink,
@@ -74,7 +75,15 @@ import {
 } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { resolveReferences, resolveWorkItems } from '../lib/chatReferences.js';
-import { uploadUrlSql } from '../lib/storage.js';
+import {
+  dimension,
+  displayName,
+  removeStoredFile,
+  removeStoredFiles,
+  storeUpload,
+  uploadLimits,
+  uploadUrlSql,
+} from '../lib/storage.js';
 import { notifyAboutWorkItem, projectChanged, syncWorkItemMentions } from '../lib/workItems.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
@@ -175,6 +184,11 @@ function authorJson(alias: string): string {
     ELSE json_build_object('id', ${alias}.id, 'name', ${alias}.name, 'email', ${alias}.email,
                            'avatarUrl', ${uploadUrlSql(`${alias}.avatar_key`)}) END`;
 }
+
+/** A work item attachment aliased `a`, with its uploader aliased `u`, as a WorkItemAttachment. */
+const ATTACHMENT_COLUMNS = `a.id, a.filename, a.mime_type AS "mimeType", a.byte_size::float8 AS "byteSize",
+  '/uploads/' || a.storage_key AS url, a.width, a.height, ${authorJson('u')} AS uploader,
+  a.created_at AS "createdAt"`;
 
 /** How the type of the item aliased `i` looks, as JSON, for showing it outside its project. */
 const ITEM_TYPE_LOOK = `(SELECT json_build_object('name', t.name, 'icon', t.icon, 'color', t.color, 'epic', t.epic)
@@ -830,7 +844,17 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     if (!managesAccess(role) && rows[0]?.created_by !== req.user!.id) {
       throw forbidden('Only an owner, an admin or whoever made this project can delete it. You can archive it instead.');
     }
+    // The rows for its items' files cascade away with it, so the files are collected first.
+    const { rows: files } = await query<{ storage_key: string }>(
+      `SELECT a.storage_key FROM work_item_attachments a
+         JOIN work_items i ON i.id = a.work_item_id WHERE i.project_id = $1`,
+      [req.params.id],
+    );
     await query('DELETE FROM projects WHERE id = $1', [req.params.id]);
+    await removeStoredFiles(
+      files.map((f) => f.storage_key),
+      req.log,
+    );
     projectChanged(workspaceId, req.params.id);
     reply.status(204);
   });
@@ -1781,6 +1805,98 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     reply.status(204);
   });
 
+  // --- attachments -------------------------------------------------------------
+
+  app.get<{ Params: { id: string } }>('/work-items/:id/attachments', async (req): Promise<WorkItemAttachment[]> => {
+    await assertWorkItemAccess(req, req.params.id);
+    const { rows } = await query<WorkItemAttachment>(
+      `SELECT ${ATTACHMENT_COLUMNS} FROM work_item_attachments a LEFT JOIN users u ON u.id = a.uploader_id
+        WHERE a.work_item_id = $1 ORDER BY a.created_at`,
+      [req.params.id],
+    );
+    return rows;
+  });
+
+  /** Attaches one file. Anyone who can change the item can add to it. */
+  app.post<{ Params: { id: string } }>('/work-items/:id/attachments', async (req, reply) => {
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const file = await req.file(uploadLimits());
+    if (!file) throw badRequest('No file was uploaded');
+
+    // Sent ahead of the file by the client, which measures images and videos
+    // so they hold their shape before they load. Only a matching pair is kept.
+    const fields = file.fields as Record<string, { value?: unknown } | undefined>;
+    const width = dimension(fields?.width?.value);
+    const height = dimension(fields?.height?.value);
+    const measured = width !== null && height !== null;
+    const filename = displayName(file.filename);
+
+    const { storageKey, byteSize } = await storeUpload(file, `work-items/${req.params.id}`);
+    let id: string;
+    try {
+      id = await transaction(async (client) => {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO work_item_attachments
+             (work_item_id, uploader_id, filename, mime_type, byte_size, storage_key, width, height)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+          [
+            req.params.id,
+            req.user!.id,
+            filename,
+            (file.mimetype || 'application/octet-stream').slice(0, 100),
+            byteSize,
+            storageKey,
+            measured ? width : null,
+            measured ? height : null,
+          ],
+        );
+        await logActivity(client, req.params.id, req.user!.id, { kind: 'attachment', filename, added: true });
+        await client.query('UPDATE work_items SET updated_at = now() WHERE id = $1', [req.params.id]);
+        return rows[0].id;
+      });
+    } catch (err) {
+      // The item went away while the file was arriving.
+      await removeStoredFile(storageKey);
+      throw err;
+    }
+
+    projectChanged(workspaceId, projectId, req.params.id);
+    const { rows } = await query<WorkItemAttachment>(
+      `SELECT ${ATTACHMENT_COLUMNS} FROM work_item_attachments a LEFT JOIN users u ON u.id = a.uploader_id
+        WHERE a.id = $1`,
+      [id],
+    );
+    reply.status(201);
+    return rows[0];
+  });
+
+  app.delete<{ Params: { id: string } }>('/work-item-attachments/:id', async (req, reply) => {
+    if (!UUID.test(req.params.id)) throw notFound('File not found');
+    const { rows } = await query<{ work_item_id: string }>(
+      'SELECT work_item_id FROM work_item_attachments WHERE id = $1',
+      [req.params.id],
+    );
+    if (!rows[0]) throw notFound('File not found');
+    const itemId = rows[0].work_item_id;
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, itemId, 'edit');
+
+    const removed = await transaction(async (client) => {
+      const { rows: gone } = await client.query<{ storage_key: string; filename: string }>(
+        'DELETE FROM work_item_attachments WHERE id = $1 RETURNING storage_key, filename',
+        [req.params.id],
+      );
+      if (!gone[0]) return null;
+      await logActivity(client, itemId, req.user!.id, { kind: 'attachment', filename: gone[0].filename, added: false });
+      await client.query('UPDATE work_items SET updated_at = now() WHERE id = $1', [itemId]);
+      return gone[0];
+    });
+    if (!removed) throw notFound('File not found');
+
+    await removeStoredFile(removed.storage_key);
+    projectChanged(workspaceId, projectId, itemId);
+    reply.status(204);
+  });
+
   app.put<{ Params: { id: string; roleId: string } }>('/work-items/:id/roles/:roleId', async (req) => {
     const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
     const input = parse(setWorkItemRoleSchema, req.body ?? {});
@@ -1843,7 +1959,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { id: string } }>('/work-items/:id', async (req, reply) => {
     const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    // The rows for its files cascade away with it, so the files are collected first.
+    const { rows: files } = await query<{ storage_key: string }>(
+      'SELECT storage_key FROM work_item_attachments WHERE work_item_id = $1',
+      [req.params.id],
+    );
     await query('DELETE FROM work_items WHERE id = $1', [req.params.id]);
+    await removeStoredFiles(
+      files.map((f) => f.storage_key),
+      req.log,
+    );
     projectChanged(workspaceId, projectId, req.params.id);
     reply.status(204);
   });
