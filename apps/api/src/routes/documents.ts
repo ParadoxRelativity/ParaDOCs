@@ -7,6 +7,7 @@ import { resolveSheetRefs } from './spreadsheets.js';
 import { replaceSheetRefs, sheetRefsInMarkdown } from '@paradocs/shared';
 import { blocksToMarkdown, deriveTitle } from '../lib/blocksToMarkdown.js';
 import { documentSummaryColumns } from '../lib/documentColumns.js';
+import { treeChanged } from '../lib/treeEvents.js';
 import {
   assertFolderAccess,
   assertMoveKeepsAccess,
@@ -117,6 +118,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       return rows[0].id;
     });
 
+    treeChanged(req.params.id, 'docs');
     reply.status(201);
     return fetchDocument(id, req.user!.id);
   });
@@ -182,12 +184,20 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       if (input.tagIds) await replaceTags(client, req.params.id, workspaceId, input.tagIds);
     });
 
+    // The tree and listings show everything but the body and custom properties,
+    // the same rule the client uses to decide what to refresh after its own edit.
+    const contentOnly = Object.keys(input).every(
+      (key) => key === 'body' || key === 'bodyMd' || key === 'properties',
+    );
+    if (!contentOnly) treeChanged(workspaceId, 'docs');
+
     return fetchDocument(req.params.id, req.user!.id);
   });
 
   app.delete<{ Params: { id: string } }>('/documents/:id', async (req, reply) => {
-    await assertDocumentAccess(req, req.params.id, 'editor');
+    const { workspaceId } = await assertDocumentAccess(req, req.params.id, 'editor');
     await query('DELETE FROM documents WHERE id = $1', [req.params.id]);
+    treeChanged(workspaceId, 'docs');
     reply.status(204);
   });
 

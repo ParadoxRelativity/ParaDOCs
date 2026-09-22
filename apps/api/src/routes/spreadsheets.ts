@@ -7,6 +7,7 @@ import { assertWorkspaceAccess } from '../plugins/session.js';
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
 import { assertFolderAccess, assertMoveKeepsAccess, assertSpreadsheetAccess, roleSql, spreadsheetLevelSql } from '../lib/access.js';
 import { spreadsheetSummaryColumns } from '../lib/documentColumns.js';
+import { treeChanged } from '../lib/treeEvents.js';
 import { loadWorkbook, resolveInWorkbook, type Workbook } from '../lib/workbook.js';
 import { isValidSheetRef, sheetRefKey, type ResolvedSheetRef, type SheetRef } from '@paradocs/shared';
 
@@ -101,6 +102,7 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
        RETURNING id`,
       [req.params.id, input.folderId ?? null, input.title || 'Untitled', input.icon ?? null, req.user!.id],
     );
+    treeChanged(req.params.id, 'sheets');
     reply.status(201);
     return fetchSheet(rows[0].id, req.user!.id);
   });
@@ -147,12 +149,14 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
         input.folderId ?? null,
       ],
     );
+    treeChanged(workspaceId, 'sheets');
     return fetchSheet(req.params.id, req.user!.id);
   });
 
   app.delete<{ Params: { id: string } }>('/spreadsheets/:id', async (req, reply) => {
-    await assertSpreadsheetAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertSpreadsheetAccess(req, req.params.id, 'edit');
     await query('DELETE FROM spreadsheets WHERE id = $1', [req.params.id]);
+    treeChanged(workspaceId, 'sheets');
     reply.status(204);
   });
 

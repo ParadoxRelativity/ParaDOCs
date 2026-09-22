@@ -7,6 +7,7 @@ import { badRequest, notFound, parse } from '../lib/http.js';
 import { blocksToMarkdown } from '../lib/blocksToMarkdown.js';
 import { removeStoredFile, storeUpload, uploadLimits } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
+import { treeChanged } from '../lib/treeEvents.js';
 
 const attachSchema = z.object({
   title: z.string().max(300).optional(),
@@ -174,6 +175,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
         return created[0];
       });
 
+      treeChanged(req.params.id, 'docs');
       reply.status(201);
       return { document };
     },

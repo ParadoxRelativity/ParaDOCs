@@ -259,6 +259,16 @@ export function useChatEvents({
           }
           void qc.invalidateQueries({ queryKey: keys.notifications });
           return;
+        case 'tree.changed':
+          // Ids only, as with projects: the sidebar and listings ask again.
+          if (event.app === 'sheets') {
+            void qc.invalidateQueries({ queryKey: keys.sheetTree(event.workspaceId) });
+            void qc.invalidateQueries({ queryKey: keys.spreadsheets(event.workspaceId) });
+          } else {
+            void qc.invalidateQueries({ queryKey: keys.tree(event.workspaceId) });
+            void qc.invalidateQueries({ queryKey: ['allDocuments', event.workspaceId] });
+          }
+          return;
         case 'voice.changed':
           qc.setQueryData<Record<string, VoiceOccupant[]>>(keys.voiceParticipants(event.workspaceId), (current) => {
             if (!current) return current;
@@ -293,13 +303,15 @@ export function useChatEvents({
   );
 
   // Whatever changed while the socket was down went unheard. Who is around, who
-  // is in which voice channel and the direct conversation list are cheap to ask
-  // for again.
+  // is in which voice channel, the direct conversation list and the file trees
+  // are cheap to ask for again.
   useEffect(() => {
     if (status !== 'connected' || !workspaceId) return;
     void qc.invalidateQueries({ queryKey: keys.presence(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.voiceParticipants(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
+    void qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
+    void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
   }, [status, workspaceId, qc]);
 
   // Another tab may have been the one to ask.

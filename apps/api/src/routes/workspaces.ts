@@ -23,6 +23,7 @@ import {
   spreadsheetLevelSql,
 } from '../lib/access.js';
 import { accessChanged } from '../lib/accessEvents.js';
+import { treeChanged } from '../lib/treeEvents.js';
 import { enabledAppsSql } from '../lib/apps.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
 import { removeStoredFile, removeStoredFiles, uploadUrlSql } from '../lib/storage.js';
@@ -338,6 +339,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
        RETURNING ${FOLDER_COLUMNS}`,
       [req.params.id, input.parentId ?? null, input.name, input.icon ?? null, input.position ?? null, input.app],
     );
+    treeChanged(req.params.id, input.app ?? 'docs');
     reply.status(201);
     return rows[0];
   });
@@ -387,6 +389,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         input.position ?? null,
       ],
     );
+    treeChanged(workspaceId, folderApp);
     return rows[0];
   });
 
@@ -399,7 +402,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.delete<{ Params: { id: string }; Querystring: { documents?: string; contents?: string } }>(
     '/folders/:id',
     async (req, reply) => {
-      const { role, app: folderApp } = await assertFolderAccess(req, req.params.id, 'edit');
+      const { workspaceId, role, app: folderApp } = await assertFolderAccess(req, req.params.id, 'edit');
       const deleteContents = req.query.contents === 'delete' || req.query.documents === 'delete';
       const items = FOLDER_CONTENTS[folderApp];
       if (!managesAccess(role)) {
@@ -433,6 +436,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           ]);
           await client.query('DELETE FROM folders WHERE id = $1', [req.params.id]);
         });
+        treeChanged(workspaceId, folderApp);
         reply.status(204);
         return;
       }
@@ -468,6 +472,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         }
         await client.query('DELETE FROM folders WHERE id = $1', [req.params.id]);
       });
+      treeChanged(workspaceId, folderApp);
       reply.status(204);
     },
   );

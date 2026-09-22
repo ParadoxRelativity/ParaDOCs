@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { PresenceStatus } from './presence.js';
 import type { ProjectKind, StatusCategory } from './projects.js';
-import type { AccessMode, Permission } from './types.js';
+import type { AccessMode, FolderApp, Permission } from './types.js';
 
 /**
  * A voice channel is a place to meet; it carries no messages. A direct
@@ -335,6 +335,12 @@ export type WorkspaceEvent =
    * in the workspace; whoever cares asks for what they are allowed to see.
    */
   | { type: 'projects.changed'; workspaceId: string; projectId: string; itemId?: string }
+  /**
+   * Something in the Docs or Sheets tree was added, renamed, moved or removed:
+   * a folder, or what is filed in one. Ids only, like `projects.changed`;
+   * whoever shows the tree asks again and sees what they are allowed to.
+   */
+  | { type: 'tree.changed'; workspaceId: string; app: FolderApp }
   /** Everyone now in a voice channel; an empty list means it has emptied. */
   | { type: 'voice.changed'; workspaceId: string; channelId: string; occupants: VoiceOccupant[] };
 
