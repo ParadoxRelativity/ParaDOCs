@@ -43,6 +43,12 @@ export interface CanvasElementBase {
   z: number;
   color?: string;
   createdBy?: string;
+  /**
+   * Elements sharing a group id are selected and moved together. A field on
+   * each member rather than a group element, so a group needs no upkeep: a
+   * deleted member simply stops being in it.
+   */
+  groupId?: string;
 }
 
 export interface NoteElement extends CanvasElementBase {

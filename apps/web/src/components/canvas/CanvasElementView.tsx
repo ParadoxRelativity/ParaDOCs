@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   dashArray,
   shapePolygon,
@@ -30,21 +30,31 @@ interface Props {
   dark: boolean;
   /** Who can be tagged in this element's text, and whose names tags resolve to. */
   members: WorkspaceMember[];
-  onChange: (patch: Partial<CanvasElement>) => void;
-  onStopEditing: () => void;
+  /** Takes the element's id so one stable function serves every element, and memoising holds. */
+  onUpdate: (id: string, patch: Partial<CanvasElement>) => void;
+  onStopEditing: (id: string) => void;
   onOpenDocument: (documentId: string) => void;
 }
 
-export default function CanvasElementView({
+/**
+ * Memoised: panning, zooming or moving one element re-renders the board, and
+ * an element whose own props have not changed — a spreadsheet chart, an
+ * embedded document — should not be redrawn for it.
+ */
+export default memo(CanvasElementView);
+
+function CanvasElementView({
   element,
   selected,
   editing,
   dark,
   members,
-  onChange,
-  onStopEditing,
+  onUpdate,
+  onStopEditing: stopEditing,
   onOpenDocument,
 }: Props) {
+  const onChange = (patch: Partial<CanvasElement>) => onUpdate(element.id, patch);
+  const onStopEditing = () => stopEditing(element.id);
   switch (element.type) {
     case 'note':
       return (

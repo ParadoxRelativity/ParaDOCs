@@ -1,6 +1,6 @@
 {
   "name": "@paradocs/mobile",
-  "version": "0.12.4",
+  "version": "0.13.0",
   "private": true,
   "description": "ParaDOCs mobile app for iOS and Android",
   "scripts": {

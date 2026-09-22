@@ -8,6 +8,8 @@ import { mentionHref, mentionLabel, projectPath, type Doc } from '@paradocs/shar
 import { useAppEnabled, useChannels, useMembers, useUploadFile, type DocumentPatch } from '../api/hooks';
 import { cx, useAutosave } from '../lib/util';
 import { claimNewDocument } from '../lib/newDocuments';
+import { applyDocumentImport, claimDocumentImport } from '../lib/documentImport';
+import { useToast } from './Toast';
 import { useCollaboration, type CollabSession, type Peer } from '../lib/collaboration';
 import DocumentMeta from './DocumentMeta';
 import CanvasEditor from './canvas/CanvasEditor';
@@ -17,6 +19,7 @@ import { documentSchema } from './documentSchema';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
 import { ProjectPicker, WorkItemPicker } from './projects/WorkItemRefs';
 import { copyEditorSelection } from '../lib/documentClipboard';
+import { suggestionMenuPosition } from '../lib/suggestionMenuPosition';
 import { assetUrl, serverPath } from '../lib/server';
 
 interface Props {
@@ -195,6 +198,35 @@ function EditorSurface({
     el?.select();
   }, [doc.id, canEdit]);
 
+  // A document made by importing a file arrives empty, with the file's contents
+  // waiting to be written in. That waits for the server's copy to arrive, so
+  // the import replaces it rather than landing beside it.
+  const toast = useToast();
+  useEffect(() => {
+    const imported = claimDocumentImport(doc.id);
+    if (!imported || !canEdit) return;
+    const { provider } = session;
+    const write = () => {
+      provider.off('synced', write);
+      applyDocumentImport(editor, imported, async (file) =>
+        serverPath((await upload.mutateAsync({ file, documentId: doc.id })).url),
+      )
+        .then(({ missingMedia }) =>
+          toast(
+            missingMedia > 0
+              ? `Imported ${imported.fileName}. ${missingMedia} image(s) or file(s) could not be brought in.`
+              : `Imported ${imported.fileName}`,
+          ),
+        )
+        .catch((err) => toast(err instanceof Error ? err.message : 'Could not import that file', 'error'));
+    };
+    if (provider.isSynced) write();
+    else provider.on('synced', write);
+    // Claiming consumes it, so this runs once per imported document. Not undone
+    // on cleanup: StrictMode's second run finds nothing left to claim.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.id]);
+
   return (
     <div className="scroll-thin h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-12 py-10">
@@ -254,6 +286,7 @@ function EditorSurface({
             onChange={() => onBlocksChange(editor.document)}
           >
             <SuggestionMenuController
+              floatingUIOptions={suggestionMenuPosition}
               triggerCharacter="/"
               getItems={async (queryText) =>
                 filterSuggestionItems(
@@ -310,6 +343,7 @@ function EditorSurface({
                 markdown derived for search reads "@Ada Lovelace", and the
                 server reads the id out of the href to tell them. */}
             <SuggestionMenuController
+              floatingUIOptions={suggestionMenuPosition}
               triggerCharacter="@"
               getItems={async (queryText) => {
                 const needle = queryText.toLowerCase();
@@ -334,6 +368,7 @@ function EditorSurface({
               }}
             />
             <SuggestionMenuController
+              floatingUIOptions={suggestionMenuPosition}
               triggerCharacter="#"
               getItems={async (queryText) => {
                 const needle = queryText.toLowerCase();

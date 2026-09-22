@@ -156,8 +156,8 @@ export default function PresentMode({
                 editing={false}
                 dark={dark}
                 members={members}
-                onChange={() => {}}
-                onStopEditing={() => {}}
+                onUpdate={noop}
+                onStopEditing={noop}
                 onOpenDocument={onOpenDocument}
               />
             </div>
@@ -188,3 +188,5 @@ export default function PresentMode({
     </div>
   );
 }
+
+function noop() {}

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ANCHOR_SIDES,
+  canvasSearchText,
   connectorPath,
   resolveEndpoints,
   routeHandle,
@@ -17,11 +18,23 @@ import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import CanvasElementView from './CanvasElementView';
 import Connectors from './Connectors';
+import { useMemberNames } from './MentionText';
+import { groupIndex, snapMove, snapResize, unionRect, withGroups, type Guide, type Rect } from '../../lib/canvasArrange';
 
 export interface Viewport {
   x: number;
   y: number;
   scale: number;
+}
+
+/** An element on its way — an upload, a document being made — drawn until the real one lands. */
+export interface PendingBox {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string;
 }
 
 interface Props {
@@ -37,13 +50,14 @@ interface Props {
   connectorTool: boolean;
   /** When set, dragging on the board draws a shape of this kind. */
   shapeTool: ShapeKind | null;
-  onDrawShape: (rect: { x: number; y: number; width: number; height: number }) => void;
+  /** `keep` is true when Shift was held, asking for the tool to stay on for another. */
+  onDrawShape: (rect: { x: number; y: number; width: number; height: number }, keep: boolean) => void;
   /**
    * The size of an element waiting to be placed. While set, an outline of it
    * follows the pointer and the next click on the board places it there.
    */
   placing: { width: number; height: number } | null;
-  onPlace: (point: { x: number; y: number }) => void;
+  onPlace: (point: { x: number; y: number }, keep: boolean) => void;
   onConnect: (
     from: { id: string; side: AnchorSide },
     to: { id: string; side: AnchorSide },
@@ -51,26 +65,65 @@ interface Props {
   onUpdate: (id: string, patch: Partial<CanvasElement>) => void;
   /** Called once per gesture, so a drag is a single undoable change. */
   onCommit: (updates: { id: string; patch: Partial<CanvasElement> }[]) => void;
-  onBringToFront: (id: string) => void;
+  /** Called after elements have been dragged, which lifts them above what they were dropped on. */
+  onBringToFront: (ids: string[]) => void;
   onOpenDocument: (documentId: string) => void;
   dark: boolean;
   onDeleteSelection: () => void;
   onCreateNoteAt: (point: { x: number; y: number }) => void;
   /** Adds a child under a mind-map node; works at any depth. */
   onAddChild: (parentId: string) => void;
-  /** Set by the editor to open a freshly created element for typing. */
-  editRequestId: string | null;
+  /** Adds a node beside a mind-map node, under the same parent. */
+  onAddSibling: (nodeId: string) => void;
+  /**
+   * Set by the editor to open an element for typing. The sequence number lets
+   * the same element be asked for twice in a row.
+   */
+  editRequest: { id: string; seq: number } | null;
   /** Files pasted or dropped onto the board, with the drop point in canvas units. */
   onFiles: (files: File[], point: { x: number; y: number }) => void;
+  /** Anything else pasted onto the board. Returns true when it was used. */
+  onPasteData: (data: DataTransfer, point: { x: number; y: number }) => boolean;
   /** The pointer's position in canvas units as it moves, and null when it leaves the board. */
   onPointer?: (point: { x: number; y: number } | null) => void;
+  /** Placeholders for elements still being made. */
+  pendingBoxes: PendingBox[];
 }
 
-const MIN_SCALE = 0.1;
-const MAX_SCALE = 3;
+export const MIN_SCALE = 0.1;
+export const MAX_SCALE = 3;
 
 /** Elements whose own controls take clicks once selected: players and framed pages. */
 const LIVE_WHEN_SELECTED = new Set<CanvasElement['type']>(['video', 'audio', 'embed']);
+
+/** Elements with something to type into. */
+const EDITABLE = new Set<CanvasElement['type']>(['note', 'text', 'shape', 'node', 'frame', 'link', 'workItem']);
+
+/** How close, in screen pixels, an edge must come to another before it snaps to it. */
+const SNAP_DISTANCE = 6;
+
+/** Pictures keep their proportions when resized unless Shift is held; everything else, only while it is. */
+const KEEP_RATIO = new Set<CanvasElement['type']>(['image', 'video']);
+
+const TYPE_LABELS: Record<CanvasElement['type'], string> = {
+  note: 'Sticky note',
+  text: 'Text',
+  link: 'Document',
+  embed: 'Embedded page',
+  image: 'Image',
+  audio: 'Audio',
+  video: 'Video',
+  shape: 'Shape',
+  node: 'Mind map node',
+  frame: 'Frame',
+  connector: 'Connector',
+  sheetCell: 'Spreadsheet cell',
+  sheetChart: 'Spreadsheet chart',
+  workItem: 'Work item',
+};
+
+type Corner = 'nw' | 'ne' | 'sw' | 'se';
+const CORNERS: Corner[] = ['nw', 'ne', 'sw', 'se'];
 
 export function toCanvasPoint(viewport: Viewport, clientX: number, clientY: number, rect: DOMRect) {
   return {
@@ -79,24 +132,85 @@ export function toCanvasPoint(viewport: Viewport, clientX: number, clientY: numb
   };
 }
 
+/** The viewport that shows the same canvas point under `screen` at a new scale. */
+export function zoomAround(viewport: Viewport, scale: number, screen: { x: number; y: number }): Viewport {
+  const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+  return {
+    scale: next,
+    x: screen.x - ((screen.x - viewport.x) / viewport.scale) * next,
+    y: screen.y - ((screen.y - viewport.y) / viewport.scale) * next,
+  };
+}
+
+/** A box resized by dragging one corner, the opposite corner staying put. */
+function resizeBox(
+  origin: { x: number; y: number; width: number; height: number },
+  corner: Corner,
+  dx: number,
+  dy: number,
+  keepRatio: boolean,
+) {
+  const min = 40;
+  let width = origin.width + (corner.includes('e') ? dx : -dx);
+  let height = origin.height + (corner.includes('s') ? dy : -dy);
+  if (keepRatio && origin.width > 0 && origin.height > 0) {
+    const ratio = origin.width / origin.height;
+    if (width / origin.width > height / origin.height) height = width / ratio;
+    else width = height * ratio;
+    if (width < min || height < min) {
+      const grow = Math.max(min / width, min / height);
+      width *= grow;
+      height *= grow;
+    }
+  } else {
+    width = Math.max(min, width);
+    height = Math.max(min, height);
+  }
+  return {
+    x: corner.includes('w') ? origin.x + origin.width - width : origin.x,
+    y: corner.includes('n') ? origin.y + origin.height - height : origin.y,
+    width,
+    height,
+  };
+}
+
 type Gesture =
   | { kind: 'pan'; startX: number; startY: number; originX: number; originY: number }
+  | {
+      kind: 'pinch';
+      startDistance: number;
+      startMid: { x: number; y: number };
+      origin: Viewport;
+    }
   | {
       kind: 'move';
       startX: number;
       startY: number;
       origins: Map<string, { x: number; y: number }>;
       moved: boolean;
+      /** The element pressed, and whether it was already selected: a click on it, not a drag, narrows the selection. */
+      pressed: string;
+      wasSelected: boolean;
+      /** What is being dragged, as one box, and what it can line up with. */
+      bounds: Rect;
+      others: Rect[];
+      /** The offset so far, snapping included, which is what the release commits. */
+      dx: number;
+      dy: number;
     }
   | {
       kind: 'resize';
       id: string;
+      corner: Corner;
       startX: number;
       startY: number;
-      origin: { width: number; height: number };
+      origin: { x: number; y: number; width: number; height: number };
+      keepRatio: boolean;
       moved: boolean;
+      last: { x: number; y: number; width: number; height: number };
+      others: Rect[];
     }
-  | { kind: 'marquee'; startX: number; startY: number }
+  | { kind: 'marquee'; startX: number; startY: number; additive: boolean }
   | { kind: 'draw'; startX: number; startY: number }
   | {
       kind: 'route';
@@ -107,13 +221,36 @@ type Gesture =
     };
 
 export default function CanvasSurface(props: Props) {
-  const { elements, viewport, onViewportChange, selectedIds, onSelectionChange, editable } = props;
+  const { elements, viewport, selectedIds, onSelectionChange, editable } = props;
   const surface = useRef<HTMLDivElement>(null);
   const nodes = useRef(new Map<string, HTMLDivElement>());
   const gesture = useRef<Gesture | null>(null);
+  // Window listeners are bound once and read what they need from here, rather
+  // than being torn down and re-bound on every render and every frame of a pan.
+  const latest = useRef(props);
+  latest.current = props;
+
+  // The viewport as it is right now. A pan or a pinch moves it many times a
+  // frame; the editor is told at most once a frame, and until it re-renders
+  // this is the truth every screen-to-canvas conversion must use.
+  const live = useRef(viewport);
+  const frame = useRef(0);
+  useLayoutEffect(() => {
+    if (!frame.current) live.current = viewport;
+  }, [viewport]);
+  const setViewport = useCallback((next: Viewport) => {
+    live.current = next;
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      latest.current.onViewportChange(live.current);
+    });
+  }, []);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
+  const spaceRef = useRef(false);
   const [hoverId, setHoverId] = useState<string | null>(null);
   // The element under a press that is still held. Selected media stays inert
   // until the press ends: going live mid-press handed the rest of the gesture
@@ -143,13 +280,61 @@ export default function CanvasSurface(props: Props) {
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
   // A double-click whose first press placed something is not also asking for a note.
   const placedAt = useRef(0);
+  // Fingers on the board, so a second one turns the gesture into a pinch.
+  const touches = useRef(new Map<number, { x: number; y: number }>());
+  // When a key was last pressed, so finishing an edit from the keyboard puts
+  // focus back on the element instead of dropping it on the page.
+  const lastKeyAt = useRef(0);
+  // The node Tab last arrived on. Tab on a selected node adds a child, but not
+  // on one the keyboard is only passing through, or Tab could never leave it.
+  const tabbedTo = useRef<string | null>(null);
+  const refocusing = useRef(false);
 
   const byId = useMemo(() => new Map(elements.map((el) => [el.id, el])), [elements]);
+  const byIdRef = useRef(byId);
+  byIdRef.current = byId;
   const connectors = useMemo(
     () => elements.filter((el): el is ConnectorElement => el.type === 'connector'),
     [elements],
   );
   const boxes = useMemo(() => elements.filter((el) => el.type !== 'connector'), [elements]);
+  const boxesRef = useRef(boxes);
+  boxesRef.current = boxes;
+  const groups = useMemo(() => groupIndex(elements), [elements]);
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+
+  // Alignment guides shown while dragging. Set only when they change, so a
+  // drag that is not lining anything up does not re-render the board.
+  const [guides, setGuides] = useState<Guide[]>([]);
+  const guidesKey = useRef('');
+  const showGuides = useCallback((next: Guide[]) => {
+    const key = JSON.stringify(next);
+    if (key === guidesKey.current) return;
+    guidesKey.current = key;
+    setGuides(next);
+  }, []);
+
+  /** Groups every member of which is selected, outlined so the group reads as one thing. */
+  const selectedGroups = useMemo(() => {
+    const seen = new Set<string[]>();
+    for (const id of selectedIds) {
+      const members = groups.get(id);
+      if (members && members.every((m) => selectedIds.has(m))) seen.add(members);
+    }
+    return [...seen].map((members) => unionRect(members.map((id) => byId.get(id)!).filter(Boolean)));
+  }, [selectedIds, groups, byId]);
+  const editingRef = useRef(editingId);
+  editingRef.current = editingId;
+
+  const names = useMemberNames(props.members);
+  const labelOf = useCallback(
+    (element: CanvasElement) => {
+      const text = canvasSearchText([element], names).replace(/\s+/g, ' ').replace(/^(#+|-) /, '').trim();
+      return text ? `${TYPE_LABELS[element.type]}: ${text.slice(0, 80)}` : TYPE_LABELS[element.type];
+    },
+    [names],
+  );
 
   // Branches are computed from the tree each render, so they follow their nodes
   // and can never be left dangling.
@@ -165,8 +350,33 @@ export default function CanvasSurface(props: Props) {
   }, [elements, byId]);
 
   useEffect(() => {
-    if (props.editRequestId) setEditingId(props.editRequestId);
-  }, [props.editRequestId]);
+    if (props.editRequest) setEditingId(props.editRequest.id);
+  }, [props.editRequest]);
+
+  /** Ends editing; from the keyboard, focus goes back to the element so the next key still acts on it. */
+  const stopEditing = useCallback((id: string) => {
+    setEditingId((current) => (current === id ? null : current));
+    if (Date.now() - lastKeyAt.current < 200) {
+      // After React has removed the text box, which is what drops focus.
+      setTimeout(() => {
+        if (document.activeElement !== document.body) return;
+        refocusing.current = true;
+        nodes.current.get(id)?.focus({ preventScroll: true });
+        refocusing.current = false;
+      });
+    }
+  }, []);
+
+  // Stable for the memoised views: the latest handlers are read at call time.
+  const onUpdate = useCallback(
+    (id: string, patch: Partial<CanvasElement>) => latest.current.onUpdate(id, patch),
+    [],
+  );
+  const onOpenDocument = useCallback((documentId: string) => latest.current.onOpenDocument(documentId), []);
+  const onSelectConnector = useCallback((id: string, additive: boolean) => {
+    const current = latest.current.selectedIds;
+    latest.current.onSelectionChange(additive ? new Set(current).add(id) : new Set([id]));
+  }, []);
 
   // --- zoom and pan ---------------------------------------------------------
 
@@ -176,83 +386,128 @@ export default function CanvasSurface(props: Props) {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = node.getBoundingClientRect();
+      const view = live.current;
       if (e.ctrlKey || e.metaKey) {
+        // Trackpad pinches arrive as ctrl+wheel too.
         const factor = Math.exp(-e.deltaY / 200);
-        const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, viewport.scale * factor));
-        const px = e.clientX - rect.left;
-        const py = e.clientY - rect.top;
-        onViewportChange({
-          scale,
-          x: px - ((px - viewport.x) / viewport.scale) * scale,
-          y: py - ((py - viewport.y) / viewport.scale) * scale,
-        });
+        setViewport(zoomAround(view, view.scale * factor, { x: e.clientX - rect.left, y: e.clientY - rect.top }));
       } else {
-        onViewportChange({ ...viewport, x: viewport.x - e.deltaX, y: viewport.y - e.deltaY });
+        // A mouse wheel only scrolls one way; with Shift it scrolls across.
+        const horizontal = e.shiftKey && e.deltaX === 0;
+        const dx = horizontal ? e.deltaY : e.deltaX;
+        const dy = horizontal ? 0 : e.deltaY;
+        setViewport({ ...view, x: view.x - dx, y: view.y - dy });
       }
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, [viewport, onViewportChange]);
+  }, [setViewport]);
 
-  // Pasting an image puts it on the board. Bound to the window because the
-  // canvas is not a focusable element, so it never receives paste itself.
+  // Pasting puts files, or copied elements, on the board. Bound to the window
+  // because the board is rarely what has focus when a paste arrives.
   useEffect(() => {
-    if (!editable) return;
     const onPaste = (e: ClipboardEvent) => {
+      const p = latest.current;
+      if (!p.editable || !e.clipboardData) return;
       const target = e.target as HTMLElement | null;
       // Never steal a paste aimed at a text field or an embedded document.
       if (target && (/input|textarea/i.test(target.tagName) || target.isContentEditable)) return;
-      const files = [...(e.clipboardData?.files ?? [])];
-      if (files.length === 0) return;
-      e.preventDefault();
+      // Nor one aimed at a dialog over the board.
+      if (target?.closest('[role="dialog"]')) return;
       const rect = surface.current?.getBoundingClientRect();
       const point =
         lastPointer.current ??
         (rect
-          ? toCanvasPoint(viewport, rect.left + rect.width / 2, rect.top + rect.height / 2, rect)
+          ? toCanvasPoint(live.current, rect.left + rect.width / 2, rect.top + rect.height / 2, rect)
           : { x: 0, y: 0 });
-      props.onFiles(files, point);
+      const files = [...e.clipboardData.files];
+      if (files.length > 0) {
+        e.preventDefault();
+        p.onFiles(files, point);
+        return;
+      }
+      if (p.onPasteData(e.clipboardData, point)) e.preventDefault();
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [editable, viewport, props]);
+  }, []);
 
-  // Space is the conventional temporary pan modifier on an infinite canvas.
+  // Keys that act on the board itself: Space to pan, Escape, Delete, and the
+  // ones that start typing into or growing the selected element.
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
+      lastKeyAt.current = Date.now();
+      const p = latest.current;
       // Embedded documents are contenteditable, not inputs. Missing that meant
       // space-to-pan swallowed every space typed into a document card, and
       // Backspace deleted the card instead of a character.
       const target = e.target as HTMLElement | null;
       const typing =
         !!target && (/input|textarea|select/i.test(target.tagName) || target.isContentEditable);
-      if (e.code === 'Space' && !typing) {
+      if (typing || target?.closest('[role="dialog"], [role="menu"]')) return;
+      // Keys pressed on a toolbar button belong to that button.
+      if (target?.closest('button') && (e.key === 'Enter' || e.code === 'Space')) return;
+      if (e.code === 'Space') {
         e.preventDefault();
+        spaceRef.current = true;
         setSpaceHeld(true);
+        return;
       }
-      if (typing) return;
       if (e.key === 'Escape') {
         setEditingId(null);
         connectMoved.current = false;
         connectArmed.current = false;
         setPending(null);
-        onSelectionChange(new Set());
+        p.onSelectionChange(new Set());
+        return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && editable && selectedIds.size > 0) {
+      if (!p.editable || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && p.selectedIds.size > 0) {
         e.preventDefault();
-        props.onDeleteSelection();
+        p.onDeleteSelection();
+        return;
+      }
+      if (e.key !== 'Tab' && e.key !== 'Shift') tabbedTo.current = null;
+      if (p.selectedIds.size !== 1) return;
+      const element = byIdRef.current.get([...p.selectedIds][0]);
+      if (!element) return;
+      // Mind maps grow from the keyboard: Tab for a child, Enter for a sibling.
+      if (element.type === 'node' && e.key === 'Tab' && !e.shiftKey) {
+        if (tabbedTo.current === element.id) return;
+        e.preventDefault();
+        p.onAddChild(element.id);
+        return;
+      }
+      if (element.type === 'node' && e.key === 'Enter' && element.parentId) {
+        e.preventDefault();
+        p.onAddSibling(element.id);
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'F2') && EDITABLE.has(element.type)) {
+        e.preventDefault();
+        setEditingId(element.id);
       }
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') setSpaceHeld(false);
+      if (e.code === 'Space') {
+        spaceRef.current = false;
+        setSpaceHeld(false);
+      }
     };
-    window.addEventListener('keydown', down);
+    // Letting go of Space in another window must not leave the board panning.
+    const blur = () => {
+      spaceRef.current = false;
+      setSpaceHeld(false);
+    };
+    window.addEventListener('keydown', down, true);
     window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
     return () => {
-      window.removeEventListener('keydown', down);
+      window.removeEventListener('keydown', down, true);
       window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
     };
-  }, [editable, selectedIds, onSelectionChange, props]);
+  }, []);
 
   // --- gesture handling -----------------------------------------------------
   //
@@ -261,13 +516,6 @@ export default function CanvasSurface(props: Props) {
   // into Yjs re-serialised every element and re-rendered the whole board on each
   // frame, which is what made dragging feel heavy.
 
-  const applyDragStyles = useCallback((dx: number, dy: number, ids: Iterable<string>) => {
-    for (const id of ids) {
-      const node = nodes.current.get(id);
-      if (node) node.style.transform = `translate(${dx}px, ${dy}px)`;
-    }
-  }, []);
-
   const clearDragStyles = useCallback((ids: Iterable<string>) => {
     for (const id of ids) {
       const node = nodes.current.get(id);
@@ -275,8 +523,32 @@ export default function CanvasSurface(props: Props) {
     }
   }, []);
 
+  /** Drops whatever gesture is under way and puts the board back as it was. */
+  const abandonGesture = useCallback(() => {
+    const g = gesture.current;
+    gesture.current = null;
+    setPressedId(null);
+    if (!g) return;
+    setDrawBox(null);
+    setMarquee(null);
+    showGuides([]);
+    if (g.kind === 'move') clearDragStyles(g.origins.keys());
+    if (g.kind === 'resize') {
+      const node = nodes.current.get(g.id);
+      if (node) {
+        node.style.left = `${g.origin.x}px`;
+        node.style.top = `${g.origin.y}px`;
+        node.style.width = `${g.origin.width}px`;
+        node.style.height = `${g.origin.height}px`;
+      }
+    }
+  }, [clearDragStyles]);
+
   useEffect(() => {
     function onMove(e: PointerEvent) {
+      if (e.pointerType === 'touch' && touches.current.has(e.pointerId)) {
+        touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
       const g = gesture.current;
       if (!g) return;
       // A mouse moving with no button down means the release was missed
@@ -285,10 +557,32 @@ export default function CanvasSurface(props: Props) {
         onUp(e);
         return;
       }
+      const view = live.current;
+      const rect = surface.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      if (g.kind === 'pinch') {
+        const [a, b] = [...touches.current.values()];
+        if (!a || !b) return;
+        const mid = { x: (a.x + b.x) / 2 - rect.left, y: (a.y + b.y) / 2 - rect.top };
+        const distance = Math.hypot(a.x - b.x, a.y - b.y);
+        const scale = Math.min(
+          MAX_SCALE,
+          Math.max(MIN_SCALE, g.origin.scale * (distance / Math.max(1, g.startDistance))),
+        );
+        // Keep the canvas point that was under the fingers' midpoint under it
+        // as they move apart and travel.
+        const anchor = {
+          x: (g.startMid.x - g.origin.x) / g.origin.scale,
+          y: (g.startMid.y - g.origin.y) / g.origin.scale,
+        };
+        setViewport({ scale, x: mid.x - anchor.x * scale, y: mid.y - anchor.y * scale });
+        return;
+      }
 
       if (g.kind === 'pan') {
-        onViewportChange({
-          ...viewport,
+        setViewport({
+          ...view,
           x: g.originX + (e.clientX - g.startX),
           y: g.originY + (e.clientY - g.startY),
         });
@@ -296,8 +590,6 @@ export default function CanvasSurface(props: Props) {
       }
 
       if (g.kind === 'draw') {
-        const rect = surface.current?.getBoundingClientRect();
-        if (!rect) return;
         setDrawBox({
           left: Math.min(g.startX, e.clientX) - rect.left,
           top: Math.min(g.startY, e.clientY) - rect.top,
@@ -308,8 +600,6 @@ export default function CanvasSurface(props: Props) {
       }
 
       if (g.kind === 'marquee') {
-        const rect = surface.current?.getBoundingClientRect();
-        if (!rect) return;
         setMarquee({
           left: Math.min(g.startX, e.clientX) - rect.left,
           top: Math.min(g.startY, e.clientY) - rect.top,
@@ -320,126 +610,148 @@ export default function CanvasSurface(props: Props) {
       }
 
       if (g.kind === 'route') {
-        const rect = surface.current?.getBoundingClientRect();
-        if (!rect) return;
         g.moved = true;
-        g.patch = applyRoute(g.connector, g.axis, toCanvasPoint(viewport, e.clientX, e.clientY, rect));
+        g.patch = applyRoute(g.connector, g.axis, toCanvasPoint(view, e.clientX, e.clientY, rect));
         return;
       }
 
-      const dx = (e.clientX - g.startX) / viewport.scale;
-      const dy = (e.clientY - g.startY) / viewport.scale;
+      const dx = (e.clientX - g.startX) / view.scale;
+      const dy = (e.clientY - g.startY) / view.scale;
       // A few pixels of slop keeps a click from registering as a tiny drag.
       if (!g.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
       g.moved = true;
 
+      // Holding ⌘ or Ctrl places freely, without snapping.
+      const snapping = !(e.metaKey || e.ctrlKey);
+      const threshold = SNAP_DISTANCE / view.scale;
+
       if (g.kind === 'move') {
-        applyDragStyles(dx * viewport.scale, dy * viewport.scale, g.origins.keys());
+        let next = { dx, dy, guides: [] as Guide[] };
+        if (snapping) {
+          const snap = snapMove({ ...g.bounds, x: g.bounds.x + dx, y: g.bounds.y + dy }, g.others, threshold);
+          next = { dx: dx + snap.dx, dy: dy + snap.dy, guides: snap.guides };
+        }
+        g.dx = next.dx;
+        g.dy = next.dy;
+        showGuides(next.guides);
+        for (const id of g.origins.keys()) {
+          const node = nodes.current.get(id);
+          if (node) node.style.transform = `translate(${g.dx}px, ${g.dy}px)`;
+        }
       } else {
+        const keepRatio = g.keepRatio !== e.shiftKey;
+        g.last = resizeBox(g.origin, g.corner, dx, dy, keepRatio);
+        // A box keeping its proportions cannot also have an edge pulled to a line.
+        if (snapping && !keepRatio) {
+          const snap = snapResize(g.last, g.corner, g.others, threshold);
+          g.last = snap.box;
+          showGuides(snap.guides);
+        } else {
+          showGuides([]);
+        }
         const node = nodes.current.get(g.id);
         if (node) {
-          node.style.width = `${Math.max(40, g.origin.width + dx)}px`;
-          node.style.height = `${Math.max(40, g.origin.height + dy)}px`;
+          node.style.left = `${g.last.x}px`;
+          node.style.top = `${g.last.y}px`;
+          node.style.width = `${g.last.width}px`;
+          node.style.height = `${g.last.height}px`;
         }
       }
     }
 
     function onUp(e: PointerEvent) {
+      touches.current.delete(e.pointerId);
       const g = gesture.current;
+      const p = latest.current;
+      if (g?.kind === 'pinch') {
+        // Lifting one finger ends the pinch; the other does not start a pan.
+        if (touches.current.size < 2) gesture.current = null;
+        return;
+      }
       gesture.current = null;
       setPressedId(null);
       if (!g) return;
+      const view = live.current;
+      const rect = surface.current?.getBoundingClientRect();
 
       if (g.kind === 'draw') {
-        const rect = surface.current?.getBoundingClientRect();
         setDrawBox(null);
         if (rect) {
-          const a = toCanvasPoint(viewport, g.startX, g.startY, rect);
-          const b = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
+          const a = toCanvasPoint(view, g.startX, g.startY, rect);
+          const b = toCanvasPoint(view, e.clientX, e.clientY, rect);
           const width = Math.abs(b.x - a.x);
           const height = Math.abs(b.y - a.y);
           // A click rather than a drag still makes a shape, at a usable size.
           if (width < 12 || height < 12) {
-            props.onDrawShape({ x: a.x - 110, y: a.y - 80, width: 220, height: 160 });
+            p.onDrawShape({ x: a.x - 110, y: a.y - 80, width: 220, height: 160 }, e.shiftKey);
           } else {
-            props.onDrawShape({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width, height });
+            p.onDrawShape({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width, height }, e.shiftKey);
           }
         }
         return;
       }
 
       if (g.kind === 'marquee') {
-        const rect = surface.current?.getBoundingClientRect();
         setMarquee(null);
-        if (rect) {
-          const a = toCanvasPoint(viewport, g.startX, g.startY, rect);
-          const b = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
-          const x1 = Math.min(a.x, b.x);
-          const y1 = Math.min(a.y, b.y);
-          const x2 = Math.max(a.x, b.x);
-          const y2 = Math.max(a.y, b.y);
-          const hits = boxes.filter(
-            (el) => el.x < x2 && el.x + el.width > x1 && el.y < y2 && el.y + el.height > y1,
-          );
-          onSelectionChange(new Set(hits.map((el) => el.id)));
-        }
+        if (!rect) return;
+        const a = toCanvasPoint(view, g.startX, g.startY, rect);
+        const b = toCanvasPoint(view, e.clientX, e.clientY, rect);
+        // A click on empty board, not a drag: that only clears the selection.
+        if (Math.abs(e.clientX - g.startX) + Math.abs(e.clientY - g.startY) < 4) return;
+        const x1 = Math.min(a.x, b.x);
+        const y1 = Math.min(a.y, b.y);
+        const x2 = Math.max(a.x, b.x);
+        const y2 = Math.max(a.y, b.y);
+        const hits = boxesRef.current.filter(
+          (el) => el.x < x2 && el.x + el.width > x1 && el.y < y2 && el.y + el.height > y1,
+        );
+        const next = new Set(g.additive ? p.selectedIds : []);
+        // Touching any member of a group takes the whole group.
+        for (const id of withGroups(hits.map((el) => el.id), groupsRef.current)) next.add(id);
+        p.onSelectionChange(next);
         return;
       }
 
       if (g.kind === 'route') {
         if (g.moved && Object.keys(g.patch).length) {
-          props.onCommit([{ id: g.connector.id, patch: g.patch as Partial<CanvasElement> }]);
+          p.onCommit([{ id: g.connector.id, patch: g.patch as Partial<CanvasElement> }]);
         }
         return;
       }
 
+      showGuides([]);
+      if (g.kind === 'move' && !g.moved && g.wasSelected) {
+        // A click on something already selected, not a drag. Clicking a
+        // selected group picks out the one member; clicking one of several
+        // selected things keeps just that one (or its group).
+        const group = withGroups([g.pressed], groupsRef.current);
+        const selection = p.selectedIds;
+        const isGroup = group.size > 1 && selection.size === group.size && [...group].every((id) => selection.has(id));
+        if (isGroup) p.onSelectionChange(new Set([g.pressed]));
+        else if (selection.size > group.size) p.onSelectionChange(group);
+        return;
+      }
       if (g.kind === 'move' && g.moved) {
-        const dx = (e.clientX - g.startX) / viewport.scale;
-        const dy = (e.clientY - g.startY) / viewport.scale;
         clearDragStyles(g.origins.keys());
-        props.onCommit(
+        p.onCommit(
           [...g.origins].map(([id, origin]) => ({
             id,
-            patch: { x: origin.x + dx, y: origin.y + dy } as Partial<CanvasElement>,
+            patch: { x: origin.x + g.dx, y: origin.y + g.dy } as Partial<CanvasElement>,
           })),
         );
+        p.onBringToFront([...g.origins.keys()]);
       } else if (g.kind === 'resize' && g.moved) {
-        const dx = (e.clientX - g.startX) / viewport.scale;
-        const dy = (e.clientY - g.startY) / viewport.scale;
-        const node = nodes.current.get(g.id);
-        if (node) {
-          node.style.width = '';
-          node.style.height = '';
-        }
-        props.onCommit([
-          {
-            id: g.id,
-            patch: {
-              width: Math.max(40, g.origin.width + dx),
-              height: Math.max(40, g.origin.height + dy),
-            } as Partial<CanvasElement>,
-          },
-        ]);
+        // The node already shows the final box; the commit makes it true.
+        p.onCommit([{ id: g.id, patch: g.last as Partial<CanvasElement> }]);
       }
     }
 
     // The browser took the pointer (a native drag, a touch scroll): drop the
     // gesture and put everything back rather than committing a guessed position.
-    function onCancel() {
-      const g = gesture.current;
-      gesture.current = null;
-      setPressedId(null);
-      if (!g) return;
-      setDrawBox(null);
-      setMarquee(null);
-      if (g.kind === 'move') clearDragStyles(g.origins.keys());
-      if (g.kind === 'resize') {
-        const node = nodes.current.get(g.id);
-        if (node) {
-          node.style.width = '';
-          node.style.height = '';
-        }
-      }
+    function onCancel(e: PointerEvent) {
+      touches.current.delete(e.pointerId);
+      if (gesture.current?.kind === 'pinch' && touches.current.size >= 2) return;
+      abandonGesture();
     }
 
     window.addEventListener('pointermove', onMove);
@@ -450,7 +762,31 @@ export default function CanvasSurface(props: Props) {
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
     };
-  }, [viewport, boxes, onViewportChange, onSelectionChange, applyDragStyles, clearDragStyles, props]);
+  }, []);
+
+  /**
+   * A second finger on the board turns whatever the first one started into a
+   * pinch, so zooming works wherever the fingers land, elements included.
+   */
+  function trackTouch(e: React.PointerEvent) {
+    if (e.pointerType !== 'touch') return;
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.current.size !== 2) return;
+    const rect = surface.current?.getBoundingClientRect();
+    if (!rect) return;
+    abandonGesture();
+    connectMoved.current = false;
+    connectArmed.current = false;
+    setPending(null);
+    const [a, b] = [...touches.current.values()];
+    gesture.current = {
+      kind: 'pinch',
+      startDistance: Math.hypot(a.x - b.x, a.y - b.y),
+      startMid: { x: (a.x + b.x) / 2 - rect.left, y: (a.y + b.y) / 2 - rect.top },
+      origin: live.current,
+    };
+    e.stopPropagation();
+  }
 
   // Making a connection works two ways: drag from a port and release on the
   // target, or click the port, move, and click the target. Both share this
@@ -476,7 +812,7 @@ export default function CanvasSurface(props: Props) {
     const complete = (x: number, y: number) => {
       const { id, side } = targetAt(x, y);
       if (id && id !== pending.fromId) {
-        props.onConnect({ id: pending.fromId, side: pending.fromSide }, { id, side });
+        latest.current.onConnect({ id: pending.fromId, side: pending.fromSide }, { id, side });
       }
       cancel();
     };
@@ -488,7 +824,7 @@ export default function CanvasSurface(props: Props) {
         connectMoved.current = true;
       }
       setPending((current) =>
-        current ? { ...current, cursor: toCanvasPoint(viewport, e.clientX, e.clientY, rect) } : current,
+        current ? { ...current, cursor: toCanvasPoint(live.current, e.clientX, e.clientY, rect) } : current,
       );
       setHoverId(targetAt(e.clientX, e.clientY).id ?? null);
     };
@@ -526,15 +862,17 @@ export default function CanvasSurface(props: Props) {
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointerdown', onDown, { capture: true });
     };
-  }, [pending, viewport, props]);
+    // Re-bound only when a connection starts or ends; the cursor updates are
+    // written through the state setter and need no fresh listeners.
+  }, [pending?.fromId, pending?.fromSide, pending?.startX, pending?.startY]);
 
-  const previewPath = (() => {
+  const previewPath = useMemo(() => {
     if (!pending) return null;
     const from = byId.get(pending.fromId);
     if (!from) return null;
     const p1 = sidePoint(from, pending.fromSide);
     return { path: connectorPath(p1, pending.fromSide, pending.cursor, 'left', 'straight') };
-  })();
+  }, [pending, byId]);
 
   /** Drags out of an anchor port until released over another element or port. */
   function startPortDrag(e: React.PointerEvent, elementId: string, side: Exclude<AnchorSide, 'auto'>) {
@@ -547,7 +885,7 @@ export default function CanvasSurface(props: Props) {
     setPending({
       fromId: elementId,
       fromSide: side,
-      cursor: toCanvasPoint(viewport, e.clientX, e.clientY, rect),
+      cursor: toCanvasPoint(live.current, e.clientX, e.clientY, rect),
       startX: e.clientX,
       startY: e.clientY,
     });
@@ -558,8 +896,8 @@ export default function CanvasSurface(props: Props) {
    * into the SVG, so reshaping stays smooth and lands as one committed change.
    */
   function applyRoute(connector: ConnectorElement, axis: 'x' | 'y' | 'free', point: { x: number; y: number }) {
-    const from = byId.get(connector.from);
-    const to = byId.get(connector.to);
+    const from = byIdRef.current.get(connector.from);
+    const to = byIdRef.current.get(connector.to);
     if (!from || !to) return {};
 
     const shape = connector.shape ?? 'straight';
@@ -597,29 +935,28 @@ export default function CanvasSurface(props: Props) {
     return patch;
   }
 
-  function startRouteGesture(
-    e: React.PointerEvent,
-    connector: ConnectorElement,
-    axis: 'x' | 'y' | 'free',
-  ) {
-    e.stopPropagation();
-    e.preventDefault();
-    gesture.current = { kind: 'route', connector, axis, moved: false, patch: {} };
-  }
+  const startRouteGesture = useCallback(
+    (e: React.PointerEvent, connector: ConnectorElement, axis: 'x' | 'y' | 'free') => {
+      e.stopPropagation();
+      e.preventDefault();
+      gesture.current = { kind: 'route', connector, axis, moved: false, patch: {} };
+    },
+    [],
+  );
 
   function startElementGesture(e: React.PointerEvent, element: CanvasElement) {
-    if (spaceHeld) return; // space always pans, whatever is under the cursor
+    if (spaceRef.current) return; // space always pans, whatever is under the cursor
+    if (gesture.current?.kind === 'pinch') return;
     // Let the press through to the board so a shape can be drawn over anything.
     if (props.shapeTool && props.editable) return;
     // Likewise an element being placed can go on top of another.
     if (props.placing && props.editable) return;
     // With the connector tool on, pressing an element's body starts a
-    // connection from its facing side rather than moving it.
+    // connection from its nearest side rather than moving it.
     if (props.connectorTool && props.editable) {
-      const centre = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
       const rect = surface.current?.getBoundingClientRect();
       if (rect) {
-        const cursor = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
+        const cursor = toCanvasPoint(live.current, e.clientX, e.clientY, rect);
         const side = ANCHOR_SIDES.reduce((best, candidate) => {
           const a = sidePoint(element, candidate);
           const b = sidePoint(element, best);
@@ -627,77 +964,170 @@ export default function CanvasSurface(props: Props) {
             ? candidate
             : best;
         }, ANCHOR_SIDES[0]);
-        void centre;
         startPortDrag(e, element.id, side);
       }
       return;
     }
     e.stopPropagation();
+    tabbedTo.current = null;
+    // A drag whose release never arrived must not leave its offset behind.
+    if (gesture.current) abandonGesture();
 
     // Editing a text element must not start a drag from inside the textarea.
     if (editingId === element.id) return;
 
+    // Pressing any member of a group takes hold of the whole group.
+    const group = withGroups([element.id], groups);
     const additive = e.shiftKey;
+    const wasSelected = selectedIds.has(element.id);
     const nextSelection = additive
-      ? new Set(selectedIds).add(element.id)
-      : selectedIds.has(element.id)
+      ? new Set([...selectedIds, ...group])
+      : wasSelected
         ? selectedIds
-        : new Set([element.id]);
+        : group;
     if (nextSelection !== selectedIds) onSelectionChange(nextSelection);
     if (editingId) setEditingId(null);
     if (!editable) return;
 
-    props.onBringToFront(element.id);
     const origins = new Map<string, { x: number; y: number }>();
+    const moving: Rect[] = [];
     for (const id of nextSelection) {
       const el = byId.get(id);
-      if (el && el.type !== 'connector') origins.set(id, { x: el.x, y: el.y });
+      if (el && el.type !== 'connector') {
+        origins.set(id, { x: el.x, y: el.y });
+        moving.push(el);
+      }
     }
-    gesture.current = { kind: 'move', startX: e.clientX, startY: e.clientY, origins, moved: false };
+    if (moving.length === 0) return;
+    gesture.current = {
+      kind: 'move',
+      startX: e.clientX,
+      startY: e.clientY,
+      origins,
+      moved: false,
+      pressed: element.id,
+      wasSelected: wasSelected && !additive,
+      bounds: unionRect(moving),
+      others: boxes.filter((el) => !origins.has(el.id)),
+      dx: 0,
+      dy: 0,
+    };
     setPressedId(element.id);
+  }
+
+  function startResize(e: React.PointerEvent, element: CanvasElement, corner: Corner) {
+    e.stopPropagation();
+    if (gesture.current) abandonGesture();
+    const origin = { x: element.x, y: element.y, width: element.width, height: element.height };
+    gesture.current = {
+      kind: 'resize',
+      id: element.id,
+      corner,
+      startX: e.clientX,
+      startY: e.clientY,
+      origin,
+      keepRatio: KEEP_RATIO.has(element.type),
+      moved: false,
+      last: origin,
+      others: boxes.filter((el) => el.id !== element.id),
+    };
   }
 
   function startBackgroundGesture(e: React.PointerEvent) {
     setEditingId(null);
+    if (gesture.current?.kind === 'pinch') return;
+    if (gesture.current) abandonGesture();
+    const view = live.current;
+    const panning = e.button === 1 || e.altKey || spaceRef.current;
     // Panning with the middle button, Alt or Space still works while placing.
-    if (props.placing && editable && e.button === 0 && !spaceHeld && !e.altKey) {
+    if (props.placing && editable && e.button === 0 && !panning) {
       const rect = surface.current?.getBoundingClientRect();
       if (rect) {
+        // The new element may open for typing during this press; the press's
+        // own mousedown would then move focus to the page and close it again.
+        e.preventDefault();
         placedAt.current = Date.now();
         setGhost(null);
-        props.onPlace(toCanvasPoint(viewport, e.clientX, e.clientY, rect));
+        props.onPlace(toCanvasPoint(view, e.clientX, e.clientY, rect), e.shiftKey);
       }
       return;
     }
-    if (props.shapeTool && editable && e.button === 0 && !spaceHeld && !e.altKey) {
+    if (props.shapeTool && editable && e.button === 0 && !panning) {
       gesture.current = { kind: 'draw', startX: e.clientX, startY: e.clientY };
       return;
     }
-    if (e.button === 1 || e.altKey || spaceHeld) {
-      gesture.current = { kind: 'pan', startX: e.clientX, startY: e.clientY, originX: viewport.x, originY: viewport.y };
+    // A mouse drag on empty board selects what it encloses, as in most
+    // drawing tools; a finger drag pans, because that is what a finger means.
+    if (e.pointerType === 'mouse' && e.button === 0 && !panning) {
+      if (!e.shiftKey) onSelectionChange(new Set());
+      gesture.current = { kind: 'marquee', startX: e.clientX, startY: e.clientY, additive: e.shiftKey };
       return;
     }
-    if (e.shiftKey) {
-      gesture.current = { kind: 'marquee', startX: e.clientX, startY: e.clientY };
-      return;
-    }
-    onSelectionChange(new Set());
-    gesture.current = { kind: 'pan', startX: e.clientX, startY: e.clientY, originX: viewport.x, originY: viewport.y };
+    if (!panning) onSelectionChange(new Set());
+    gesture.current = { kind: 'pan', startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
   }
+
+  /**
+   * Keyboard focus landing on an element selects it and brings it into view,
+   * so Tab walks the board the way a pointer would.
+   */
+  function onElementFocus(e: React.FocusEvent<HTMLDivElement>, element: CanvasElement) {
+    if (e.target !== e.currentTarget || !e.currentTarget.matches(':focus-visible')) return;
+    if (!refocusing.current) tabbedTo.current = element.id;
+    refocusing.current = false;
+    if (!selectedIds.has(element.id)) onSelectionChange(new Set([element.id]));
+    const rect = surface.current?.getBoundingClientRect();
+    if (!rect) return;
+    const view = live.current;
+    const left = element.x * view.scale + view.x;
+    const top = element.y * view.scale + view.y;
+    const right = left + element.width * view.scale;
+    const bottom = top + element.height * view.scale;
+    const margin = 40;
+    if (left >= margin && top >= margin && right <= rect.width - margin && bottom <= rect.height - margin) return;
+    setViewport({
+      ...view,
+      x: rect.width / 2 - (element.x + element.width / 2) * view.scale,
+      y: rect.height / 2 - (element.y + element.height / 2) * view.scale,
+    });
+  }
+
+  const announcement = useMemo(() => {
+    if (selectedIds.size === 0) return '';
+    const first = groups.get([...selectedIds][0]);
+    if (first && first.length === selectedIds.size && first.every((id) => selectedIds.has(id))) {
+      return `Group of ${first.length} items selected`;
+    }
+    if (selectedIds.size > 1) return `${selectedIds.size} items selected`;
+    const element = byId.get([...selectedIds][0]);
+    return element ? `${labelOf(element)}, selected` : '';
+  }, [selectedIds, byId, labelOf, groups]);
+
+  const handle = (px: number) => px / viewport.scale;
 
   return (
     <div
       ref={surface}
+      role="application"
+      aria-roledescription="canvas"
+      aria-label="Canvas board. Tab moves between items; Enter edits the selected item."
+      onPointerDownCapture={trackTouch}
       onPointerMove={(e) => {
         const rect = surface.current?.getBoundingClientRect();
         if (!rect) return;
-        lastPointer.current = toCanvasPoint(viewport, e.clientX, e.clientY, rect);
+        lastPointer.current = toCanvasPoint(live.current, e.clientX, e.clientY, rect);
         if (props.placing) setGhost(lastPointer.current);
         props.onPointer?.(lastPointer.current);
       }}
       onPointerLeave={() => {
         setGhost(null);
         props.onPointer?.(null);
+      }}
+      // Focusing an element near the edge can scroll this box even though its
+      // overflow is hidden, which would shift every screen-to-canvas conversion.
+      onScroll={(e) => {
+        e.currentTarget.scrollTop = 0;
+        e.currentTarget.scrollLeft = 0;
       }}
       onDragOver={(e) => {
         if (!editable || !e.dataTransfer.types.includes('Files')) return;
@@ -716,7 +1146,7 @@ export default function CanvasSurface(props: Props) {
         e.preventDefault();
         const rect = surface.current?.getBoundingClientRect();
         if (!rect) return;
-        props.onFiles(files, toCanvasPoint(viewport, e.clientX, e.clientY, rect));
+        props.onFiles(files, toCanvasPoint(live.current, e.clientX, e.clientY, rect));
       }}
       onPointerDown={startBackgroundGesture}
       onDoubleClick={(e) => {
@@ -725,12 +1155,12 @@ export default function CanvasSurface(props: Props) {
         if (!rect || e.target !== surface.current) return;
         if (props.placing || Date.now() - placedAt.current < 500) return;
         // Double-clicking empty space drops a note there, as on other boards.
-        props.onCreateNoteAt(toCanvasPoint(viewport, e.clientX, e.clientY, rect));
+        props.onCreateNoteAt(toCanvasPoint(live.current, e.clientX, e.clientY, rect));
       }}
       className={cx(
         // No text selection: in a browser a drag would otherwise highlight
         // the text it passes over instead of moving the element.
-        'relative h-full w-full touch-none select-none overflow-hidden bg-[var(--color-canvas)]',
+        'relative h-full w-full touch-none select-none overflow-hidden bg-[var(--color-canvas)] outline-none',
         props.connectorTool || props.shapeTool || (props.placing && editable)
           ? 'cursor-crosshair'
           : spaceHeld
@@ -751,15 +1181,16 @@ export default function CanvasSurface(props: Props) {
         className="absolute left-0 top-0 h-0 w-0 origin-top-left"
         style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}
       >
-{/* Connectors paint above the elements: a line routed across a shape, and
+        {/* Connectors paint above the elements: a line routed across a shape, and
             especially its arrowhead at the shape's edge, must stay visible. The
             layer is pointer-transparent apart from the lines and handles. */}
         {boxes.map((element) => {
           const selected = selectedIds.has(element.id);
           const editing = editingId === element.id;
           // Media plays in place once selected; before that a press selects and drags it.
-          const live =
+          const interactive =
             editing || (selected && LIVE_WHEN_SELECTED.has(element.type) && pressedId !== element.id);
+          const soleSelection = selected && selectedIds.size === 1;
           return (
             <div
               key={element.id}
@@ -768,6 +1199,10 @@ export default function CanvasSurface(props: Props) {
                 else nodes.current.delete(element.id);
               }}
               data-canvas-element={element.id}
+              tabIndex={0}
+              role="group"
+              aria-label={labelOf(element)}
+              onFocus={(e) => onElementFocus(e, element)}
               onPointerEnter={() => props.connectorTool && setHoverId(element.id)}
               onPointerLeave={() => !pending && setHoverId((id) => (id === element.id ? null : id))}
               onPointerDown={(e) => startElementGesture(e, element)}
@@ -778,20 +1213,10 @@ export default function CanvasSurface(props: Props) {
                 e.stopPropagation();
                 if (!editable) return;
                 // Document cards edit in place; the header's expand button opens full page.
-                if (
-                  element.type === 'note' ||
-                  element.type === 'text' ||
-                  element.type === 'shape' ||
-                  element.type === 'node' ||
-                  element.type === 'frame' ||
-                  element.type === 'link' ||
-                  element.type === 'workItem'
-                ) {
-                  setEditingId(element.id);
-                }
+                if (EDITABLE.has(element.type)) setEditingId(element.id);
               }}
               className={cx(
-                'absolute',
+                'absolute focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-dashed focus-visible:outline-[var(--color-accent)]',
                 selected && 'outline outline-2 outline-offset-2 outline-[var(--color-accent)]',
                 pending &&
                   hoverId === element.id &&
@@ -813,10 +1238,10 @@ export default function CanvasSurface(props: Props) {
                 className={cx(
                   'h-full w-full',
                   editing && 'select-text',
-                  !live && (element.type === 'link' ? '[&_*]:pointer-events-none' : 'pointer-events-none'),
+                  !interactive && (element.type === 'link' ? '[&_*]:pointer-events-none' : 'pointer-events-none'),
                 )}
                 onPointerDown={
-                  live && !editing
+                  interactive && !editing
                     ? (e) => {
                         // Scrubbing or pressing play must not also move the element.
                         if ((e.target as HTMLElement).closest('video, audio')) e.stopPropagation();
@@ -830,30 +1255,38 @@ export default function CanvasSurface(props: Props) {
                   editing={editing}
                   dark={props.dark}
                   members={props.members}
-                  onChange={(patch) => props.onUpdate(element.id, patch)}
-                  onStopEditing={() => setEditingId(null)}
-                  onOpenDocument={props.onOpenDocument}
+                  onUpdate={onUpdate}
+                  onStopEditing={stopEditing}
+                  onOpenDocument={onOpenDocument}
                 />
               </div>
 
               {props.connectorTool && editable && (hoverId === element.id || pending?.fromId === element.id) &&
                 ANCHOR_SIDES.map((side) => {
                   const point = sidePoint(element, side);
-                  const size = 10 / viewport.scale;
+                  // A generous invisible target around a visible dot: the dot
+                  // says where, the target makes it easy to hit, by finger too.
+                  const hit = handle(28);
+                  const dot = handle(12);
                   return (
                     <div
                       key={side}
                       data-port-side={side}
                       onPointerDown={(e) => startPortDrag(e, element.id, side)}
-                      title={`Connect from ${side}`}
-                      className="pointer-events-auto absolute rounded-full border-2 border-white bg-[var(--color-accent)]"
+                      title={`Connect from the ${side}`}
+                      className="pointer-events-auto absolute grid place-items-center"
                       style={{
-                        left: point.x - element.x - size / 2,
-                        top: point.y - element.y - size / 2,
-                        width: size,
-                        height: size,
+                        left: point.x - element.x - hit / 2,
+                        top: point.y - element.y - hit / 2,
+                        width: hit,
+                        height: hit,
                       }}
-                    />
+                    >
+                      <span
+                        className="block rounded-full border-white bg-[var(--color-accent)]"
+                        style={{ width: dot, height: dot, borderWidth: handle(2) }}
+                      />
+                    </div>
                   );
                 })}
 
@@ -865,14 +1298,15 @@ export default function CanvasSurface(props: Props) {
                     props.onAddChild(element.id);
                   }}
                   aria-label="Add a child node"
+                  title="Add a child node (Tab)"
                   className="absolute grid place-items-center rounded-full border-2 border-white bg-[var(--color-accent)] font-semibold text-white shadow"
                   style={{
                     // Sized in screen pixels so it stays usable at any zoom.
-                    width: 22 / viewport.scale,
-                    height: 22 / viewport.scale,
-                    fontSize: 15 / viewport.scale,
-                    right: -30 / viewport.scale,
-                    top: `calc(50% - ${11 / viewport.scale}px)`,
+                    width: handle(22),
+                    height: handle(22),
+                    fontSize: handle(15),
+                    right: -handle(30),
+                    top: `calc(50% - ${handle(11)}px)`,
                   }}
                 >
                   <Icon name="plus-lg" />
@@ -887,36 +1321,79 @@ export default function CanvasSurface(props: Props) {
                   className="absolute left-1/2 grid -translate-x-1/2 cursor-move place-items-center rounded-full bg-[var(--color-accent)] text-white shadow"
                   style={{
                     // Sized in screen pixels so it stays usable at any zoom.
-                    width: 36 / viewport.scale,
-                    height: 16 / viewport.scale,
-                    fontSize: 14 / viewport.scale,
-                    top: -22 / viewport.scale,
+                    width: handle(36),
+                    height: handle(16),
+                    fontSize: handle(14),
+                    top: -handle(22),
                   }}
                 >
                   <Icon name="grip-horizontal" />
                 </div>
               )}
 
-              {selected && editable && !editing && !props.connectorTool && (
-                <div
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    gesture.current = {
-                      kind: 'resize',
-                      id: element.id,
-                      startX: e.clientX,
-                      startY: e.clientY,
-                      origin: { width: element.width, height: element.height },
-                      moved: false,
-                    };
-                  }}
-                  className="absolute -bottom-1 -right-1 cursor-nwse-resize rounded-sm border border-white bg-[var(--color-accent)]"
-                  style={{ width: 10 / viewport.scale, height: 10 / viewport.scale }}
-                />
-              )}
+              {soleSelection && editable && !editing && !props.connectorTool &&
+                CORNERS.map((corner) => (
+                  <div
+                    key={corner}
+                    aria-hidden
+                    onPointerDown={(e) => startResize(e, element, corner)}
+                    className={cx(
+                      'absolute rounded-sm border border-white bg-[var(--color-accent)]',
+                      corner === 'nw' || corner === 'se' ? 'cursor-nwse-resize' : 'cursor-nesw-resize',
+                    )}
+                    style={{
+                      width: handle(10),
+                      height: handle(10),
+                      [corner.includes('n') ? 'top' : 'bottom']: -handle(6),
+                      [corner.includes('w') ? 'left' : 'right']: -handle(6),
+                    }}
+                  />
+                ))}
             </div>
           );
         })}
+
+        {props.pendingBoxes.map((box) => (
+          <div
+            key={box.id}
+            role="status"
+            className="pointer-events-none absolute grid place-items-center rounded-lg border-2 border-dashed border-[var(--color-accent)] bg-[var(--color-accent)]/5"
+            style={{ left: box.x, top: box.y, width: box.width, height: box.height }}
+          >
+            <div className="flex max-w-full flex-col items-center gap-2 px-3 text-center text-[var(--color-muted)]">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--color-line)] border-t-[var(--color-accent)]" />
+              <span className="max-w-full truncate text-xs">{box.label}</span>
+            </div>
+          </div>
+        ))}
+
+        {selectedGroups.map((box, i) => (
+          <div
+            key={i}
+            aria-hidden
+            className="pointer-events-none absolute rounded-lg border-dashed border-[var(--color-accent)]"
+            style={{
+              left: box.x - handle(8),
+              top: box.y - handle(8),
+              width: box.width + handle(16),
+              height: box.height + handle(16),
+              borderWidth: handle(1.5),
+            }}
+          />
+        ))}
+
+        {guides.map((guide) => (
+          <div
+            key={`${guide.axis}-${guide.at}`}
+            aria-hidden
+            className="pointer-events-none absolute bg-rose-500"
+            style={
+              guide.axis === 'x'
+                ? { left: guide.at - handle(0.5), top: guide.from - handle(12), width: handle(1), height: guide.to - guide.from + handle(24) }
+                : { top: guide.at - handle(0.5), left: guide.from - handle(12), height: handle(1), width: guide.to - guide.from + handle(24) }
+            }
+          />
+        ))}
 
         <Connectors
           connectors={connectors}
@@ -927,9 +1404,7 @@ export default function CanvasSurface(props: Props) {
           scale={viewport.scale}
           editable={editable}
           onRouteHandleDown={startRouteGesture}
-          onSelect={(id, additive) =>
-            onSelectionChange(additive ? new Set(selectedIds).add(id) : new Set([id]))
-          }
+          onSelect={onSelectConnector}
         />
 
         {props.placing && editable && ghost && (
@@ -962,6 +1437,10 @@ export default function CanvasSurface(props: Props) {
           style={marquee}
         />
       )}
+
+      <div aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
     </div>
   );
 }

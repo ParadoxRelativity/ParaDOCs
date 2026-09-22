@@ -43,6 +43,7 @@ import { managesWorkspace, type AccessSection } from './AccessApp';
 import WorkspaceIcon from './WorkspaceIcon';
 import { MODIFIER, asksForNewTab, openTab } from '../lib/tabs';
 import { useToast } from './Toast';
+import { useDocumentImport } from './ImportDocument';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
 import { ProjectList } from './projects/ProjectList';
@@ -152,6 +153,7 @@ export default function LeftSidebar(props: Props) {
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [securing, setSecuring] = useState<NamedAccessTarget | null>(null);
   const toast = useToast();
+  const documentImport = useDocumentImport(workspaceId, props.onSelectDocument);
 
   const current = workspaces.find((w) => w.id === workspaceId);
   // In the desktop app the workspace menu spans every connection, not just this server.
@@ -372,6 +374,12 @@ export default function LeftSidebar(props: Props) {
         />
         <SidebarAction icon="file-earmark-plus" label="New document" onClick={() => addDocument(null)} />
         <SidebarAction icon="easel" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
+        <SidebarAction
+          icon="file-earmark-arrow-up"
+          label={documentImport.importing ? 'Importing…' : 'Import document'}
+          onClick={documentImport.choose}
+        />
+        {documentImport.input}
         <SidebarAction
           icon="people"
           label="Members"

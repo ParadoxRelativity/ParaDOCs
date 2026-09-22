@@ -11,6 +11,7 @@ import { cx, formatRelative } from '../lib/util';
 import { useFolderOptions } from './DocumentMeta';
 import { Button, Spinner, TagChip } from './ui';
 import { DocumentIcon } from './Icon';
+import { useDocumentImport } from './ImportDocument';
 
 const PAGE = 100;
 
@@ -32,6 +33,7 @@ export default function AllDocuments({ workspaceId, onOpen }: Props) {
   const list = useAllDocuments(workspaceId, { sort, archived, limit });
   const createDocument = useCreateDocument(workspaceId);
   const tree = useTree(workspaceId);
+  const documentImport = useDocumentImport(workspaceId, onOpen);
 
   // Folder id -> display path, so each row can show where a document lives.
   const folderPaths = useMemo(() => {
@@ -74,9 +76,20 @@ export default function AllDocuments({ workspaceId, onOpen }: Props) {
               {list.data?.hasMore && ' · more available'}
             </p>
           </div>
-          <Button variant="primary" onClick={newDocument} disabled={createDocument.isPending}>
-            + New document
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="subtle"
+              onClick={documentImport.choose}
+              disabled={documentImport.importing}
+              title="Markdown, HTML or Word (.docx)"
+            >
+              {documentImport.importing ? 'Importing…' : 'Import'}
+            </Button>
+            {documentImport.input}
+            <Button variant="primary" onClick={newDocument} disabled={createDocument.isPending}>
+              + New document
+            </Button>
+          </div>
         </div>
 
         <div className="mb-3 flex flex-wrap items-center gap-2">

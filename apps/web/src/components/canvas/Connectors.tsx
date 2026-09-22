@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import {
   connectorPath,
   dashArray,
@@ -42,7 +42,10 @@ function markerId(color: string) {
   return `pd-arrow-${color.replace(/[^a-z0-9]/gi, '')}`;
 }
 
-export default function Connectors({
+/** Memoised, so a pan or an unrelated re-render does not recompute every route. */
+export default memo(Connectors);
+
+function Connectors({
   connectors,
   byId,
   selectedIds,
