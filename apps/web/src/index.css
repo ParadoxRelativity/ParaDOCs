@@ -91,6 +91,16 @@ optgroup {
   padding-inline: 0 !important;
 }
 
+/* BlockNote's Heading 1 is 3em, which overpowers a page; step it down while
+   keeping it clear of Heading 2 (2em). Both variables are set so changing a
+   block's level still animates from the right size. */
+.bn-container [data-content-type="heading"][data-level="1"] {
+  --level: 2.5em;
+}
+.bn-container [data-prev-level="1"] {
+  --prev-level: 2.5em;
+}
+
 @keyframes paradocs-toast {
   from {
     opacity: 0;

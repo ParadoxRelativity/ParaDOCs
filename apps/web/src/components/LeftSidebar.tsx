@@ -50,6 +50,7 @@ import { ProjectList } from './projects/ProjectList';
 import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
 import SheetContextMenu, { type SheetMenuItem } from './sheet/SheetContextMenu';
 import DeleteFolderDialog, { DOCUMENT_NOUN } from './DeleteFolderDialog';
+import ManageTagsDialog from './ManageTagsDialog';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
 export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'projects' | 'access';
@@ -152,6 +153,7 @@ export default function LeftSidebar(props: Props) {
   const [creatingIn, setCreatingIn] = useState<string | null | undefined>(undefined);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [securing, setSecuring] = useState<NamedAccessTarget | null>(null);
+  const [managingTags, setManagingTags] = useState(false);
   const toast = useToast();
   const documentImport = useDocumentImport(workspaceId, props.onSelectDocument);
 
@@ -439,8 +441,15 @@ export default function LeftSidebar(props: Props) {
         {/* Tags */}
         {tags.data && tags.data.length > 0 && (
           <div className="mt-4">
-            <div className="mb-1.5 px-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-              Tags
+            <div className="mb-1 flex items-center justify-between px-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                Tags
+              </span>
+              {props.canEdit && (
+                <IconButton label="Manage tags" onClick={() => setManagingTags(true)}>
+                  <Icon name="pencil" />
+                </IconButton>
+              )}
             </div>
             <div className="flex flex-wrap gap-1 px-2">
               {tags.data.map((tag: Tag) => (
@@ -528,6 +537,8 @@ export default function LeftSidebar(props: Props) {
           onClose={() => setSecuring(null)}
         />
       )}
+
+      {managingTags && <ManageTagsDialog workspaceId={workspaceId} onClose={() => setManagingTags(false)} />}
     </div>
   );
 }

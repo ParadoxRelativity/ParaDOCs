@@ -267,6 +267,8 @@ export function useChatEvents({
           } else {
             void qc.invalidateQueries({ queryKey: keys.tree(event.workspaceId) });
             void qc.invalidateQueries({ queryKey: ['allDocuments', event.workspaceId] });
+            // Tags renamed, recoloured or deleted arrive this way too.
+            void qc.invalidateQueries({ queryKey: keys.tags(event.workspaceId) });
           }
           return;
         case 'voice.changed':

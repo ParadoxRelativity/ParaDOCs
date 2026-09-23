@@ -1,11 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { createTagSchema, updateTagSchema } from '@paradocs/shared';
+import { TAG_COLORS, createTagSchema, updateTagSchema } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { conflict, notFound, parse } from '../lib/http.js';
 import { documentLevelSql } from '../lib/access.js';
+import { treeChanged } from '../lib/treeEvents.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
-
-const PALETTE = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6'];
 
 export const tagRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
@@ -44,7 +43,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       'SELECT count(*)::int AS count FROM tags WHERE workspace_id = $1',
       [req.params.id],
     );
-    const color = input.color ?? PALETTE[count[0].count % PALETTE.length];
+    const color = input.color ?? TAG_COLORS[count[0].count % TAG_COLORS.length];
 
     const { rows } = await query(
       `INSERT INTO tags (workspace_id, name, color) VALUES ($1, $2, $3)
@@ -62,12 +61,24 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     if (!found[0]) throw notFound('Tag not found');
     await assertWorkspaceAccess(req, found[0].workspace_id, 'editor', 'docs');
     const input = parse(updateTagSchema, req.body);
+    const name = input.name?.trim() || null;
+    // The same case-insensitive rule as creating one, so a rename cannot make
+    // two tags that read alike.
+    if (name) {
+      const { rows: clash } = await query(
+        'SELECT 1 FROM tags WHERE workspace_id = $1 AND lower(name) = lower($2) AND id <> $3',
+        [found[0].workspace_id, name, req.params.id],
+      );
+      if (clash.length) throw conflict(`A tag named "${name}" already exists`);
+    }
     const { rows } = await query(
       `UPDATE tags SET name = COALESCE($2, name), color = COALESCE($3, color)
         WHERE id = $1
         RETURNING id, workspace_id AS "workspaceId", name, color`,
-      [req.params.id, input.name?.trim() ?? null, input.color ?? null],
+      [req.params.id, name, input.color ?? null],
     );
+    // Documents carry their tags' names and colours into the tree and listings.
+    treeChanged(found[0].workspace_id, 'docs');
     return rows[0];
   });
 
@@ -78,6 +89,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     if (!rows[0]) throw notFound('Tag not found');
     await assertWorkspaceAccess(req, rows[0].workspace_id, 'editor', 'docs');
     await query('DELETE FROM tags WHERE id = $1', [req.params.id]);
+    treeChanged(rows[0].workspace_id, 'docs');
     reply.status(204);
   });
 };

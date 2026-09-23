@@ -1137,14 +1137,28 @@ export function useCreateTag(workspaceId: string) {
   });
 }
 
+/** Everything that shows a tag's name or colour, which renaming or deleting it changes. */
+function invalidateTagged(qc: QueryClient, workspaceId: string) {
+  qc.invalidateQueries({ queryKey: keys.tags(workspaceId) });
+  qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
+  qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
+  qc.invalidateQueries({ queryKey: ['document'] });
+}
+
+export function useUpdateTag(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string; name?: string; color?: string }) =>
+      api.patch<Tag>(`/tags/${id}`, patch),
+    onSuccess: () => invalidateTagged(qc, workspaceId),
+  });
+}
+
 export function useDeleteTag(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete(`/tags/${id}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: keys.tags(workspaceId) });
-      qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
-    },
+    onSuccess: () => invalidateTagged(qc, workspaceId),
   });
 }
 
