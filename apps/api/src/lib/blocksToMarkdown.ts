@@ -74,8 +74,15 @@ function renderBlock(block: Block, depth: number): string[] {
       break;
     case 'callout':
       // GitHub's alert syntax, which is also what the editor exports. The blank
-      // lines keep it from running into a quote or callout beside it.
-      lines.push('', `> [!${String(props.variant ?? 'note').toUpperCase()}]`, `> ${text}`, '');
+      // lines keep it from running into a quote or callout beside it. Every line
+      // of a multi-line callout is quoted, since one starting with `-` or `#`
+      // would otherwise end the quote.
+      lines.push(
+        '',
+        `${indent}> [!${String(props.variant ?? 'note').toUpperCase()}]`,
+        ...text.split('\n').map((line) => `${indent}> ${line}`),
+        '',
+      );
       break;
     case 'image': {
       const caption = String(props.caption ?? '');
