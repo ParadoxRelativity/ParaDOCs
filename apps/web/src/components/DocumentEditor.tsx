@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { SuggestionMenuController, getDefaultReactSlashMenuItems, useCreateBlockNote } from '@blocknote/react';
-import { filterSuggestionItems } from '@blocknote/core';
+import { filterSuggestionItems, insertOrUpdateBlockForSlashMenu } from '@blocknote/core';
 import { withCollaboration } from '@blocknote/core/yjs';
 import { syntaxHighlighter } from '@blocknote/code-block';
 import { mentionHref, mentionLabel, projectPath, type Doc } from '@paradocs/shared';
@@ -15,7 +15,8 @@ import DocumentMeta from './DocumentMeta';
 import CanvasEditor from './canvas/CanvasEditor';
 import { Spinner } from './ui';
 import Avatar from './Avatar';
-import { documentSchema } from './documentSchema';
+import { documentSchema, type DocumentBlockEditor } from './documentSchema';
+import Icon from './Icon';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
 import { ProjectPicker, WorkItemPicker } from './projects/WorkItemRefs';
 import { copyEditorSelection } from '../lib/documentClipboard';
@@ -291,7 +292,7 @@ function EditorSurface({
               getItems={async (queryText) =>
                 filterSuggestionItems(
                   [
-                    ...getDefaultReactSlashMenuItems(editor),
+                    ...slashMenuBlocks(editor),
                     // Nothing to point at in a workspace with Sheets off.
                     ...(sheetsOn
                       ? [
@@ -481,4 +482,23 @@ function Presence({ peers }: { peers: Peer[] }) {
       )}
     </div>
   );
+}
+
+/**
+ * BlockNote's own slash menu items, with a callout among the basic blocks. The
+ * menu draws a heading wherever the group changes, so it has to sit inside its
+ * group rather than be appended after the rest.
+ */
+function slashMenuBlocks(editor: DocumentBlockEditor) {
+  const items = getDefaultReactSlashMenuItems(editor);
+  const lastBasic = items.findLastIndex((item) => item.group === 'Basic blocks');
+  items.splice(lastBasic + 1, 0, {
+    title: 'Callout',
+    subtext: 'A note, tip or warning that stands out from the text',
+    aliases: ['callout', 'note', 'tip', 'warning', 'info', 'alert', 'admonition', 'important', 'caution'],
+    group: 'Basic blocks',
+    icon: <Icon name="info-circle" />,
+    onItemClick: () => insertOrUpdateBlockForSlashMenu(editor, { type: 'callout' }),
+  });
+  return items;
 }

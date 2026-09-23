@@ -71,3 +71,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 }
+
+/**
+ * The kinds of callout, named after GitHub's alerts so a callout exports to
+ * markdown as one (`> [!WARNING]`) and reads the same wherever it lands.
+ */
+export const CALLOUT_VARIANTS = ['note', 'tip', 'important', 'warning', 'caution'] as const;
+export type CalloutVariant = (typeof CALLOUT_VARIANTS)[number];
+
+/**
+ * A callout: a boxed paragraph that stands out from the text around it. The
+ * browser and the collaboration server register it under the same name and
+ * props, so saving a document keeps it.
+ */
+export const CALLOUT_BLOCK = {
+  type: 'callout',
+  propSchema: {
+    variant: { default: 'note' as CalloutVariant, values: CALLOUT_VARIANTS },
+  },
+  content: 'inline',
+} as const;

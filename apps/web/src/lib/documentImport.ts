@@ -1,3 +1,4 @@
+import type { CalloutVariant } from '@paradocs/shared';
 import type { DocumentBlockEditor } from '../components/documentSchema';
 
 /**
@@ -139,7 +140,8 @@ const MEDIA_BLOCKS = new Set(['image', 'video', 'audio', 'file']);
  * mail and in-app addresses, and pictures embedded in the file are uploaded to
  * the workspace like any other, rather than kept inline in the document.
  * Pictures that pointed at files beside the original (`images/a.png`) cannot
- * be found from here, and are left as empty blocks to add them to.
+ * be found from here, and are left as empty blocks to add them to. A quote
+ * that opens with an alert marker (`> [!WARNING]`) becomes a callout.
  */
 export async function applyDocumentImport(
   editor: DocumentBlockEditor,
@@ -156,6 +158,7 @@ export async function applyDocumentImport(
 
   const visit = (list: Blocks) => {
     for (const block of list) {
+      calloutFromQuote(block);
       const props = block.props as Record<string, unknown>;
       if (MEDIA_BLOCKS.has(block.type) && typeof props.url === 'string' && props.url) {
         const url = props.url;
@@ -184,6 +187,54 @@ export async function applyDocumentImport(
 
   editor.replaceBlocks(editor.document, blocks.length > 0 ? blocks : [{ type: 'paragraph' }]);
   return { blocks: blocks.length, missingMedia };
+}
+
+/**
+ * Alert markers as GitHub writes them, and the other names Obsidian and the
+ * like use, each mapped to the nearest kind of callout. A marker not listed
+ * here leaves the quote a quote.
+ */
+const CALLOUT_MARKERS: Record<string, CalloutVariant> = {
+  note: 'note',
+  info: 'note',
+  abstract: 'note',
+  summary: 'note',
+  todo: 'note',
+  quote: 'note',
+  example: 'note',
+  tip: 'tip',
+  hint: 'tip',
+  success: 'tip',
+  check: 'tip',
+  done: 'tip',
+  question: 'tip',
+  important: 'important',
+  warning: 'warning',
+  attention: 'warning',
+  caution: 'caution',
+  danger: 'caution',
+  error: 'caution',
+  failure: 'caution',
+  bug: 'caution',
+};
+
+/**
+ * Turns a quote opening with `[!KIND]` into a callout of that kind, in place.
+ * BlockNote reads an alert from Markdown, HTML or Word the same way — a quote
+ * whose text starts with the marker — so this covers all three. Obsidian's
+ * fold sign after the marker (`[!note]-`) is dropped along with it.
+ */
+export function calloutFromQuote(block: Blocks[number]): void {
+  if (block.type !== 'quote' || !Array.isArray(block.content)) return;
+  const first = block.content[0];
+  if (first?.type !== 'text') return;
+  const marker = /^\[!(\w+)\][+-]?\s*/.exec(first.text);
+  const variant = marker && CALLOUT_MARKERS[marker[1].toLowerCase()];
+  if (!variant) return;
+
+  const text = first.text.slice(marker[0].length);
+  const content = text ? [{ ...first, text }, ...block.content.slice(1)] : block.content.slice(1);
+  Object.assign(block, { type: 'callout', props: { variant }, content });
 }
 
 /** Inline content, including a table's cells; links to anything unsafe become their text. */

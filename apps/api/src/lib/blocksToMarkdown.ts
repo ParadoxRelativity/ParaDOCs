@@ -72,6 +72,11 @@ function renderBlock(block: Block, depth: number): string[] {
     case 'codeBlock':
       lines.push(`\`\`\`${props.language ?? ''}`, text, '```');
       break;
+    case 'callout':
+      // GitHub's alert syntax, which is also what the editor exports. The blank
+      // lines keep it from running into a quote or callout beside it.
+      lines.push('', `> [!${String(props.variant ?? 'note').toUpperCase()}]`, `> ${text}`, '');
+      break;
     case 'image': {
       const caption = String(props.caption ?? '');
       lines.push(`![${caption}](${String(props.url ?? '')})`);

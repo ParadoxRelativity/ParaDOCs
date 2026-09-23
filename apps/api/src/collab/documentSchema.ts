@@ -5,7 +5,7 @@ import {
   defaultBlockSpecs,
   defaultInlineContentSpecs,
 } from '@blocknote/core';
-import { SHEET_CELL_INLINE, SHEET_CHART_BLOCK, WORK_ITEM_INLINE, sheetRefUrl } from '@paradocs/shared';
+import { CALLOUT_BLOCK, SHEET_CELL_INLINE, SHEET_CHART_BLOCK, WORK_ITEM_INLINE, sheetRefUrl } from '@paradocs/shared';
 
 /**
  * The document schema as the server reads it.
@@ -63,7 +63,21 @@ const workItem = createInlineContentSpec(WORK_ITEM_INLINE, {
   },
 });
 
+// A callout is written as a quote opening with GitHub's alert marker, which
+// the markdown derived from it keeps as `> [!WARNING]`.
+const callout = createBlockSpec(CALLOUT_BLOCK, {
+  render: (block) => {
+    const quote = dom().createElement('blockquote');
+    const marker = dom().createElement('p');
+    marker.textContent = `[!${block.props.variant.toUpperCase()}]`;
+    const content = dom().createElement('p');
+    quote.appendChild(marker);
+    quote.appendChild(content);
+    return { dom: quote as never, contentDOM: content as never };
+  },
+});
+
 export const documentSchema = BlockNoteSchema.create({
-  blockSpecs: { ...defaultBlockSpecs, sheetChart: sheetChart() },
+  blockSpecs: { ...defaultBlockSpecs, sheetChart: sheetChart(), callout: callout() },
   inlineContentSpecs: { ...defaultInlineContentSpecs, sheetCell, workItem },
 });
