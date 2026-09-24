@@ -637,6 +637,10 @@ remove it; the server warns at startup while it is set.
 3. Enter the issuer URL, client ID and secret. The issuer's discovery document is
    fetched when you save, so a typo shows up then.
 
+Step-by-step setup for Google, Entra ID, Keycloak, Authentik, Authelia, Okta,
+Auth0, GitLab and Zitadel is in
+[docs/single-sign-on-providers.md](docs/single-sign-on-providers.md).
+
 Signing in uses the authorization code flow with PKCE, state and nonce. The
 account it signs in to is, in order: the one already linked to that provider
 subject; an existing account with the same email, **only** when the provider
