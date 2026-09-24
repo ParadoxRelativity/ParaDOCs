@@ -16,6 +16,7 @@ function defaults(): ServerSettings {
   return {
     allowRegistration: config.allowRegistration,
     messageRetentionMaxDays: null,
+    passwordSignIn: true,
   };
 }
 

@@ -58,8 +58,7 @@ Multi-user, multi-workspace. Working today:
 - **Voice, video and screen sharing** — optional voice channels carried by a
   LiveKit server you run alongside the app
 
-Not yet built: OIDC single sign-on (stubbed, see below) and the automated backup
-integrations (Backblaze/NAS) described below.
+Not yet built: the automated backup integrations (Backblaze/NAS) described below.
 
 ## Canvas mode
 
@@ -622,12 +621,68 @@ document open will be overwritten by the live session.
 
 ## OIDC single sign-on
 
-Stubbed in Phase 1. The groundwork is in place — an `auth_identities` table for
-linking a provider subject to a local account, a nullable `users.password_hash`
-for accounts that never set one, and the `OIDC_*` settings — but
-`/api/auth/oidc/login` and `/api/auth/oidc/callback` return `501` on purpose
-rather than half-working. When configured, the login screen shows the SSO button
-as unavailable. Sign-in is email and password until Phase 2.
+Any number of OpenID Connect providers — Google, Microsoft Entra, Keycloak,
+Authentik, Okta and so on — can sit alongside email and password. Add them on
+the server admin page under **Single sign-on**; each gets a button on the
+sign-in screen. One provider can also be given with the `OIDC_*` settings, and
+the admin page shows it read-only. That one is on only with `OIDC_ENABLED=true`:
+before single sign-on worked, the `OIDC_*` settings could be filled in ahead of
+time, and an upgrade should not turn on a new way in by itself. Should you have
+copied the old example `OIDC_REDIRECT_URI=http://localhost:4000/api/auth/oidc/callback`,
+remove it; the server warns at startup while it is set.
+
+1. Set `PUBLIC_URL` to the address people reach ParaDOCs at.
+2. At the provider, register a client with the redirect URI the admin page shows:
+   `$PUBLIC_URL/api/auth/oidc/<short name>/callback`.
+3. Enter the issuer URL, client ID and secret. The issuer's discovery document is
+   fetched when you save, so a typo shows up then.
+
+Signing in uses the authorization code flow with PKCE, state and nonce. The
+account it signs in to is, in order: the one already linked to that provider
+subject; an existing account with the same email, **only** when the provider
+marks the email verified; or a new account. Each provider decides who may get a
+new account — follow the registration setting, always (for your own identity
+provider, even with registration closed), or never — and can be limited to
+certain email domains.
+
+Microsoft Entra ID sends no `email_verified`, so by default it can sign in only
+accounts already linked to it. Two ways round that:
+
+- Add the optional `xms_edov` claim to the app registration's ID token. ParaDOCs
+  takes `xms_edov: true` as a verified email, from any provider.
+- Turn on **Trust this provider's email addresses** for it. That needs allowed
+  domains, and should be used only with a single-tenant issuer
+  (`https://login.microsoftonline.com/<tenant id>/v2.0`) whose accounts in those
+  domains your organisation controls: Entra lets an email claim carry addresses
+  the tenant does not own, as with guest accounts.
+
+To sign in with single sign-on only, turn off **Allow signing in with email and
+password** under Server settings on the admin page. The app then refuses
+password sign-in and registration and shows only the provider buttons. To stop
+it locking everyone out:
+
+- It cannot be turned off unless a provider is on and its discovery document can
+  be reached at that moment.
+- While it is off, the last provider that is on cannot be turned off or removed.
+- If no provider is on anyway (say the `OIDC_*` settings were removed), password
+  sign-in comes back by itself, and a warning is logged.
+- The admin page always signs in with a password, so an administrator can turn
+  it back on.
+
+Accounts not yet linked to a provider are linked on their first single sign-on,
+when the provider confirms the same email; the admin page says how many there are.
+
+Client secrets are stored encrypted with a key derived from `SESSION_SECRET`;
+changing that secret means entering them again.
+
+The desktop and mobile apps sign in through the system browser. It ends on a
+page naming the account and server, whose **Open ParaDOCs** link hands the
+sign-in back on a `paradocs://auth` address. The app redeems the one-time code
+there with a verifier it never sent anywhere, so another app that catches the
+address cannot use it. The link is never followed by itself: another app
+registered for `paradocs://` could start a sign-in of its own, which a provider
+you are already signed in to would finish without asking, so the person has to
+confirm it was them.
 
 ## How documents are stored
 
@@ -876,7 +931,8 @@ All settings come from `.env` at the repo root, read by both the API and Vite.
 | `LIVEKIT_URL`        | —                       | Outside Docker: a LiveKit server browsers can reach          |
 | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | generated in Docker | Fixed LiveKit keys; set both or neither          |
 | `LIVEKIT_NODE_IP`    | —                       | Docker: the public address for call media, where STUN gets it wrong |
-| `OIDC_*`             | —                       | Prepared for single sign-on; not used for sign-in yet (see above) |
+| `PUBLIC_URL`         | —                       | The address people reach ParaDOCs at; needed for single sign-on redirect URIs |
+| `OIDC_*`             | —                       | One single sign-on provider from the environment, on with `OIDC_ENABLED=true` (see above and `.env.example`) |
 
 `docker-compose.yml` also reads `POSTGRES_PASSWORD`, `COMPOSE_PROFILES`, `PORT`,
 `BIND_ADDR` and `DOMAIN`; `.env.example` describes each one.

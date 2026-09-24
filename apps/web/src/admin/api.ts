@@ -1,6 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  AdminCreateOidcProviderInput,
   AdminCreateUserInput,
+  AdminOidcProvider,
+  AdminUpdateOidcProviderInput,
   AdminStatus,
   AdminUpdateUserInput,
   AdminUser,
@@ -52,6 +55,7 @@ export const adminKeys = {
   settings: ['admin', 'settings'] as const,
   users: ['admin', 'users'] as const,
   version: ['admin', 'version'] as const,
+  oidcProviders: ['admin', 'oidcProviders'] as const,
 };
 
 // --- session -----------------------------------------------------------------
@@ -172,3 +176,40 @@ export const useSignOutUser = () =>
   useAccountMutation((id: string) => request<void>('POST', `/users/${id}/sign-out`));
 
 export const useDeleteUser = () => useAccountMutation((id: string) => request<void>('DELETE', `/users/${id}`));
+
+// --- single sign-on ------------------------------------------------------------
+
+export function useOidcProviders() {
+  return useQuery({
+    queryKey: adminKeys.oidcProviders,
+    queryFn: () =>
+      request<{
+        providers: AdminOidcProvider[];
+        redirectBase: string;
+        publicUrlSet: boolean;
+        /** Enabled accounts not yet linked to any provider. */
+        unlinkedAccounts: number;
+      }>('GET', '/oidc-providers'),
+  });
+}
+
+function useProviderMutation<TInput, TResult>(fn: (input: TInput) => Promise<TResult>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: adminKeys.oidcProviders }),
+  });
+}
+
+export const useCreateOidcProvider = () =>
+  useProviderMutation((input: AdminCreateOidcProviderInput) =>
+    request<AdminOidcProvider>('POST', '/oidc-providers', input),
+  );
+
+export const useUpdateOidcProvider = () =>
+  useProviderMutation(({ id, input }: { id: string; input: AdminUpdateOidcProviderInput }) =>
+    request<AdminOidcProvider>('PATCH', `/oidc-providers/${id}`, input),
+  );
+
+export const useDeleteOidcProvider = () =>
+  useProviderMutation((id: string) => request<void>('DELETE', `/oidc-providers/${id}`));

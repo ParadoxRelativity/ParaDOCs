@@ -1,6 +1,6 @@
 import { buildApp } from './app.js';
 import { buildAdminApp } from './admin/app.js';
-import { config } from './config.js';
+import { OLD_EXAMPLE_REDIRECT_URI, config } from './config.js';
 import { closeDb, query } from './db/pool.js';
 import { createCollabServer } from './collab/server.js';
 import { createChatServer } from './chat/server.js';
@@ -34,6 +34,22 @@ if (config.livekit.url && config.livekit.internalUrl) {
     { livekitUrl: config.livekit.url },
     'LIVEKIT_URL is set, so browsers join calls at that address instead of through this server. ' +
       'Remove LIVEKIT_URL unless browsers can reach LiveKit there directly.',
+  );
+}
+
+// OIDC_* settings filled in before single sign-on worked do nothing until
+// OIDC_ENABLED=true; said here so it is not a mystery why no button shows.
+if (config.oidc.issuer && config.oidc.clientId && !config.oidc.enabled) {
+  app.log.warn(
+    { issuer: config.oidc.issuer },
+    'OIDC_ISSUER and OIDC_CLIENT_ID are set but OIDC_ENABLED is not true, so that single sign-on provider is off.',
+  );
+}
+if (config.oidc.enabled && config.oidc.redirectUri === OLD_EXAMPLE_REDIRECT_URI) {
+  app.log.warn(
+    { redirectUri: config.oidc.redirectUri },
+    'OIDC_REDIRECT_URI is still the old example value, so the provider sends people to localhost:4000 and ' +
+      'sign-in fails. Remove it to use PUBLIC_URL, or set it to the address registered with the provider.',
   );
 }
 

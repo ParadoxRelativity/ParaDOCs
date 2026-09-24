@@ -97,3 +97,18 @@ export const passwordCheckLimits = {
     passwordChecksByUser.hit(userId);
   },
 };
+
+/** Single sign-on started, or a native app's code redeemed, from one address. */
+const ssoByAddress = new RateLimiter(30, MINUTE);
+
+/**
+ * Single sign-on. The provider does the password checking, so this only stops
+ * one address hammering the start of the flow or guessing handoff codes.
+ */
+export const ssoLimits = {
+  check(address: string): void {
+    const wait = ssoByAddress.retryAfter(address);
+    if (wait) throw tooMany(wait, 'Too many sign-in attempts. Wait a minute and try again.');
+    ssoByAddress.hit(address);
+  },
+};

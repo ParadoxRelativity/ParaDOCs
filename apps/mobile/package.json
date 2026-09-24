@@ -1,6 +1,6 @@
 {
   "name": "@paradocs/mobile",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "description": "ParaDOCs mobile app for iOS and Android",
   "scripts": {
@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/browser": "^8.0.4",
     "@capacitor/core": "^8.5.2",
     "@capacitor/ios": "^8.5.2"
   },

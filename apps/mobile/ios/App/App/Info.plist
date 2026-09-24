@@ -10,6 +10,18 @@
         <string>ParaDOCs</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<!-- Single sign-on finishes in the browser on paradocs://auth, which comes back here. -->
+			<key>CFBundleURLName</key>
+			<string>com.paradocs.mobile.signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>paradocs</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>

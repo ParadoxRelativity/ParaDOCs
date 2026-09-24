@@ -2,6 +2,7 @@ import { app, dialog } from 'electron';
 import { addConnection, lastOpened, listConnections, type Connection } from './connections.js';
 import { registerIpc } from './ipc.js';
 import { buildMenu } from './menu.js';
+import { receiveSignInAddress, registerSignInScheme, signInAddressIn } from './signIn.js';
 import { initUpdates } from './updater.js';
 import { focusAppWindow, hasOpenWindow, openConnection, shutdownAll } from './windows.js';
 
@@ -16,11 +17,23 @@ if (!app.requestSingleInstanceLock()) {
 async function main(): Promise<void> {
   app.setAppUserModelId('com.paradocs.desktop'); // Windows taskbar grouping
 
-  app.on('second-instance', () => {
-    if (!focusAppWindow()) void openStartup();
+  app.on('second-instance', (_event, argv) => {
+    // On Windows and Linux a paradocs:// link starts a second copy, which
+    // passes the address here and quits.
+    const signIn = signInAddressIn(argv);
+    if (signIn) receiveSignInAddress(signIn);
+    else if (!focusAppWindow()) void openStartup();
+  });
+
+  // macOS delivers the address to the running app. Registered before ready,
+  // or a link that launched the app would be missed.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    receiveSignInAddress(url);
   });
 
   await app.whenReady();
+  registerSignInScheme();
   registerIpc();
   buildMenu();
   initUpdates();

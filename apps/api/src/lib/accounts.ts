@@ -10,7 +10,7 @@ import { addDefaultVoiceChannel } from '../routes/voice.js';
  */
 export async function createAccount(
   client: DbClient,
-  input: { email: string; name: string; passwordHash: string; isServerAdmin?: boolean },
+  input: { email: string; name: string; passwordHash: string | null; isServerAdmin?: boolean },
 ): Promise<{ id: string; email: string; name: string }> {
   const dup = await client.query('SELECT 1 FROM users WHERE lower(email) = lower($1)', [input.email]);
   if (dup.rowCount) throw conflict('An account with that email already exists');

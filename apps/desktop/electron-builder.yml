@@ -35,6 +35,14 @@ asarUnpack:
   - node_modules/@electric-sql/pglite/**
   - node_modules/jsdom/**
 
+# Single sign-on ends in the system browser on a paradocs:// address, which the
+# OS hands back to the app; see src/main/signIn.ts. The mobile app registers
+# the same scheme.
+protocols:
+  - name: ParaDOCs sign-in
+    schemes:
+      - paradocs
+
 mac:
   category: public.app-category.productivity
   icon: build/icon.icns

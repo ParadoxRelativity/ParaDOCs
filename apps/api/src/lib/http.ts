@@ -56,6 +56,7 @@ const UNIQUE_VIOLATION = '23505';
 /** What to say when a particular unique index refuses a row; others get a general message. */
 const UNIQUE_MESSAGES: Record<string, string> = {
   users_email_lower_idx: 'An account with that email already exists',
+  oidc_providers_slug_key: 'Another provider already uses that short name',
 };
 
 export function registerErrorHandler(app: {

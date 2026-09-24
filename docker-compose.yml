@@ -81,6 +81,22 @@ services:
       # administrators. Set false for a server that should not reach GitHub.
       UPDATE_CHECK: ${UPDATE_CHECK:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The address people reach ParaDOCs at, such as https://docs.example.com.
+      # Single sign-on needs it for the redirect URI registered with a provider.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Single sign-on providers are added on the server admin page. One can
+      # also be given here; see .env.example.
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-SSO}
+      OIDC_SLUG: ${OIDC_SLUG:-sso}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+      OIDC_NEW_ACCOUNTS: ${OIDC_NEW_ACCOUNTS:-registration}
+      OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
+      OIDC_TRUST_EMAILS: ${OIDC_TRUST_EMAILS:-false}
       # The server admin page: server-wide settings and every account. It has
       # its own port, published below on loopback only.
       ADMIN_ENABLED: ${ADMIN_ENABLED:-true}

@@ -72,7 +72,9 @@ export type DesktopCommand =
    */
   | { type: 'take-call'; workspaceId: string; channelId: string; join: boolean }
   /** The main window is asking a pop-out for its channel back, call and all. */
-  | { type: 'hand-back'; channelId: string };
+  | { type: 'hand-back'; channelId: string }
+  /** Single sign-on finished in the system browser, which handed it back on a paradocs:// address. */
+  | { type: 'sso-return'; code?: string; error?: string };
 
 /** A channel of this connection that is open in a window of its own. */
 export interface PoppedOut {

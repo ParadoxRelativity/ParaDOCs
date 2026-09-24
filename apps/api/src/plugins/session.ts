@@ -1,9 +1,10 @@
 import type { IncomingMessage } from 'node:http';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { forbidden, notFound, unauthorized } from '../lib/http.js';
+import { newSessionToken } from '../lib/auth.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import type { WorkspaceApp, WorkspacePermission } from '@paradocs/shared';
 import { documentAccess, type ResourceAccess } from '../lib/access.js';
@@ -130,6 +131,37 @@ export async function mediaTokenFor(sessionToken: string): Promise<string | null
     sessionToken,
   ]);
   return rows[0]?.media_token ?? null;
+}
+
+export interface NewSession {
+  token: string;
+  /** Reads uploaded files and nothing else; see migration 0029. */
+  mediaToken: string;
+}
+
+export async function createSession(userId: string): Promise<NewSession> {
+  const token = newSessionToken();
+  const { rows } = await query<{ media_token: string }>(
+    `INSERT INTO sessions (token, user_id, expires_at)
+     VALUES ($1, $2, now() + ($3 || ' days')::interval)
+     RETURNING media_token`,
+    [token, userId, String(config.sessionTtlDays)],
+  );
+  return { token, mediaToken: rows[0].media_token };
+}
+
+/**
+ * Hands a new session to whoever signed in. A browser gets it as an HTTP-only
+ * cookie, where page script cannot read it. The mobile app asks for it in the
+ * body instead, with this header, because it cannot use a cookie from another
+ * origin and has to send the token itself.
+ */
+const TOKEN_HEADER = 'x-paradocs-session';
+
+export function issueSession(req: FastifyRequest, reply: FastifyReply, session: NewSession): Partial<NewSession> {
+  if (req.headers[TOKEN_HEADER] === 'token') return session;
+  reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions());
+  return {};
 }
 
 export function sessionCookieOptions() {

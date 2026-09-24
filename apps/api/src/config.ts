@@ -98,6 +98,68 @@ function trustProxySetting(): boolean | string {
   return raw.toLowerCase() === 'true' ? true : raw;
 }
 
+/**
+ * The address people reach this server at, such as https://docs.example.com.
+ * Single sign-on needs it to tell a provider where to send people back; unset,
+ * that is worked out from each request, which is only as trustworthy as the
+ * Host header (and X-Forwarded-* with TRUST_PROXY).
+ */
+function publicUrlSetting(): string {
+  const raw = process.env.PUBLIC_URL?.trim() ?? '';
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error('PUBLIC_URL must be an http or https address, such as https://docs.example.com.');
+  }
+}
+
+/** What .env.example used to suggest for OIDC_REDIRECT_URI; it no longer works. */
+export const OLD_EXAMPLE_REDIRECT_URI = 'http://localhost:4000/api/auth/oidc/callback';
+
+/**
+ * One single sign-on provider given in the environment. It sits alongside any
+ * set up on the admin page, which shows it but cannot change it.
+ *
+ * It is on only with OIDC_ENABLED=true. Before single sign-on worked, the
+ * OIDC_* settings could be filled in ahead of time and did nothing, so a
+ * deployment that did that must not find a new way in turned on by an upgrade.
+ */
+function oidcSettings() {
+  const newAccounts = process.env.OIDC_NEW_ACCOUNTS?.trim() || 'registration';
+  if (!['registration', 'always', 'never'].includes(newAccounts)) {
+    throw new Error('OIDC_NEW_ACCOUNTS must be registration, always or never.');
+  }
+  const allowedDomains = (process.env.OIDC_ALLOWED_DOMAINS ?? '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+  const trustEmails = process.env.OIDC_TRUST_EMAILS?.trim().toLowerCase() === 'true';
+  if (trustEmails && allowedDomains.length === 0) {
+    throw new Error('OIDC_TRUST_EMAILS=true needs OIDC_ALLOWED_DOMAINS, such as example.com.');
+  }
+  const slug = process.env.OIDC_SLUG?.trim() || 'sso';
+  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(slug)) {
+    throw new Error('OIDC_SLUG must be lower-case letters, digits and hyphens, such as "sso".');
+  }
+  return {
+    enabled: process.env.OIDC_ENABLED?.trim().toLowerCase() === 'true',
+    issuer: process.env.OIDC_ISSUER?.trim() ?? '',
+    clientId: process.env.OIDC_CLIENT_ID?.trim() ?? '',
+    clientSecret: process.env.OIDC_CLIENT_SECRET?.trim() ?? '',
+    /** Unset, it is PUBLIC_URL + /api/auth/oidc/<slug>/callback. */
+    redirectUri: process.env.OIDC_REDIRECT_URI?.trim() ?? '',
+    providerName: process.env.OIDC_PROVIDER_NAME?.trim() || 'SSO',
+    slug,
+    scopes: process.env.OIDC_SCOPES?.trim() || 'openid email profile',
+    newAccounts: newAccounts as 'registration' | 'always' | 'never',
+    allowedDomains,
+    trustEmails,
+  };
+}
+
 /** Where the iOS and Android apps serve their bundled client from. */
 const MOBILE_APP_ORIGINS = ['capacitor://localhost', 'https://localhost'];
 
@@ -134,15 +196,8 @@ export const config = {
   livekit: livekitSettings(),
   admin: adminSettings(),
 
-  // OIDC is stubbed in Phase 1; these are read so deployments can be configured
-  // ahead of the implementation landing. See routes/oidc.ts.
-  oidc: {
-    issuer: process.env.OIDC_ISSUER ?? '',
-    clientId: process.env.OIDC_CLIENT_ID ?? '',
-    clientSecret: process.env.OIDC_CLIENT_SECRET ?? '',
-    redirectUri: process.env.OIDC_REDIRECT_URI ?? '',
-    providerName: process.env.OIDC_PROVIDER_NAME ?? 'SSO',
-  },
+  publicUrl: publicUrlSetting(),
+  oidc: oidcSettings(),
 };
 
 if (config.sessionSecret.length < 32) {

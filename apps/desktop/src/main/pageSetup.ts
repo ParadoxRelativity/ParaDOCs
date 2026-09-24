@@ -78,7 +78,9 @@ export type DesktopCommand =
    * pop-out answers by handing over, which is the same path as its own button,
    * so a call in it comes back rather than ending with the window.
    */
-  | { type: 'hand-back'; channelId: string };
+  | { type: 'hand-back'; channelId: string }
+  /** Single sign-on finished in the system browser, which handed it back on a paradocs:// address. */
+  | { type: 'sso-return'; code?: string; error?: string };
 
 // --- window geometry --------------------------------------------------------
 

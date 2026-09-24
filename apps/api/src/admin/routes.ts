@@ -1,15 +1,19 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  adminCreateOidcProviderSchema,
   adminCreateUserSchema,
   adminSetPasswordSchema,
+  adminUpdateOidcProviderSchema,
   adminUpdateUserSchema,
   loginSchema,
   registerSchema,
+  TRUST_NEEDS_DOMAINS,
   updateServerSettingsSchema,
   type AdminStatus,
   type AdminVersionStatus,
   type AdminUser,
 } from '@paradocs/shared';
+import { config } from '../config.js';
 import { query, transaction } from '../db/pool.js';
 import type { DbClient } from '../db/driver.js';
 import { hashPassword, verifyPassword } from '../lib/auth.js';
@@ -22,6 +26,16 @@ import { getServerSettings, updateServerSettings } from '../lib/serverSettings.j
 import { checkForServerUpdate, versionStatus } from '../lib/releases.js';
 import { removeStoredFiles } from '../lib/storage.js';
 import { registrationLimits, signInLimits } from '../lib/rateLimit.js';
+import {
+  SECRET_PURPOSE,
+  discover,
+  environmentSlug,
+  findStoredProvider,
+  forgetClient,
+  listProviders,
+  toAdminProvider,
+} from '../lib/oidcProviders.js';
+import { seal } from '../lib/secretBox.js';
 import { ADMIN_COOKIE, endAdminSession, startAdminSession } from './session.js';
 
 const ADMIN_USER_COLUMNS = `u.id, u.email, u.name,
@@ -46,6 +60,75 @@ const HAS_ADMINISTRATOR = `SELECT EXISTS (
  */
 async function lockAdministrators(client: DbClient): Promise<void> {
   await client.query(`SELECT pg_advisory_xact_lock(hashtext('paradocs.server_admins'))`);
+}
+
+/**
+ * Where people reach the app, for the redirect URI shown on the admin page.
+ * This request came to the admin port, so the address it used is no guide.
+ */
+function appOrigin(): string {
+  return config.publicUrl || `http://localhost:${config.port}`;
+}
+
+/** Refuses a provider whose discovery document cannot be fetched, so a typo shows up on saving. */
+async function checkDiscovery(provider: { issuer: string; clientId: string; clientSecret: string | null }) {
+  try {
+    await discover(provider);
+  } catch (err) {
+    throw badRequest(`Could not read ${provider.issuer}/.well-known/openid-configuration: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * Refuses to leave the app taking only single sign-on without a provider that
+ * works: at least one must be on, and its discovery document reachable now.
+ */
+async function assertSsoWorks(): Promise<void> {
+  const enabled = (await listProviders()).filter((p) => p.enabled);
+  if (enabled.length === 0) {
+    throw badRequest('Turn on a single sign-on provider before turning off password sign-in.');
+  }
+  for (const provider of enabled) {
+    // Fetched afresh rather than from the cache: the question is whether it works now.
+    if (provider.secretUnreadable) continue;
+    try {
+      await discover(provider);
+      return;
+    } catch {
+      // Try the next one.
+    }
+  }
+  throw badRequest(
+    `None of the single sign-on providers can be reached right now (${enabled.map((p) => p.name).join(', ')}), ` +
+      'so password sign-in stays on.',
+  );
+}
+
+/** While the app takes only single sign-on, the last provider that is on cannot go. */
+async function assertNotLastProvider(id: string): Promise<void> {
+  if ((await getServerSettings()).passwordSignIn) return;
+  const others = (await listProviders()).filter((p) => p.enabled && p.id !== id);
+  if (others.length === 0) {
+    throw badRequest(
+      'This is the only single sign-on provider and password sign-in is off, so nobody could sign in. ' +
+        'Turn password sign-in back on under Server settings first.',
+    );
+  }
+}
+
+/** Accounts not linked to any provider yet: they sign in with single sign-on only once it links them by email. */
+async function unlinkedAccounts(): Promise<number> {
+  const { rows } = await query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM users u
+      WHERE u.disabled_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM auth_identities i WHERE i.user_id = u.id)`,
+  );
+  return rows[0].count;
+}
+
+function providerId(id: string): string {
+  if (!UUID.test(id)) throw notFound('Provider not found');
+  return id;
 }
 
 function accountId(id: string): string {
@@ -144,6 +227,9 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     admin.patch('/settings', async (req) => {
       const input = parse(updateServerSettingsSchema, req.body);
+      // Checked only when it changes, so other settings can be saved while a
+      // provider is down.
+      if (input.passwordSignIn === false && (await getServerSettings()).passwordSignIn) await assertSsoWorks();
       const settings = await updateServerSettings(input, req.admin!.id);
       req.log.info({ admin: req.admin!.email, changes: input }, 'server settings changed');
       // Applied now rather than at the next hourly sweep, so the server does
@@ -152,6 +238,123 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         sweepExpiredMessages(app.log).catch((err) => app.log.error({ err }, 'message retention sweep failed'));
       }
       return settings;
+    });
+
+    // --- single sign-on providers ---------------------------------------------
+
+    admin.get('/oidc-providers', async () => {
+      const providers = await listProviders();
+      return {
+        providers: providers.map((p) => toAdminProvider(p, appOrigin())),
+        // New providers' redirect URIs start with this; a guess when PUBLIC_URL is unset.
+        redirectBase: `${appOrigin()}/api/auth/oidc/`,
+        publicUrlSet: Boolean(config.publicUrl),
+        unlinkedAccounts: await unlinkedAccounts(),
+      };
+    });
+
+    admin.post('/oidc-providers', async (req, reply) => {
+      const input = parse(adminCreateOidcProviderSchema, req.body);
+      if (input.slug === environmentSlug()) {
+        throw conflict(`"${input.slug}" is used by the provider set in the environment`);
+      }
+      await checkDiscovery({ issuer: input.issuer, clientId: input.clientId, clientSecret: input.clientSecret ?? null });
+      const { rows } = await query<{ id: string }>(
+        `INSERT INTO oidc_providers
+           (slug, name, issuer, client_id, client_secret_enc, scopes, new_accounts, allowed_domains, enabled,
+            trust_emails, position)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'openid email profile'), COALESCE($7, 'registration'),
+                 COALESCE($8, '{}'::text[]), COALESCE($9, true), COALESCE($10, false),
+                 (SELECT COALESCE(max(position) + 1, 0) FROM oidc_providers))
+         RETURNING id`,
+        [
+          input.slug,
+          input.name,
+          input.issuer,
+          input.clientId,
+          input.clientSecret ? seal(input.clientSecret, SECRET_PURPOSE) : null,
+          input.scopes ?? null,
+          input.newAccounts ?? null,
+          input.allowedDomains ?? null,
+          input.enabled ?? null,
+          input.trustEmails ?? null,
+        ],
+      );
+      req.log.info({ admin: req.admin!.email, provider: input.slug }, 'single sign-on provider added');
+      reply.status(201);
+      return toAdminProvider((await findStoredProvider(rows[0].id))!, appOrigin());
+    });
+
+    admin.patch<{ Params: { id: string } }>('/oidc-providers/:id', async (req) => {
+      const id = providerId(req.params.id);
+      const input = parse(adminUpdateOidcProviderSchema, req.body);
+      const current = await findStoredProvider(id);
+      if (!current) throw notFound('Provider not found');
+      if (input.enabled === false) await assertNotLastProvider(id);
+
+      const next = {
+        issuer: input.issuer ?? current.issuer,
+        clientId: input.clientId ?? current.clientId,
+        clientSecret: input.clientSecret === undefined ? current.clientSecret : input.clientSecret,
+      };
+      // Checked against the result, so clearing the domains of a trusted
+      // provider is refused as well as trusting one that has none.
+      const trustEmails = input.trustEmails ?? current.trustEmails;
+      const allowedDomains = input.allowedDomains ?? current.allowedDomains;
+      if (trustEmails && allowedDomains.length === 0) throw badRequest(TRUST_NEEDS_DOMAINS);
+
+      const reconnects =
+        next.issuer !== current.issuer || next.clientId !== current.clientId || input.clientSecret !== undefined;
+      if (reconnects) await checkDiscovery(next);
+
+      await query(
+        `UPDATE oidc_providers
+            SET name = COALESCE($2, name),
+                issuer = COALESCE($3, issuer),
+                client_id = COALESCE($4, client_id),
+                client_secret_enc = CASE WHEN $5::boolean THEN $6 ELSE client_secret_enc END,
+                scopes = COALESCE($7, scopes),
+                new_accounts = COALESCE($8, new_accounts),
+                allowed_domains = COALESCE($9, allowed_domains),
+                enabled = COALESCE($10, enabled),
+                trust_emails = COALESCE($11, trust_emails),
+                updated_at = now()
+          WHERE id = $1`,
+        [
+          id,
+          input.name ?? null,
+          input.issuer ?? null,
+          input.clientId ?? null,
+          input.clientSecret !== undefined,
+          input.clientSecret ? seal(input.clientSecret, SECRET_PURPOSE) : null,
+          input.scopes ?? null,
+          input.newAccounts ?? null,
+          input.allowedDomains ?? null,
+          input.enabled ?? null,
+          input.trustEmails ?? null,
+        ],
+      );
+      forgetClient(current.slug);
+      req.log.info(
+        { admin: req.admin!.email, provider: current.slug, changes: { ...input, clientSecret: undefined } },
+        'single sign-on provider changed',
+      );
+      return toAdminProvider((await findStoredProvider(id))!, appOrigin());
+    });
+
+    /**
+     * Removes a provider. Accounts it made keep working for anyone with a
+     * password, and its links stay: set the same issuer up again and they
+     * sign in as before.
+     */
+    admin.delete<{ Params: { id: string } }>('/oidc-providers/:id', async (req, reply) => {
+      const id = providerId(req.params.id);
+      await assertNotLastProvider(id);
+      const { rows } = await query<{ slug: string }>('DELETE FROM oidc_providers WHERE id = $1 RETURNING slug', [id]);
+      if (!rows[0]) throw notFound('Provider not found');
+      forgetClient(rows[0].slug);
+      req.log.warn({ admin: req.admin!.email, provider: rows[0].slug }, 'single sign-on provider removed');
+      reply.status(204);
     });
 
     admin.get('/version', async (): Promise<AdminVersionStatus> => versionStatus());

@@ -1,11 +1,10 @@
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { changePasswordSchema, loginSchema, registerSchema, updateProfileSchema } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
-import { hashPassword, newSessionToken, verifyPassword } from '../lib/auth.js';
+import { hashPassword, verifyPassword } from '../lib/auth.js';
 import { badRequest, conflict, forbidden, parse, unauthorized } from '../lib/http.js';
-import { SESSION_COOKIE, mediaTokenFor, sessionCookieOptions, sessionToken } from '../plugins/session.js';
-import { config } from '../config.js';
-import { oidcStatus } from './oidc.js';
+import { SESSION_COOKIE, createSession, issueSession, mediaTokenFor, sessionToken } from '../plugins/session.js';
+import { oidcStatus, passwordSignInAllowed } from '../lib/oidcProviders.js';
 import { replaceAvatar, storeAvatar } from '../lib/avatars.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { createAccount } from '../lib/accounts.js';
@@ -14,37 +13,6 @@ import { passwordCheckLimits, registrationLimits, signInLimits } from '../lib/ra
 
 /** The account as the client sees it. */
 const USER_COLUMNS = `id, email, name, ${uploadUrlSql('avatar_key')} AS "avatarUrl"`;
-
-interface NewSession {
-  token: string;
-  /** Reads uploaded files and nothing else; see migration 0029. */
-  mediaToken: string;
-}
-
-async function createSession(userId: string): Promise<NewSession> {
-  const token = newSessionToken();
-  const { rows } = await query<{ media_token: string }>(
-    `INSERT INTO sessions (token, user_id, expires_at)
-     VALUES ($1, $2, now() + ($3 || ' days')::interval)
-     RETURNING media_token`,
-    [token, userId, String(config.sessionTtlDays)],
-  );
-  return { token, mediaToken: rows[0].media_token };
-}
-
-/**
- * Hands a new session to whoever signed in. A browser gets it as an HTTP-only
- * cookie, where page script cannot read it. The mobile app asks for it in the
- * body instead, with this header, because it cannot use a cookie from another
- * origin and has to send the token itself.
- */
-const TOKEN_HEADER = 'x-paradocs-session';
-
-function issueSession(req: FastifyRequest, reply: FastifyReply, session: NewSession): Partial<NewSession> {
-  if (req.headers[TOKEN_HEADER] === 'token') return session;
-  reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions());
-  return {};
-}
 
 /**
  * Checks the password of someone already signed in, before a change that
@@ -65,6 +33,12 @@ async function confirmPassword(userId: string, given: string | undefined): Promi
   }
 }
 
+async function refuseUnlessPasswords(req: FastifyRequest): Promise<void> {
+  if (!(await passwordSignInAllowed(req.log))) {
+    throw forbidden('This server signs in with single sign-on only. Use one of the sign-in buttons.');
+  }
+}
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.get('/auth/me', async (req) => {
     // A client signed in with a bearer token also needs the files-only token
@@ -73,13 +47,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return {
       user: req.user,
       allowRegistration: (await getServerSettings()).allowRegistration,
-      oidc: oidcStatus(),
+      passwordSignIn: await passwordSignInAllowed(req.log),
+      oidc: await oidcStatus(),
       ...(bearer ? { mediaToken: await mediaTokenFor(bearer) } : {}),
     };
   });
 
   app.post('/auth/register', async (req, reply) => {
     const input = parse(registerSchema, req.body);
+    await refuseUnlessPasswords(req);
     registrationLimits.check(req.ip);
 
     // Registration can be closed from the admin page, but the very first account
@@ -100,6 +76,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/auth/login', async (req, reply) => {
     const input = parse(loginSchema, req.body);
+    // Before the password is looked at, so a server that takes none tells a
+    // guesser nothing about it.
+    await refuseUnlessPasswords(req);
     signInLimits.check(req.ip, input.email);
     const { rows } = await query<{
       id: string;

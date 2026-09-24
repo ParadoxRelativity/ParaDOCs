@@ -16,6 +16,7 @@ import type {
   Message,
   MessageReferences,
   Notifications,
+  OidcStatus,
   PresenceSettings,
   PresenceStatus,
   Role,
@@ -143,7 +144,8 @@ export function useMe() {
       const me = await api.get<{
         user: User | null;
         allowRegistration: boolean;
-        oidc: { enabled: boolean; configured: boolean; providerName: string };
+        passwordSignIn: boolean;
+        oidc: OidcStatus;
         mediaToken?: string | null;
       }>('/auth/me');
       // Only the mobile app is given one; see lib/server.ts.
@@ -161,6 +163,20 @@ export function useLogin() {
       api.post<{ user: User; token?: string; mediaToken?: string }>('/auth/login', input),
     onSuccess: (result) => {
       // Only the mobile app is handed its session to keep; see lib/server.ts.
+      if (result.token) setSessionToken(result.token);
+      if (result.mediaToken) setMediaToken(result.mediaToken);
+      return qc.invalidateQueries();
+    },
+  });
+}
+
+/** Redeems the code a native app was handed at the end of single sign-on; see lib/sso.ts. */
+export function useSsoHandoff() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { code: string; verifier: string }) =>
+      api.post<{ user: User; token?: string; mediaToken?: string }>('/auth/oidc/handoff', input),
+    onSuccess: (result) => {
       if (result.token) setSessionToken(result.token);
       if (result.mediaToken) setMediaToken(result.mediaToken);
       return qc.invalidateQueries();

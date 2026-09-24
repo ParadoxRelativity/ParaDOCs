@@ -19,12 +19,20 @@ export interface ServerSettings {
    * exists. Direct messages are not affected.
    */
   messageRetentionMaxDays: number | null;
+  /**
+   * Whether people can sign in to the app with an email and password. Off
+   * leaves only single sign-on. The admin page always takes passwords, so an
+   * administrator can turn this back on, and it cannot be turned off without
+   * a single sign-on provider that works.
+   */
+  passwordSignIn: boolean;
 }
 
 export const updateServerSettingsSchema = z
   .object({
     allowRegistration: z.boolean().optional(),
     messageRetentionMaxDays: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable().optional(),
+    passwordSignIn: z.boolean().optional(),
   })
   .refine((v) => Object.values(v).some((value) => value !== undefined), { message: 'Nothing to update' });
 

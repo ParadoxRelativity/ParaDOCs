@@ -93,7 +93,8 @@ export default function App() {
     return (
       <AuthScreen
         allowRegistration={me.data?.allowRegistration ?? false}
-        oidc={me.data?.oidc ?? { enabled: false, configured: false, providerName: 'SSO' }}
+        passwordSignIn={me.data?.passwordSignIn ?? true}
+        oidc={me.data?.oidc ?? { providers: [] }}
       />
     );
   }

@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import {
   MAX_RETENTION_DAYS,
+  type AdminOidcProvider,
   type AdminStatus,
   type AdminUser,
   type AdminVersionStatus,
+  type OidcNewAccountMode,
   type ServerSettings,
 } from '@paradocs/shared';
 import { Button, Spinner } from '../components/ui';
@@ -19,11 +21,15 @@ import {
   useAdminStatus,
   useAdminUsers,
   useCheckForUpdate,
+  useCreateOidcProvider,
   useCreateUser,
+  useDeleteOidcProvider,
   useDeleteUser,
+  useOidcProviders,
   useServerSettings,
   useSetUserPassword,
   useSignOutUser,
+  useUpdateOidcProvider,
   useUpdateServerSettings,
   useUpdateUser,
   useVersionStatus,
@@ -229,16 +235,17 @@ function SignIn({ setupRequired }: { setupRequired: boolean }) {
 
 // --- console -------------------------------------------------------------------
 
-type Tab = 'settings' | 'accounts';
+type Tab = 'settings' | 'accounts' | 'sso';
 
 const TABS: { id: Tab; label: string; icon: IconName }[] = [
   { id: 'settings', label: 'Server settings', icon: 'sliders' },
   { id: 'accounts', label: 'Accounts', icon: 'people' },
+  { id: 'sso', label: 'Single sign-on', icon: 'key' },
 ];
 
 /** The open tab lives in the address, so a reload stays where it was. */
 function useTab(): [Tab, (tab: Tab) => void] {
-  const read = (): Tab => (window.location.hash === '#accounts' ? 'accounts' : 'settings');
+  const read = (): Tab => TABS.find((t) => `#${t.id}` === window.location.hash)?.id ?? 'settings';
   const [tab, setTab] = useState(read);
   useEffect(() => {
     const follow = () => setTab(read());
@@ -292,7 +299,9 @@ function Console({ user }: { user: NonNullable<AdminStatus['user']> }) {
         </nav>
         <main className="scroll-thin min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="mx-auto max-w-3xl">
-            {tab === 'settings' ? <SettingsPanel /> : <AccountsPanel selfId={user.id} />}
+            {tab === 'settings' && <SettingsPanel />}
+            {tab === 'accounts' && <AccountsPanel selfId={user.id} />}
+            {tab === 'sso' && <SsoPanel />}
           </div>
         </main>
       </div>
@@ -410,12 +419,16 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   const update = useUpdateServerSettings();
   const toast = useToast();
   const [allowRegistration, setAllowRegistration] = useState(current.allowRegistration);
+  const [passwordSignIn, setPasswordSignIn] = useState(current.passwordSignIn);
+  const providers = useOidcProviders();
+  const enabledProviders = providers.data?.providers.filter((p) => p.enabled) ?? [];
   const [limited, setLimited] = useState(current.messageRetentionMaxDays !== null);
   const [days, setDays] = useState(String(current.messageRetentionMaxDays ?? DEFAULT_RETENTION_DAYS));
   const [confirming, setConfirming] = useState(false);
 
   function reset() {
     setAllowRegistration(current.allowRegistration);
+    setPasswordSignIn(current.passwordSignIn);
     setLimited(current.messageRetentionMaxDays !== null);
     setDays(String(current.messageRetentionMaxDays ?? DEFAULT_RETENTION_DAYS));
   }
@@ -425,7 +438,10 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   const parsedDays = Number(days);
   const daysValid = Number.isInteger(parsedDays) && parsedDays >= 1 && parsedDays <= MAX_RETENTION_DAYS;
   const retention = limited ? parsedDays : null;
-  const dirty = allowRegistration !== current.allowRegistration || retention !== current.messageRetentionMaxDays;
+  const dirty =
+    allowRegistration !== current.allowRegistration ||
+    passwordSignIn !== current.passwordSignIn ||
+    retention !== current.messageRetentionMaxDays;
   const valid = !limited || daysValid;
   // Keeping messages for less time than before deletes history as soon as it is saved.
   const deletesHistory =
@@ -434,7 +450,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   function save() {
     setConfirming(false);
     update.mutate(
-      { allowRegistration, messageRetentionMaxDays: retention },
+      { allowRegistration, passwordSignIn, messageRetentionMaxDays: retention },
       {
         onSuccess: () => toast('Server settings saved'),
         onError: (err) => toast(err.message, 'error'),
@@ -459,6 +475,35 @@ function SettingsForm({ current }: { current: ServerSettings }) {
           hint="When off, create accounts under Accounts."
         >
           <Switch checked={allowRegistration} onChange={setAllowRegistration} label="Anyone can create an account" />
+        </Section>
+
+        <Section
+          title="Sign-in"
+          hint="Off leaves only single sign-on. This page always takes passwords, so you can turn it back on here."
+        >
+          <div className="space-y-2">
+            <Switch
+              checked={passwordSignIn}
+              onChange={setPasswordSignIn}
+              // Turning it off needs a provider; turning it back on never does.
+              disabled={current.passwordSignIn && enabledProviders.length === 0}
+              label="Allow signing in with email and password"
+            />
+            {current.passwordSignIn && enabledProviders.length === 0 && (
+              <p className="text-xs text-[var(--color-muted)]">
+                Add a provider under Single sign-on before turning this off.
+              </p>
+            )}
+            {!passwordSignIn && current.passwordSignIn && providers.data && (
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+                People will sign in only with {enabledProviders.map((p) => p.name).join(' or ')}.{' '}
+                {providers.data.unlinkedAccounts > 0 &&
+                  `${providers.data.unlinkedAccounts} account${providers.data.unlinkedAccounts === 1 ? ' has' : 's have'} not signed in that way yet; ` +
+                    'they are linked on their first single sign-on if the provider confirms the same email. '}
+                The provider is checked when you save.
+              </p>
+            )}
+          </div>
         </Section>
 
         <Section
@@ -840,6 +885,348 @@ function ManageAccountDialog({ user, self, onClose }: { user: AdminUser; self: b
               onError: fail,
             });
           }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// --- single sign-on ------------------------------------------------------------
+
+const NEW_ACCOUNT_CHOICES: { mode: OidcNewAccountMode; label: string; hint: string }[] = [
+  {
+    mode: 'registration',
+    label: 'Follow the registration setting',
+    hint: 'Anyone the provider signs in gets an account while registration is open.',
+  },
+  {
+    mode: 'always',
+    label: 'Always, even with registration closed',
+    hint: 'The provider decides who gets in. Suits your own identity provider; limit domains for a public one.',
+  },
+  { mode: 'never', label: 'Never', hint: 'Only people who already have an account here can sign in with it.' },
+];
+
+function CopyValue({ value }: { value: string }) {
+  const toast = useToast();
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <code className="truncate rounded bg-[var(--color-surface)] px-1.5 py-0.5 text-xs">{value}</code>
+      <button
+        type="button"
+        title="Copy"
+        aria-label="Copy"
+        className="shrink-0 text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+        onClick={(e) => {
+          e.stopPropagation();
+          void navigator.clipboard.writeText(value).then(() => toast('Copied'));
+        }}
+      >
+        <Icon name="clipboard" />
+      </button>
+    </span>
+  );
+}
+
+function SsoPanel() {
+  const providers = useOidcProviders();
+  const [editing, setEditing] = useState<AdminOidcProvider | 'new' | null>(null);
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="mr-auto">
+          <h2 className="text-lg font-semibold">Single sign-on</h2>
+          <p className="text-sm text-[var(--color-muted)]">
+            OpenID Connect providers people can sign in with, alongside email and password.
+          </p>
+        </div>
+        <Button variant="primary" onClick={() => setEditing('new')}>
+          <Icon name="plus-lg" /> Add provider
+        </Button>
+      </div>
+
+      {providers.data && !providers.data.publicUrlSet && (
+        <p className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          PUBLIC_URL is not set, so the redirect addresses below are a guess. Set it to the address people use to
+          reach ParaDOCs, such as https://docs.example.com, and restart.
+        </p>
+      )}
+
+      {providers.isLoading ? (
+        <Spinner />
+      ) : !providers.data ? (
+        <p className="text-sm text-red-500">Could not load providers.</p>
+      ) : providers.data.providers.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-[var(--color-line)] py-8 text-center text-sm text-[var(--color-muted)]">
+          No providers yet. Sign-in is email and password only.
+        </p>
+      ) : (
+        <ul className="divide-y divide-[var(--color-line)] overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)]">
+          {providers.data.providers.map((p) => (
+            <li key={p.slug}>
+              <button
+                type="button"
+                disabled={p.fromEnvironment}
+                onClick={() => setEditing(p)}
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-left enabled:hover:bg-[var(--color-surface)]"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                    <span className={cx('truncate', !p.enabled && 'text-[var(--color-muted)]')}>{p.name}</span>
+                    <Badge tone="muted">{p.slug}</Badge>
+                    {p.fromEnvironment && <Badge tone="accent">Environment</Badge>}
+                    {p.trustEmails && <Badge tone="muted">Trusted emails</Badge>}
+                    {!p.enabled && <Badge tone="danger">Off</Badge>}
+                  </div>
+                  <div className="truncate text-xs text-[var(--color-muted)]">{p.issuer}</div>
+                  <div className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+                    Redirect URI <CopyValue value={p.redirectUri} />
+                  </div>
+                  {p.fromEnvironment && (
+                    <div className="text-xs text-[var(--color-muted)]">
+                      {p.enabled
+                        ? 'Set by the OIDC_* settings; change it there.'
+                        : 'Set by the OIDC_* settings, and off until OIDC_ENABLED=true is set there.'}
+                    </div>
+                  )}
+                </div>
+                {!p.fromEnvironment && <Icon name="chevron-right" className="text-xs text-[var(--color-muted)]" />}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="mt-4 text-xs text-[var(--color-muted)]">
+        Someone signing in for the first time is matched to an existing account by email, but only when the provider
+        says the address is verified, or you trust its emails. Otherwise a new account is made, if the provider allows
+        it.
+      </p>
+
+      {editing && providers.data && (
+        <ProviderDialog
+          provider={editing === 'new' ? null : editing}
+          redirectBase={providers.data.redirectBase}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProviderDialog({
+  provider,
+  redirectBase,
+  onClose,
+}: {
+  provider: AdminOidcProvider | null;
+  redirectBase: string;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const create = useCreateOidcProvider();
+  const update = useUpdateOidcProvider();
+  const remove = useDeleteOidcProvider();
+  const [name, setName] = useState(provider?.name ?? '');
+  const [slug, setSlug] = useState(provider?.slug ?? '');
+  const [issuer, setIssuer] = useState(provider?.issuer ?? '');
+  const [clientId, setClientId] = useState(provider?.clientId ?? '');
+  const [clientSecret, setClientSecret] = useState('');
+  const [removeSecret, setRemoveSecret] = useState(false);
+  const [scopes, setScopes] = useState(provider?.scopes ?? 'openid email profile');
+  const [newAccounts, setNewAccounts] = useState<OidcNewAccountMode>(provider?.newAccounts ?? 'registration');
+  const [domains, setDomains] = useState(provider?.allowedDomains.join(', ') ?? '');
+  const [enabled, setEnabled] = useState(provider?.enabled ?? true);
+  const [trustEmails, setTrustEmails] = useState(provider?.trustEmails ?? false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const pending = create.isPending || update.isPending;
+  const error = create.error ?? update.error;
+  const allowedDomains = domains
+    .split(/[\s,]+/)
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const common = {
+      name: name.trim(),
+      issuer: issuer.trim(),
+      clientId: clientId.trim(),
+      scopes,
+      newAccounts,
+      allowedDomains,
+      // Only ever alongside allowed domains; the server refuses it otherwise.
+      trustEmails: trustEmails && allowedDomains.length > 0,
+      enabled,
+    };
+    if (!provider) {
+      create.mutate(
+        { ...common, slug, clientSecret: clientSecret || undefined },
+        {
+          onSuccess: (created) => {
+            toast(`Added ${created.name}. Register its redirect URI with the provider if you have not.`);
+            onClose();
+          },
+        },
+      );
+      return;
+    }
+    update.mutate(
+      {
+        id: provider.id!,
+        input: { ...common, clientSecret: removeSecret ? null : clientSecret || undefined },
+      },
+      {
+        onSuccess: () => {
+          toast(`${common.name} saved`);
+          onClose();
+        },
+      },
+    );
+  }
+
+  function deleteProvider() {
+    setConfirmingDelete(false);
+    remove.mutate(provider!.id!, {
+      onSuccess: () => {
+        toast(`Removed ${provider!.name}`);
+        onClose();
+      },
+      onError: (err) => toast(err.message, 'error'),
+    });
+  }
+
+  return (
+    <Modal
+      wide
+      title={provider ? provider.name : 'Add a provider'}
+      onClose={confirmingDelete ? () => {} : onClose}
+      footer={
+        <>
+          {provider && (
+            <Button variant="danger" type="button" className="mr-auto" onClick={() => setConfirmingDelete(true)}>
+              <Icon name="trash" /> Remove
+            </Button>
+          )}
+          <Button variant="subtle" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" form="oidc-provider" disabled={pending}>
+            {pending ? 'Checking…' : provider ? 'Save' : 'Add provider'}
+          </Button>
+        </>
+      }
+    >
+      <form id="oidc-provider" onSubmit={submit} className="scroll-thin max-h-[65vh] space-y-3 overflow-y-auto pr-1">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Name" hint="On the sign-in button: “Sign in with …”">
+            <input className={FIELD} value={name} onChange={(e) => setName(e.target.value)} required maxLength={60} autoFocus />
+          </Field>
+          <Field label="Short name" hint={provider ? 'Part of the redirect URI, so it cannot change.' : 'Lower-case letters, digits and hyphens.'}>
+            <input
+              className={FIELD}
+              value={slug}
+              disabled={Boolean(provider)}
+              onChange={(e) => setSlug(e.target.value.toLowerCase())}
+              required
+              pattern="[a-z0-9][a-z0-9\-]{0,39}"
+              placeholder="google"
+            />
+          </Field>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+          Redirect URI <CopyValue value={`${redirectBase}${slug || '<short name>'}/callback`} />
+        </div>
+        <Field label="Issuer URL" hint="Where /.well-known/openid-configuration is found. Checked when you save.">
+          <input
+            className={FIELD}
+            type="url"
+            value={issuer}
+            onChange={(e) => setIssuer(e.target.value)}
+            required
+            placeholder="https://accounts.google.com"
+          />
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Client ID">
+            <input className={FIELD} value={clientId} onChange={(e) => setClientId(e.target.value)} required />
+          </Field>
+          <Field
+            label="Client secret"
+            hint={
+              provider?.hasClientSecret
+                ? 'A secret is stored. Leave blank to keep it.'
+                : 'Leave blank for a public client, which uses PKCE alone.'
+            }
+          >
+            <input
+              className={FIELD}
+              type="password"
+              autoComplete="off"
+              value={clientSecret}
+              disabled={removeSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+            />
+          </Field>
+        </div>
+        {provider?.hasClientSecret && (
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={removeSecret} onChange={(e) => setRemoveSecret(e.target.checked)} />
+            Remove the stored secret
+          </label>
+        )}
+        <Field label="Scopes" hint="Must include openid; email is needed to match or create accounts.">
+          <input className={FIELD} value={scopes} onChange={(e) => setScopes(e.target.value)} required />
+        </Field>
+
+        <fieldset className="space-y-1.5">
+          <legend className="mb-1 text-xs font-medium text-[var(--color-muted)]">New accounts</legend>
+          {NEW_ACCOUNT_CHOICES.map((choice) => (
+            <label key={choice.mode} className="flex cursor-pointer items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="new-accounts"
+                className="mt-1"
+                checked={newAccounts === choice.mode}
+                onChange={() => setNewAccounts(choice.mode)}
+              />
+              <span>
+                {choice.label}
+                <span className="block text-xs text-[var(--color-muted)]">{choice.hint}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+
+        <Field label="Allowed email domains" hint="Comma-separated, such as example.com. Empty allows any domain.">
+          <input className={FIELD} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder="example.com" />
+        </Field>
+        <div>
+          <Switch
+            checked={trustEmails && allowedDomains.length > 0}
+            onChange={setTrustEmails}
+            disabled={allowedDomains.length === 0}
+            label="Trust this provider's email addresses"
+          />
+          <span className="mt-1 block text-xs text-[var(--color-muted)]">
+            {allowedDomains.length === 0
+              ? 'Needs allowed domains first, so the provider cannot vouch for addresses outside them.'
+              : 'Treats its emails as verified even when it does not say so, as Microsoft Entra ID does not. Only turn this on for a provider whose accounts in these domains your organisation controls.'}
+          </span>
+        </div>
+        <Switch checked={enabled} onChange={setEnabled} label="Show on the sign-in screen" />
+        {error && <p className="text-sm text-red-500">{error.message}</p>}
+      </form>
+
+      {confirmingDelete && provider && (
+        <ConfirmDialog
+          title={`Remove ${provider.name}?`}
+          description="People can no longer sign in with it. Their accounts stay, and set up again with the same issuer, it signs them in as before. Accounts without a password need one set under Accounts to sign in meanwhile."
+          confirmLabel="Remove"
+          onConfirm={deleteProvider}
           onCancel={() => setConfirmingDelete(false)}
         />
       )}
