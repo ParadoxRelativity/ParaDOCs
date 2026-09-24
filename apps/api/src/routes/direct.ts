@@ -9,6 +9,7 @@ import {
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
 import { UUID, channelAccessFor, mentionsUserSql } from '../lib/channels.js';
+import { roleIdSql } from '../lib/access.js';
 import { removeStoredFiles, uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 import { publishToUser } from '../chat/hub.js';
@@ -33,6 +34,8 @@ async function listDirect(workspaceId: string, userId: string, channelId: string
   const { rows } = await query<Channel>(
     `SELECT c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind, c.position,
             c.created_at AS "createdAt", c.direct_group AS "group",
+            -- Everyone in a conversation may post in it, if their role lets them post at all.
+            CASE WHEN role_ceiling(${roleIdSql('$2', 'c.workspace_id')}, 'chat') >= 2 THEN 'edit' ELSE 'view' END AS permission,
             others.people -> 0 AS peer,
             COALESCE(others.people, '[]'::json) AS members,
             latest.last_at AS "lastMessageAt",
@@ -161,14 +164,14 @@ export const directRoutes: FastifyPluginAsync = async (app) => {
 
   /** The signed-in person's direct conversations in a workspace, most recent first. */
   app.get<{ Params: { id: string } }>('/workspaces/:id/direct', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id, 'viewer', 'chat');
+    await assertWorkspaceAccess(req, req.params.id, 'chat.view', 'chat');
     return listDirect(req.params.id, req.user!.id, null);
   });
 
   /** Opens the conversation with one or more other members, starting it if there is none yet. */
   app.post<{ Params: { id: string } }>('/workspaces/:id/direct', async (req) => {
     const workspaceId = req.params.id;
-    await assertWorkspaceAccess(req, workspaceId, 'viewer', 'chat');
+    await assertWorkspaceAccess(req, workspaceId, 'chat.direct', 'chat');
     const input = parse(openDirectSchema, req.body);
     const self = req.user!.id;
     const others = [...new Set((input.userIds ?? [input.userId!]).map((id) => id.toLowerCase()))].filter(

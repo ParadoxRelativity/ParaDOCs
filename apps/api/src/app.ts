@@ -26,6 +26,7 @@ import { voiceRoutes, voiceWebhookRoutes } from './routes/voice.js';
 import { eventRoutes } from './routes/events.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { inviteRoutes, memberRoutes } from './routes/members.js';
+import { roleRoutes } from './routes/roles.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { oidcRoutes } from './routes/oidc.js';
 import { directRoutes } from './routes/direct.js';
@@ -133,6 +134,7 @@ export async function buildApp() {
     eventRoutes,
     uploadRoutes,
     memberRoutes,
+    roleRoutes,
     accessRoutes,
     inviteRoutes,
     notificationRoutes,

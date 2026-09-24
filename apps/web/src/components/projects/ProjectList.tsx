@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { ProjectKind, ProjectSummary } from '@paradocs/shared';
+import { projectPermission, type ProjectKind, type ProjectSummary } from '@paradocs/shared';
 import { useProjects, useUpdateProject } from '../../api/hooks';
+import type { Can } from '../../lib/permissions';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { cx, useLocalStorage } from '../../lib/util';
 import { AccessDialog, LockMark, type NamedAccessTarget } from '../AccessDialog';
@@ -18,7 +19,7 @@ import { ProjectIcon } from './projectUi';
 export function ProjectList({
   workspaceId,
   activeProjectId,
-  canEdit,
+  can,
   canManageAccess,
   myWorkCount,
   onOpenMyWork,
@@ -27,7 +28,8 @@ export function ProjectList({
   workspaceId: string;
   /** Null while My work is showing. */
   activeProjectId: string | null;
-  canEdit: boolean;
+  /** What this person's role lets them do, so nothing is offered that would be refused. */
+  can: Can;
   canManageAccess: boolean;
   myWorkCount: number | undefined;
   onOpenMyWork: () => void;
@@ -40,12 +42,14 @@ export function ProjectList({
   const [securing, setSecuring] = useState<NamedAccessTarget | null>(null);
 
   const list = projects.data ?? [];
-  const groups: { kind: ProjectKind; label: string }[] = [
+  // A role can reach projects and not queues, or the other way round; the
+  // half it cannot reach is not shown at all.
+  const groups = ([
     { kind: 'project', label: 'Projects' },
     { kind: 'queue', label: 'Queues' },
-  ];
+  ] satisfies { kind: ProjectKind; label: string }[]).filter(({ kind }) => can(projectPermission(kind, 'view')));
 
-  const rowProps = { workspaceId, activeProjectId, canEdit, canManageAccess, onSelect, onManageAccess: setSecuring };
+  const rowProps = { workspaceId, activeProjectId, can, canManageAccess, onSelect, onManageAccess: setSecuring };
 
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-2">
@@ -73,7 +77,7 @@ export function ProjectList({
           <div key={kind} className="mt-3">
             <div className="mb-0.5 flex items-center justify-between px-2">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">{label}</span>
-              {canEdit && (
+              {can(projectPermission(kind, 'create')) && (
                 <IconButton label={kind === 'queue' ? 'New queue' : 'New project'} onClick={() => setCreating(kind)}>
                   <Icon name="plus-lg" />
                 </IconButton>
@@ -127,7 +131,7 @@ function ProjectRow({
   project,
   workspaceId,
   activeProjectId,
-  canEdit,
+  can,
   canManageAccess,
   onSelect,
   onManageAccess,
@@ -135,7 +139,7 @@ function ProjectRow({
   project: ProjectSummary;
   workspaceId: string;
   activeProjectId: string | null;
-  canEdit: boolean;
+  can: Can;
   canManageAccess: boolean;
   onSelect: (projectId: string) => void;
   onManageAccess: (target: NamedAccessTarget) => void;
@@ -144,7 +148,8 @@ function ProjectRow({
   const update = useUpdateProject(workspaceId, project.id);
   const toast = useToast();
   const active = project.id === activeProjectId;
-  const canChange = canEdit && project.permission === 'edit';
+  // Archiving is part of how a project is set up, so it takes being able to configure one.
+  const canChange = project.permission === 'edit' && can(projectPermission(project.kind, 'configure'));
 
   const items: SheetMenuItem[] = [];
   items.push({

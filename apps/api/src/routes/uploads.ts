@@ -36,7 +36,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.get('/uploads/config', async (): Promise<UploadConfig> => ({ maxBytes: config.maxUploadBytes }));
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/uploads', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor');
+    await assertWorkspaceAccess(req, req.params.id, 'docs.edit');
     const file = await req.file(uploadLimits());
     if (!file) throw badRequest('No file was uploaded');
 
@@ -69,7 +69,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { unattached?: string } }>(
     '/workspaces/:id/uploads',
     async (req) => {
-      await assertWorkspaceAccess(req, req.params.id, 'admin');
+      await assertWorkspaceAccess(req, req.params.id, 'uploads.manage');
       const onlyUnattached = req.query.unattached === 'true';
 
       const { rows } = await query(
@@ -108,7 +108,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.delete<{ Params: { id: string; uploadId: string } }>(
     '/workspaces/:id/uploads/:uploadId',
     async (req, reply) => {
-      await assertWorkspaceAccess(req, req.params.id, 'admin');
+      await assertWorkspaceAccess(req, req.params.id, 'uploads.manage');
       const { rows } = await query<{ storage_key: string }>(
         'SELECT storage_key FROM attachments WHERE id = $1 AND workspace_id = $2',
         [req.params.uploadId, req.params.id],
@@ -125,7 +125,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string; uploadId: string } }>(
     '/workspaces/:id/uploads/:uploadId/attach',
     async (req, reply) => {
-      await assertWorkspaceAccess(req, req.params.id, 'admin');
+      await assertWorkspaceAccess(req, req.params.id, 'uploads.manage');
       const input = parse(attachSchema, req.body ?? {});
 
       const { rows } = await query<{

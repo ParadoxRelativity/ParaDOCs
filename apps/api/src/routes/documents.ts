@@ -12,13 +12,13 @@ import {
   assertFolderAccess,
   assertMoveKeepsAccess,
   documentLevelSql,
-  roleSql,
+  roleIdSql,
 } from '../lib/access.js';
 import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
 
 /** The full document as `user` sees it, adding the body and derived fields to the shared summary. */
 function docColumns(user: string): string {
-  return `${documentSummaryColumns(user, roleSql(user, 'd.workspace_id'))}, d.body, d.body_md AS "bodyMd", d.properties,
+  return `${documentSummaryColumns(user, roleIdSql(user, 'd.workspace_id'))}, d.body, d.body_md AS "bodyMd", d.properties,
   (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email)
      FROM users u WHERE u.id = d.created_by) AS owner`;
 }
@@ -61,7 +61,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     Params: { id: string };
     Querystring: { limit?: string; offset?: string; sort?: string; archived?: string; unfiled?: string };
   }>('/workspaces/:id/documents', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'docs.view', 'docs');
     const limit = Math.min(Math.max(Number(req.query.limit ?? 100) || 100, 1), 200);
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
     const archived = req.query.archived === 'true';
@@ -85,14 +85,14 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         WHERE ${conditions.join(' AND ')}
         ORDER BY ${orderBy}
         LIMIT $3 OFFSET $4`,
-      [req.params.id, archived, limit, offset, req.user!.id, role],
+      [req.params.id, archived, limit, offset, req.user!.id, roleId],
     );
     // `hasMore` lets the client offer "load more" without a second count query.
     return { documents: rows, hasMore: rows.length === limit };
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/documents', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, req.params.id, 'docs.create', 'docs');
     const input = parse(createDocumentSchema, req.body);
     // Filing into a folder takes being allowed to change what is in it.
     if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id, 'docs');
@@ -129,7 +129,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch<{ Params: { id: string } }>('/documents/:id', async (req) => {
-    const { workspaceId, role } = await assertDocumentAccess(req, req.params.id, 'editor');
+    const { workspaceId, role } = await assertDocumentAccess(req, req.params.id, 'edit');
     const input = parse(updateDocumentSchema, req.body);
 
     if (input.folderId !== undefined) {
@@ -195,7 +195,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete<{ Params: { id: string } }>('/documents/:id', async (req, reply) => {
-    const { workspaceId } = await assertDocumentAccess(req, req.params.id, 'editor');
+    const { workspaceId } = await assertDocumentAccess(req, req.params.id, 'delete');
     await query('DELETE FROM documents WHERE id = $1', [req.params.id]);
     treeChanged(workspaceId, 'docs');
     reply.status(204);
@@ -233,7 +233,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>(
     '/workspaces/:id/activity',
     async (req) => {
-      const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
+      const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'docs.view', 'docs');
       const from = parse(isoDate, req.query.from ?? new Date().toISOString().slice(0, 8) + '01');
       const to = parse(isoDate, req.query.to ?? from);
       // Only documents this reader may see leave a dot: a day of work on a
@@ -252,7 +252,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
            ) activity
           WHERE day BETWEEN $2::date AND $3::date
           GROUP BY day ORDER BY day`,
-        [req.params.id, from, to, req.user!.id, role],
+        [req.params.id, from, to, req.user!.id, roleId],
       );
       return rows;
     },

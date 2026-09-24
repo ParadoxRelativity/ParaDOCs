@@ -147,7 +147,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
    * simply empty.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/voice/participants', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'chat');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'chat.view', 'chat');
     const occupancy: Record<string, VoiceOccupant[]> = {};
     if (!voiceEnabled()) return occupancy;
 
@@ -155,7 +155,7 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
     const { rows } = await query<{ id: string }>(
       `SELECT c.id FROM channels c
         WHERE c.workspace_id = $1 AND c.kind = 'voice' AND ${channelLevelSql('$2', '$3')} > 0`,
-      [req.params.id, req.user!.id, role],
+      [req.params.id, req.user!.id, roleId],
     );
     if (rows.length === 0) return occupancy;
 

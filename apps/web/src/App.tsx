@@ -35,6 +35,7 @@ import {
 } from './api/hooks';
 import { ApiError } from './api/client';
 import { cx, useLocalStorage } from './lib/util';
+import { canFrom } from './lib/permissions';
 import AuthScreen from './components/AuthScreen';
 import LeftSidebar from './components/LeftSidebar';
 import RightSidebar, { type RightTab } from './components/RightSidebar';
@@ -286,13 +287,14 @@ function Workspace({
 
   const workspaces = useWorkspaces();
   const workspace = workspaces.data?.find((w) => w.id === workspaceId);
-  // Viewers get the whole app read-only; editors and above can write.
-  const canEdit = workspace ? workspace.role !== 'viewer' : false;
-  // Owners and admins manage channels; everyone else just reads and posts.
-  const canManageChannels = workspace ? workspace.role === 'owner' || workspace.role === 'admin' : false;
-  // The apps this workspace has on. Nothing belonging to one that is off is
-  // asked for, since the server would refuse it.
-  const appOn = (app: WorkspaceApp) => workspace?.apps.includes(app) ?? false;
+  // What this person's role lets them do here. A lock on one thing can take
+  // more away, which each thing's own `permission` says.
+  const can = canFrom(workspace?.permissions);
+  // Owners and admins decide who can see what, and no lock keeps them out.
+  const managesAccess = workspace ? workspace.role === 'owner' || workspace.role === 'admin' : false;
+  // The apps this workspace has on that this person's role reaches. Nothing
+  // belonging to any other is asked for, since the server would refuse it.
+  const appOn = (app: WorkspaceApp) => workspace?.visibleApps.includes(app) ?? false;
   const section: WorkspaceApp | 'access' = chat
     ? 'chat'
     : sheets
@@ -657,7 +659,8 @@ function Workspace({
   // An app turned off — while someone was in it, or in a tab or link from
   // before — gives way to the first one still on.
   if (workspace && section !== 'access' && !appOn(section)) {
-    return <Navigate to={appHome(workspaceId, workspace.apps[0] ?? 'docs')} replace />;
+    const first = workspace.visibleApps[0];
+    return <Navigate to={first ? appHome(workspaceId, first) : `/w/${workspaceId}/access`} replace />;
   }
 
   const direct = activeChannel?.kind === 'direct' ? activeChannel : null;
@@ -685,8 +688,8 @@ function Workspace({
             onSelectWorkspace={(id) => navigate(`/w/${id}`)}
             documentId={documentId ?? null}
             onSelectDocument={(id) => show(`/w/${workspaceId}/d/${id}`)}
-            canEdit={canEdit}
-            canManageAccess={canManageChannels}
+            can={can}
+            canManageAccess={managesAccess}
             onDocumentDeleted={(id) => {
               // Deleting the document you are reading has to move you off it,
               // or the page sits on something the server no longer has.
@@ -743,7 +746,7 @@ function Workspace({
               else if (channelList.find((c) => c.id === id)?.kind === 'voice') call.join(id);
               show(`/w/${workspaceId}/c/${id}`);
             }}
-            canManageChannels={canManageChannels}
+            canManageChannels={can('chat.channels')}
             unreadTotal={unreadTotal}
             mentionTotal={mentionTotal}
             voiceEnabled={voiceEnabled}
@@ -823,7 +826,7 @@ function Workspace({
           {!chat && !sheets && !projects && !access && !allDocuments && document.data && (
             <ModeSwitch
               mode={document.data.mode}
-              disabled={!canEdit || document.data.permission !== 'edit'}
+              disabled={document.data.permission !== 'edit'}
               onChange={(mode) => patch({ mode })}
             />
           )}
@@ -881,8 +884,8 @@ function Workspace({
                 // A lock can leave a channel readable but not writable.
                 canPost={Boolean(workspace) && activeChannel.permission !== 'view'}
                 // No one moderates a conversation they are not part of.
-                canModerate={canManageChannels && !direct}
-                canEditChannel={canManageChannels && activeChannel.kind === 'text'}
+                canModerate={can('chat.moderate') && !direct}
+                canEditChannel={can('chat.channels') && activeChannel.kind === 'text'}
                 title={direct ? <DirectTitle channel={direct} status={statusOf(direct.peer?.id)} /> : undefined}
                 actions={
                   <>
@@ -979,8 +982,9 @@ function Workspace({
                 workspaceId={workspaceId}
                 sheetId={sheetId}
                 self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
-                // The workspace role, and then any lock on this spreadsheet.
-                canEdit={canEdit && openSheet.data?.permission === 'edit'}
+                // The workspace role, and then any lock on this spreadsheet,
+                // which the server has already weighed together.
+                canEdit={openSheet.data?.permission === 'edit'}
               />
             ) : (
               <EmptyState icon="table" title="No spreadsheet open" />
@@ -1002,8 +1006,9 @@ function Workspace({
                 doc={document.data}
                 workspaceId={workspaceId}
                 dark={dark}
-                // The workspace role, and then any lock on this document.
-                canEdit={canEdit && document.data.permission === 'edit'}
+                // The workspace role, and then any lock on this document,
+                // which the server has already weighed together.
+                canEdit={document.data.permission === 'edit'}
                 self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
                 onPatch={patch}
                 onBlocksChange={setLiveBlocks}
@@ -1043,6 +1048,7 @@ function Workspace({
             liveBlocks={liveBlocks}
             workspaceId={workspaceId}
             currentUserId={userId}
+            can={can}
             onPatch={patch}
             onDelete={() => {
               if (!documentId) return;

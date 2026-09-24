@@ -9,6 +9,7 @@ import {
   useUpdateFolder,
   useUpdateSpreadsheet,
 } from '../../api/hooks';
+import type { Can } from '../../lib/permissions';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { rememberImport } from '../../lib/sheetImport';
 import { cx, formatRelative, useLocalStorage } from '../../lib/util';
@@ -51,14 +52,15 @@ function carriesSheet(event: React.DragEvent): boolean {
 export function SheetList({
   workspaceId,
   activeSheetId,
-  canEdit,
+  can,
   canManageAccess,
   onSelect,
   onDeleted,
 }: {
   workspaceId: string;
   activeSheetId: string | null;
-  canEdit: boolean;
+  /** What this person's role lets them do, so nothing is offered that would be refused. */
+  can: Can;
   /** Owners and admins, who decide who can see each folder and spreadsheet. */
   canManageAccess: boolean;
   onSelect: (id: string) => void;
@@ -135,7 +137,7 @@ export function SheetList({
   const shared = {
     workspaceId,
     activeSheetId,
-    canEdit,
+    can,
     canManageAccess,
     onSelect,
     onDeleted,
@@ -158,7 +160,7 @@ export function SheetList({
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
           Spreadsheets
         </span>
-        {canEdit && (
+        {can('sheets.create') && (
           <span className="flex items-center">
             <IconButton
               label={importing ? 'Importing…' : 'Import from Excel (.xlsx)'}
@@ -209,7 +211,7 @@ export function SheetList({
       ) : empty && creatingIn === undefined ? (
         <div className="px-2 py-6 text-center">
           <p className="text-xs text-[var(--color-muted)]">No spreadsheets yet.</p>
-          {canEdit && (
+          {can('sheets.create') && (
             <button
               onClick={() => void newSheet()}
               className="mt-2 text-xs font-medium text-[var(--color-accent)] hover:underline"
@@ -228,7 +230,7 @@ export function SheetList({
           <div
             className={cx('mt-1 min-h-6 rounded-md', unfiledDrop && 'bg-[var(--color-accent-soft)]')}
             onDragOver={(event) => {
-              if (!canEdit || !carriesSheet(event)) return;
+              if (!can('sheets.edit') || !carriesSheet(event)) return;
               event.preventDefault();
               setUnfiledDrop(true);
             }}
@@ -279,7 +281,7 @@ export function SheetList({
 interface RowProps {
   workspaceId: string;
   activeSheetId: string | null;
-  canEdit: boolean;
+  can: Can;
   canManageAccess: boolean;
   onSelect: (id: string) => void;
   onDeleted: (id: string) => void;
@@ -294,7 +296,7 @@ interface RowProps {
 }
 
 function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetFolderNode; depth: number }) {
-  const { workspaceId, canEdit, canManageAccess, creatingIn } = props;
+  const { workspaceId, can, canManageAccess, creatingIn } = props;
   const [open, setOpen] = useLocalStorage(`paradocs.sheetFolder.${folder.id}`, depth === 0);
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -310,12 +312,14 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
   const creatingHere = creatingIn === folder.id;
   const expanded = open || creatingHere;
   // A lock can leave someone able to see a folder without changing what is in
-  // it, or shown it only as the way to something inside.
-  const canChange = canEdit && folder.permission === 'edit';
+  // it, or shown it only as the way to something inside. Their role has
+  // already been weighed into `permission`; adding and deleting are asked of
+  // it separately.
+  const canChange = folder.permission === 'edit';
   const pathOnly = folder.permission === 'none';
 
   const menuItems: SheetMenuItem[] = [];
-  if (canChange) {
+  if (canChange && can('sheets.create')) {
     menuItems.push(
       { label: 'New spreadsheet', icon: 'table', onSelect: () => props.onNewSheet(folder.id) },
       {
@@ -326,8 +330,10 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
           props.onStartCreate(folder.id);
         },
       },
-      { label: 'Rename or change icon', icon: 'pencil', onSelect: () => setRenaming(true) },
     );
+  }
+  if (canChange) {
+    menuItems.push({ label: 'Rename or change icon', icon: 'pencil', onSelect: () => setRenaming(true) });
   }
   if (canManageAccess) {
     if (menuItems.length > 0) menuItems.push('divider');
@@ -337,7 +343,7 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
       onSelect: () => props.onManageAccess({ kind: 'folder', id: folder.id, name: folder.name }),
     });
   }
-  if (canChange) {
+  if (canChange && can('sheets.delete')) {
     menuItems.push('divider', {
       label: 'Delete folder…',
       icon: 'trash3',
@@ -416,7 +422,7 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
         {menuItems.length > 0 && (
           // Kept showing while the menu is open, so it stays anchored to something.
           <div className={cx('items-center', renaming ? 'hidden' : menu ? 'flex' : 'hidden group-hover:flex')}>
-            {canChange && (
+            {canChange && can('sheets.create') && (
               <IconButton label="New spreadsheet here" onClick={() => props.onNewSheet(folder.id)}>
                 <Icon name="plus-lg" />
               </IconButton>
@@ -491,7 +497,7 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
 }
 
 function SheetRow({ sheet, depth, ...props }: RowProps & { sheet: SpreadsheetSummary; depth: number }) {
-  const { workspaceId, canEdit, canManageAccess } = props;
+  const { workspaceId, can, canManageAccess } = props;
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const remove = useDeleteSpreadsheet(workspaceId);
@@ -499,7 +505,7 @@ function SheetRow({ sheet, depth, ...props }: RowProps & { sheet: SpreadsheetSum
 
   const active = sheet.id === props.activeSheetId;
   const path = `/w/${workspaceId}/s/${sheet.id}`;
-  const canChange = canEdit && sheet.permission === 'edit';
+  const canChange = sheet.permission === 'edit';
 
   const menuItems: SheetMenuItem[] = [];
   if (canChange) menuItems.push({ label: 'Move to folder…', icon: 'folder-symlink', onSelect: () => props.onMove(sheet) });
@@ -510,7 +516,7 @@ function SheetRow({ sheet, depth, ...props }: RowProps & { sheet: SpreadsheetSum
       onSelect: () => props.onManageAccess({ kind: 'spreadsheet', id: sheet.id, name: sheet.title }),
     });
   }
-  if (canChange) {
+  if (canChange && can('sheets.delete')) {
     menuItems.push('divider', { label: 'Delete…', icon: 'trash3', danger: true, onSelect: () => setConfirming(true) });
   }
 

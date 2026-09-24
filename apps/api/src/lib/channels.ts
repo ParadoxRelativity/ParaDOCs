@@ -1,6 +1,6 @@
 import { HERE_REF, type ChannelKind, type ChatEvent } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import type { Role } from '../plugins/session.js';
+import { MEMBERSHIP_COLUMNS, membershipFrom, type Membership } from './roles.js';
 import { publishToChannel, publishToUser } from '../chat/hub.js';
 import { UUID, channelLevelSql, type Level } from './access.js';
 import { appEnabledSql } from './apps.js';
@@ -17,12 +17,10 @@ export function mentionsUserSql(userParam: string): string {
   return `(position('<@' || ${userParam}::text || '>' in lower(m.body)) > 0 OR position('${HERE_REF}' in m.body) > 0)`;
 }
 
-export interface ChannelAccess {
+export interface ChannelAccess extends Membership {
   workspaceId: string;
   kind: ChannelKind;
   name: string;
-  /** The person's role in the channel's workspace. */
-  role: Role;
   /** 1 reads a text channel or listens in a voice one; 2 also posts or speaks. */
   level: Level;
 }
@@ -41,24 +39,33 @@ export async function channelAccessFor(userId: string, channelId: string): Promi
     workspace_id: string;
     kind: ChannelKind;
     name: string;
-    role: Role | null;
+    role: Membership['role'] | null;
+    role_id: string | null;
+    permissions: string[] | null;
     level: number | null;
   }>(
-    `SELECT c.workspace_id, c.kind, c.name, m.role,
+    `SELECT c.workspace_id, c.kind, c.name, ${MEMBERSHIP_COLUMNS},
             CASE WHEN c.kind = 'direct'
                  THEN CASE WHEN EXISTS (
                         SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = $2
-                      ) THEN 2 ELSE 0 END
-                 ELSE ${channelLevelSql('$2', 'm.role')}
+                      ) THEN LEAST(role_ceiling(m.role_id, 'chat'), 2) ELSE 0 END
+                 ELSE ${channelLevelSql('$2', 'm.role_id')}
             END AS level
        FROM channels c
        LEFT JOIN workspace_members m ON m.workspace_id = c.workspace_id AND m.user_id = $2
+       LEFT JOIN workspace_roles r ON r.id = m.role_id
       WHERE c.id = $1 AND ${appEnabledSql('c.workspace_id', 'chat')}`,
     [channelId, userId],
   );
   const row = rows[0];
-  if (!row?.role || !row.level) return null;
-  return { workspaceId: row.workspace_id, kind: row.kind, name: row.name, role: row.role, level: row.level as Level };
+  if (!row?.role || !row.role_id || !row.level) return null;
+  return {
+    ...membershipFrom({ role: row.role, role_id: row.role_id, permissions: row.permissions }),
+    workspaceId: row.workspace_id,
+    kind: row.kind,
+    name: row.name,
+    level: row.level as Level,
+  };
 }
 
 /** The people in a direct conversation. */

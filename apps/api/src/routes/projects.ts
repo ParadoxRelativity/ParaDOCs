@@ -58,6 +58,7 @@ import {
   type WorkItemListing,
   type WorkItemSummary,
   type WorkItemTimeline,
+  projectPermission,
 } from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
@@ -71,7 +72,7 @@ import {
   managesAccess,
   permissionSql,
   projectLevelSql,
-  roleSql,
+  roleIdSql,
 } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { resolveReferences, resolveWorkItems } from '../lib/chatReferences.js';
@@ -86,6 +87,7 @@ import {
 } from '../lib/storage.js';
 import { notifyAboutWorkItem, projectChanged, syncWorkItemMentions } from '../lib/workItems.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
+import { grants } from '../lib/roles.js';
 
 /**
  * Projects and queues, and the work items in them.
@@ -224,7 +226,7 @@ const TRANSITIONS_JSON = `COALESCE((
 
 async function fetchProject(id: string, userId: string): Promise<Project> {
   const { rows } = await query<Project>(
-    `SELECT ${projectColumns('$2', roleSql('$2', 'p.workspace_id'))},
+    `SELECT ${projectColumns('$2', roleIdSql('$2', 'p.workspace_id'))},
             COALESCE((SELECT json_agg(json_build_object('id', st.id, 'name', st.name, 'category', st.category,
                                                         'color', st.color, 'position', st.position)
                                       ORDER BY st.position, st.created_at)
@@ -247,7 +249,9 @@ async function fetchProject(id: string, userId: string): Promise<Project> {
             COALESCE((SELECT json_agg(to_jsonb(s) - 'ord' ORDER BY s.ord)
                         FROM (SELECT ${SPRINT_COLUMNS}, row_number() OVER (ORDER BY ${SPRINT_ORDER}) AS ord
                                 FROM project_sprints sp WHERE sp.project_id = p.id) s), '[]'::json) AS sprints,
-            (${roleSql('$2', 'p.workspace_id')} IN ('owner', 'admin') OR p.created_by = $2) AS "canDelete"
+            (${projectLevelSql('$2', roleIdSql('$2', 'p.workspace_id'))} = 2
+              AND (role_grants(${roleIdSql('$2', 'p.workspace_id')}, p.kind || 's.delete')
+                OR (p.created_by = $2 AND role_grants(${roleIdSql('$2', 'p.workspace_id')}, p.kind || 's.create')))) AS "canDelete"
        FROM projects p WHERE p.id = $1`,
     [id, userId],
   );
@@ -701,7 +705,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   // --- projects --------------------------------------------------------------
 
   app.get<{ Params: { id: string }; Querystring: { archived?: string } }>('/workspaces/:id/projects', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'projects');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, undefined, 'projects');
     const { rows } = await query(
       `SELECT ${projectColumns('$3', '$4')}
          FROM projects p
@@ -709,15 +713,15 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           AND (p.archived_at IS NOT NULL) = $2
           AND ${projectLevelSql('$3', '$4')} > 0
         ORDER BY p.kind, lower(p.name)`,
-      [req.params.id, req.query.archived === 'true', req.user!.id, role],
+      [req.params.id, req.query.archived === 'true', req.user!.id, roleId],
     );
     return rows;
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/projects', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor', 'projects');
     const input = parse(createProjectSchema, req.body ?? {});
     const kind = input.kind ?? 'project';
+    await assertWorkspaceAccess(req, req.params.id, projectPermission(kind, 'create'), 'projects');
     await assertKeyFree(req.params.id, input.key);
     const defaults = DEFAULTS[kind];
 
@@ -790,7 +794,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch<{ Params: { id: string } }>('/projects/:id', async (req) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
     const input = parse(updateProjectSchema, req.body ?? {});
     if (input.key) await assertKeyFree(workspaceId, input.key, req.params.id);
     if (input.defaultTypeId) {
@@ -837,12 +841,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete<{ Params: { id: string } }>('/projects/:id', async (req, reply) => {
-    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'edit');
+    const access = await assertProjectAccess(req, req.params.id, 'configure');
+    const { workspaceId, kind } = access;
     const { rows } = await query<{ created_by: string | null }>('SELECT created_by FROM projects WHERE id = $1', [
       req.params.id,
     ]);
-    if (!managesAccess(role) && rows[0]?.created_by !== req.user!.id) {
-      throw forbidden('Only an owner, an admin or whoever made this project can delete it. You can archive it instead.');
+    const own = rows[0]?.created_by === req.user!.id && grants(access, projectPermission(kind, 'create'));
+    if (!own && !grants(access, projectPermission(kind, 'delete'))) {
+      throw forbidden(`Your role does not let you delete a ${kind} someone else started. You can archive it instead.`);
     }
     // The rows for its items' files cascade away with it, so the files are collected first.
     const { rows: files } = await query<{ storage_key: string }>(
@@ -862,7 +868,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   // --- statuses --------------------------------------------------------------
 
   app.post<{ Params: { id: string } }>('/projects/:id/statuses', async (req, reply) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
     const input = parse(createStatusSchema, req.body ?? {});
     const { rows } = await query<ProjectStatus>(
       `INSERT INTO project_statuses (project_id, name, category, color, position)
@@ -877,7 +883,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/project-statuses/:id', async (req) => {
     const projectId = await projectOfStatus(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     const input = parse(updateStatusSchema, req.body ?? {});
     if (input.category === 'backlog') await assertKeepsBoardStatus(projectId, req.params.id);
 
@@ -907,7 +913,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { id: string }; Querystring: { moveTo?: string } }>('/project-statuses/:id', async (req, reply) => {
     const projectId = await projectOfStatus(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     const input = parse(deleteStatusSchema, req.query ?? {});
 
     const { rows } = await query<{ statuses: number; items: number }>(
@@ -946,7 +952,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   // --- roles -----------------------------------------------------------------
 
   app.post<{ Params: { id: string } }>('/projects/:id/roles', async (req, reply) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
     const input = parse(createRoleSchema, req.body ?? {});
     await assertRoleNameFree(req.params.id, input.name);
     const { rows } = await query<ProjectRole>(
@@ -968,7 +974,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/project-roles/:id', async (req) => {
     const projectId = await projectOfRole(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     const input = parse(updateRoleSchema, req.body ?? {});
     if (input.name) await assertRoleNameFree(projectId, input.name, req.params.id);
 
@@ -1006,7 +1012,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { id: string } }>('/project-roles/:id', async (req, reply) => {
     const projectId = await projectOfRole(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     await query('DELETE FROM project_roles WHERE id = $1', [req.params.id]);
     projectChanged(workspaceId, projectId);
     reply.status(204);
@@ -1026,7 +1032,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.post<{ Params: { id: string } }>('/projects/:id/workflows', async (req, reply) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
     const input = parse(createWorkflowSchema, req.body ?? {});
     await assertWorkflowNameFree(req.params.id, input.name);
     const { rows } = await query<{ id: string }>(
@@ -1042,7 +1048,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/project-workflows/:id', async (req) => {
     const projectId = await projectOfWorkflow(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     const input = parse(updateWorkflowSchema, req.body ?? {});
     if (input.name) await assertWorkflowNameFree(projectId, input.name, req.params.id);
 
@@ -1085,7 +1091,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { id: string } }>('/project-workflows/:id', async (req, reply) => {
     const projectId = await projectOfWorkflow(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     // The types that followed it lose their row too, and move freely again.
     await query('DELETE FROM project_workflows WHERE id = $1', [req.params.id]);
     projectChanged(workspaceId, projectId);
@@ -1114,7 +1120,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.post<{ Params: { id: string } }>('/projects/:id/item-types', async (req, reply) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
     const input = parse(createItemTypeSchema, req.body ?? {});
     await assertItemTypeNameFree(req.params.id, input.name);
     const roleIds = await projectRoleIds(req.params.id, input.roleIds);
@@ -1143,7 +1149,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    */
   app.patch<{ Params: { id: string } }>('/project-item-types/:id', async (req) => {
     const type = await itemTypeRow(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, type.projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, type.projectId, 'configure');
     const input = parse(updateItemTypeSchema, req.body ?? {});
     if (input.name) await assertItemTypeNameFree(type.projectId, input.name, req.params.id);
     if (input.workflowId && (await projectOfWorkflow(input.workflowId)) !== type.projectId) {
@@ -1189,7 +1195,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    */
   app.delete<{ Params: { id: string }; Querystring: { moveTo?: string } }>('/project-item-types/:id', async (req, reply) => {
     const type = await itemTypeRow(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, type.projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, type.projectId, 'configure');
     const input = parse(deleteItemTypeSchema, req.query ?? {});
     const project = await fetchProject(type.projectId, req.user!.id);
     const others = project.itemTypes.filter((t) => t.id !== type.id);
@@ -1250,7 +1256,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.post<{ Params: { id: string } }>('/projects/:id/sprints', async (req, reply) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'sprints');
     const input = parse(createSprintSchema, req.body ?? {});
     assertDates(input.startDate, input.endDate);
     const { rows } = await query<{ id: string }>(
@@ -1267,7 +1273,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/project-sprints/:id', async (req) => {
     const sprint = await sprintRow(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, sprint.projectId, 'sprints');
     const input = parse(updateSprintSchema, req.body ?? {});
     const { rows } = await query<{ start: string | null; end: string | null }>(
       `SELECT to_char(start_date, 'YYYY-MM-DD') AS start, to_char(end_date, 'YYYY-MM-DD') AS "end"
@@ -1304,7 +1310,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post<{ Params: { id: string } }>('/project-sprints/:id/start', async (req) => {
     const sprint = await sprintRow(req.params.id);
-    const { workspaceId, role } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const { workspaceId, role } = await assertProjectAccess(req, sprint.projectId, 'sprints');
     const input = parse(startSprintSchema, req.body ?? {});
     assertDates(input.startDate, input.endDate);
     if (sprint.state !== 'planned') throw badRequest(`${sprint.name} has already been started`);
@@ -1352,7 +1358,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post<{ Params: { id: string } }>('/project-sprints/:id/complete', async (req) => {
     const sprint = await sprintRow(req.params.id);
-    const { workspaceId, role } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const { workspaceId, role } = await assertProjectAccess(req, sprint.projectId, 'sprints');
     const input = parse(completeSprintSchema, req.body ?? {});
     if (sprint.state !== 'active') throw badRequest(`${sprint.name} is not running`);
     const next = input.moveTo ? await openSprintOf(sprint.projectId, input.moveTo) : null;
@@ -1380,7 +1386,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   /** Deletes a sprint that is not running. Its work goes back to the backlog. */
   app.delete<{ Params: { id: string } }>('/project-sprints/:id', async (req, reply) => {
     const sprint = await sprintRow(req.params.id);
-    const { workspaceId } = await assertProjectAccess(req, sprint.projectId, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, sprint.projectId, 'sprints');
     if (sprint.state === 'active') throw badRequest(`${sprint.name} is running. Complete it before deleting it.`);
     await query('DELETE FROM project_sprints WHERE id = $1', [req.params.id]);
     projectChanged(workspaceId, sprint.projectId);
@@ -1389,7 +1395,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   /** Puts many items in one sprint, or back in the backlog with null. */
   app.post<{ Params: { id: string } }>('/projects/:id/items/sprint', async (req) => {
-    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'sprints');
     const input = parse(setWorkItemsSprintSchema, req.body ?? {});
     const sprint = input.sprintId ? await openSprintOf(req.params.id, input.sprintId) : null;
     const project = await fetchProject(req.params.id, req.user!.id);
@@ -1417,7 +1423,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/items', async (req, reply) => {
-    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'items');
     const parsed = parse(createWorkItemSchema, req.body ?? {});
     const input = { ...parsed, description: parsed.description ?? '' };
     const project = await fetchProject(req.params.id, req.user!.id);
@@ -1499,7 +1505,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    * hundred items picked and put on the board is one request and one change.
    */
   app.post<{ Params: { id: string } }>('/projects/:id/items/move', async (req) => {
-    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'edit');
+    const { workspaceId, role } = await assertProjectAccess(req, req.params.id, 'items');
     const input = parse(moveWorkItemsSchema, req.body ?? {});
     const project = await fetchProject(req.params.id, req.user!.id);
     const target = project.statuses.find((s) => s.id === input.statusId);
@@ -1559,7 +1565,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch<{ Params: { id: string } }>('/work-items/:id', async (req) => {
-    const { workspaceId, projectId, role } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId, role } = await assertWorkItemAccess(req, req.params.id, 'items');
     const input = parse(updateWorkItemSchema, req.body ?? {});
 
     const { rows: before } = await query<{
@@ -1700,7 +1706,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   /** The items this one is linked to, those the reader may see, grouped the way the panel lists them. */
   app.get<{ Params: { id: string } }>('/work-items/:id/links', async (req): Promise<WorkItemLink[]> => {
     const { workspaceId } = await assertWorkItemAccess(req, req.params.id);
-    const role = roleSql('$2', '$3');
+    const role = roleIdSql('$2', '$3');
     const { rows } = await query<WorkItemLink>(
       `SELECT l.id, l.type,
               CASE WHEN l.source_id = $1 THEN 'outward' ELSE 'inward' END AS direction,
@@ -1725,7 +1731,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    * as much a note on this item as a change to that one.
    */
   app.post<{ Params: { id: string } }>('/work-items/:id/links', async (req, reply) => {
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'items');
     const input = parse(createWorkItemLinkSchema, req.body ?? {});
     const type: WorkItemLinkType = input.type;
     if (input.targetId === req.params.id) throw badRequest('A work item cannot be linked to itself');
@@ -1819,7 +1825,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   /** Attaches one file. Anyone who can change the item can add to it. */
   app.post<{ Params: { id: string } }>('/work-items/:id/attachments', async (req, reply) => {
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'items');
     const file = await req.file(uploadLimits());
     if (!file) throw badRequest('No file was uploaded');
 
@@ -1878,7 +1884,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     );
     if (!rows[0]) throw notFound('File not found');
     const itemId = rows[0].work_item_id;
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, itemId, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, itemId, 'items');
 
     const removed = await transaction(async (client) => {
       const { rows: gone } = await client.query<{ storage_key: string; filename: string }>(
@@ -1898,7 +1904,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.put<{ Params: { id: string; roleId: string } }>('/work-items/:id/roles/:roleId', async (req) => {
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'items');
     const input = parse(setWorkItemRoleSchema, req.body ?? {});
     if (!UUID.test(req.params.roleId)) throw notFound('Role not found');
     const { rows: roles } = await query<{ name: string; multiple: boolean; freeForm: boolean; applies: boolean }>(
@@ -1958,7 +1964,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete<{ Params: { id: string } }>('/work-items/:id', async (req, reply) => {
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'items');
     // The rows for its files cascade away with it, so the files are collected first.
     const { rows: files } = await query<{ storage_key: string }>(
       'SELECT storage_key FROM work_item_attachments WHERE work_item_id = $1',
@@ -2008,7 +2014,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>('/work-items/:id/comments', async (req, reply) => {
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'comment');
     const input = parse(workItemCommentSchema, req.body ?? {});
     const { rows } = await query<{ id: string }>(
       'INSERT INTO work_item_comments (work_item_id, author_id, body) VALUES ($1, $2, $3) RETURNING id',
@@ -2034,7 +2040,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/work-item-comments/:id', async (req) => {
     const found = await commentRow(req.params.id);
-    const { workspaceId, projectId } = await assertWorkItemAccess(req, found.work_item_id, 'edit');
+    const { workspaceId, projectId } = await assertWorkItemAccess(req, found.work_item_id, 'comment');
     if (found.author_id !== req.user!.id) throw forbidden('You can only edit your own comments');
     const input = parse(workItemCommentSchema, req.body ?? {});
     await query('UPDATE work_item_comments SET body = $2, edited_at = now() WHERE id = $1', [req.params.id, input.body]);
@@ -2067,7 +2073,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string } }>('/work-items/:id/backlinks', async (req): Promise<WorkItemBacklinks> => {
     const { workspaceId } = await assertWorkItemAccess(req, req.params.id);
     const user = req.user!.id;
-    const role = roleSql('$2', '$3');
+    const role = roleIdSql('$2', '$3');
     const [documents, channels, workItems] = await Promise.all([
       query<WorkItemBacklinks['documents'][number]>(
         `SELECT d.id, d.title, d.icon, d.mode
@@ -2117,9 +2123,9 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
     '/workspaces/:id/work-items',
     async (req): Promise<WorkItemListing[]> => {
-      const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'projects');
+      const { roleId } = await assertWorkspaceAccess(req, req.params.id, undefined, 'projects');
       const input = parse(listQuerySchema, req.query ?? {});
-      const params: unknown[] = [req.params.id, req.user!.id, role];
+      const params: unknown[] = [req.params.id, req.user!.id, roleId];
       const where = ['i.workspace_id = $1', 'p.archived_at IS NULL', `${projectLevelSql('$2', '$3')} > 0`];
       if (input.mine === 'true') {
         where.push('EXISTS (SELECT 1 FROM work_item_roles wr WHERE wr.work_item_id = i.id AND wr.user_id = $2)');

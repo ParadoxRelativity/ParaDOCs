@@ -5,7 +5,7 @@ import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
-import { assertFolderAccess, assertMoveKeepsAccess, assertSpreadsheetAccess, roleSql, spreadsheetLevelSql } from '../lib/access.js';
+import { assertFolderAccess, assertMoveKeepsAccess, assertSpreadsheetAccess, roleIdSql, spreadsheetLevelSql } from '../lib/access.js';
 import { spreadsheetSummaryColumns } from '../lib/documentColumns.js';
 import { treeChanged } from '../lib/treeEvents.js';
 import { loadWorkbook, resolveInWorkbook, type Workbook } from '../lib/workbook.js';
@@ -61,7 +61,7 @@ export async function resolveSheetRefs(userId: string, refs: SheetRef[]): Promis
 /** A spreadsheet as `user` sees it. */
 async function fetchSheet(id: string, userId: string) {
   const { rows } = await query(
-    `SELECT ${spreadsheetSummaryColumns('$2', roleSql('$2', 's.workspace_id'))} FROM spreadsheets s WHERE s.id = $1`,
+    `SELECT ${spreadsheetSummaryColumns('$2', roleIdSql('$2', 's.workspace_id'))} FROM spreadsheets s WHERE s.id = $1`,
     [id, userId],
   );
   if (!rows[0]) throw notFound('Spreadsheet not found');
@@ -74,7 +74,7 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { archived?: string } }>(
     '/workspaces/:id/spreadsheets',
     async (req) => {
-      const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'sheets');
+      const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'sheets.view', 'sheets');
       const archived = req.query.archived === 'true';
       // Only what the reader may see is listed.
       const { rows } = await query(
@@ -85,14 +85,14 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
             AND ${spreadsheetLevelSql('$3', '$4')} > 0
           ORDER BY s.updated_at DESC
           LIMIT 500`,
-        [req.params.id, archived, req.user!.id, role],
+        [req.params.id, archived, req.user!.id, roleId],
       );
       return rows;
     },
   );
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/spreadsheets', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor', 'sheets');
+    await assertWorkspaceAccess(req, req.params.id, 'sheets.create', 'sheets');
     const input = parse(createSpreadsheetSchema, req.body ?? {});
     // Filing into a folder takes being allowed to change what is in it.
     if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id, 'sheets');
@@ -154,7 +154,7 @@ export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete<{ Params: { id: string } }>('/spreadsheets/:id', async (req, reply) => {
-    const { workspaceId } = await assertSpreadsheetAccess(req, req.params.id, 'edit');
+    const { workspaceId } = await assertSpreadsheetAccess(req, req.params.id, 'delete');
     await query('DELETE FROM spreadsheets WHERE id = $1', [req.params.id]);
     treeChanged(workspaceId, 'sheets');
     reply.status(204);

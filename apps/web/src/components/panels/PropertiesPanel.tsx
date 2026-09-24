@@ -13,13 +13,16 @@ interface Props {
   workspaceId: string;
   onPatch: (patch: DocumentPatch) => void;
   onDelete: () => void;
+  /** Their role, and then any lock on the document. */
+  canEdit: boolean;
+  canDelete: boolean;
 }
 
 /**
  * The same editors the document itself shows, plus the read-only info and the
  * destructive actions that do not belong inline in the document.
  */
-export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }: Props) {
+export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete, canEdit, canDelete }: Props) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const toast = useToast();
 
@@ -35,6 +38,8 @@ export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }:
 
   return (
     <div className="space-y-5 p-3 text-sm">
+      {/* Everything that changes the document, held still for someone who may only read it. */}
+      <fieldset disabled={!canEdit} className="min-w-0 space-y-5 disabled:opacity-70">
       <section>
         <Label>Mode</Label>
         <div className="grid grid-cols-2 gap-1.5">
@@ -74,11 +79,13 @@ export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }:
         <Label>Info</Label>
         <BuiltInProperties doc={doc} />
       </section>
+      </fieldset>
 
       <section className="space-y-1.5 border-t border-[var(--color-line)] pt-3">
         <Button variant="subtle" className="w-full justify-center text-xs" onClick={exportMarkdown}>
           Export as Markdown
         </Button>
+        {canEdit && (
         <Button
           variant="subtle"
           className="w-full justify-center text-xs"
@@ -89,6 +96,8 @@ export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }:
         >
           {doc.archivedAt ? 'Restore from archive' : 'Archive document'}
         </Button>
+        )}
+        {canDelete && (
         <Button
           variant="danger"
           className="w-full justify-center text-xs"
@@ -96,6 +105,7 @@ export default function PropertiesPanel({ doc, workspaceId, onPatch, onDelete }:
         >
           Delete permanently
         </Button>
+        )}
       </section>
 
       {confirmingDelete && (

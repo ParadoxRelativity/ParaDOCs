@@ -36,13 +36,13 @@ const SHEET_LIMIT = 20;
  */
 async function searchSpreadsheets(
   workspaceId: string,
-  reader: { userId: string; role: string },
+  reader: { userId: string; roleId: string },
   input: { q?: string; tags?: string[]; folderId?: string; from?: string; to?: string; includeArchived?: boolean },
   tsquery: string | null,
 ) {
   if (input.tags?.length || input.folderId) return [];
 
-  const params: unknown[] = [workspaceId, reader.userId, reader.role];
+  const params: unknown[] = [workspaceId, reader.userId, reader.roleId];
   const where: string[] = ['s.workspace_id = $1', `${spreadsheetLevelSql('$2', '$3')} > 0`];
   if (!input.includeArchived) where.push('s.archived_at IS NULL');
 
@@ -90,12 +90,12 @@ const ITEM_LIMIT = 20;
  */
 async function searchWorkItems(
   workspaceId: string,
-  reader: { userId: string; role: string },
+  reader: { userId: string; roleId: string },
   input: { q?: string; tags?: string[]; folderId?: string; includeArchived?: boolean },
   tsquery: string | null,
 ) {
   if (input.tags?.length || input.folderId || !input.q) return [];
-  const params: unknown[] = [workspaceId, reader.userId, reader.role, input.q, tsquery];
+  const params: unknown[] = [workspaceId, reader.userId, reader.roleId, input.q, tsquery];
   const { rows } = await query(
     `SELECT i.id, i.project_id AS "projectId", p.key || '-' || i.number AS key, i.title,
             p.name AS "projectName", st.name AS "statusName", st.category AS "statusCategory", st.color AS "statusColor",
@@ -123,7 +123,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: Record<string, string | string[]> }>(
     '/workspaces/:id/search',
     async (req) => {
-      const role = await assertWorkspaceAccess(req, req.params.id);
+      const { roleId } = await assertWorkspaceAccess(req, req.params.id);
       // Each half answers only for an app the workspace has on.
       const [docsOn, sheetsOn, projectsOn] = await Promise.all([
         appEnabled(req.params.id, 'docs'),
@@ -178,7 +178,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // Nothing locked away from the reader turns up, however well it matches.
-      params.push(req.user!.id, role);
+      params.push(req.user!.id, roleId);
       where.push(`${documentLevelSql(`$${params.length - 1}`, `$${params.length}`)} > 0`);
 
       const rankExpr = tsquery ? `ts_rank(d.search, to_tsquery('english', $2))` : '0';
@@ -221,10 +221,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       );
 
       const sheets = sheetsOn
-        ? await searchSpreadsheets(req.params.id, { userId: req.user!.id, role }, input, tsquery)
+        ? await searchSpreadsheets(req.params.id, { userId: req.user!.id, roleId }, input, tsquery)
         : [];
       const workItems = projectsOn
-        ? await searchWorkItems(req.params.id, { userId: req.user!.id, role }, input, tsquery)
+        ? await searchWorkItems(req.params.id, { userId: req.user!.id, roleId }, input, tsquery)
         : [];
       return { hits: rows, sheets, workItems, query: input.q ?? '' };
     },

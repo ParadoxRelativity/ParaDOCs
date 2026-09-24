@@ -5,9 +5,10 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { forbidden, notFound, unauthorized } from '../lib/http.js';
 import { uploadUrlSql } from '../lib/storage.js';
-import type { WorkspaceApp } from '@paradocs/shared';
-import { documentAccess } from '../lib/access.js';
+import type { WorkspaceApp, WorkspacePermission } from '@paradocs/shared';
+import { documentAccess, type ResourceAccess } from '../lib/access.js';
 import { assertAppEnabled } from '../lib/apps.js';
+import { MEMBERSHIP_COLUMNS, managesAccess, membershipFrom, missingPermission, type Membership } from '../lib/roles.js';
 
 export const SESSION_COOKIE = 'paradocs_session';
 
@@ -18,13 +19,8 @@ export interface SessionUser {
   avatarUrl: string | null;
 }
 
-/** Ordered least to most privileged, so comparisons are a simple index check. */
-export const ROLES = ['viewer', 'editor', 'admin', 'owner'] as const;
-export type Role = (typeof ROLES)[number];
-
-export function roleAtLeast(role: Role, minimum: Role): boolean {
-  return ROLES.indexOf(role) >= ROLES.indexOf(minimum);
-}
+export type { Role } from '@paradocs/shared';
+export type { Membership } from '../lib/roles.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -146,68 +142,95 @@ export function sessionCookieOptions() {
   };
 }
 
-/** The signed-in user's role in a workspace, or null if they are not a member. */
-export async function workspaceRole(userId: string, workspaceId: string): Promise<Role | null> {
-  const { rows } = await query<{ role: Role }>(
-    'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+/** The signed-in user's place in a workspace, or null if they are not a member. */
+export async function workspaceMembership(userId: string, workspaceId: string): Promise<Membership | null> {
+  const { rows } = await query<{ role: Membership['role']; role_id: string; permissions: string[] }>(
+    `SELECT ${MEMBERSHIP_COLUMNS}
+       FROM workspace_members m
+       JOIN workspace_roles r ON r.id = m.role_id
+      WHERE m.workspace_id = $1 AND m.user_id = $2`,
     [workspaceId, userId],
   );
-  return rows[0]?.role ?? null;
+  return rows[0] ? membershipFrom(rows[0]) : null;
 }
 
 /**
- * Confirms membership and, when given, a minimum role and an app the workspace
+ * What a route asks of the caller: a permission their role must grant,
+ * `manage` for owners and admins, or `owner`. Nothing asks only that they are
+ * a member.
+ */
+export type Requirement = WorkspacePermission | 'manage' | 'owner';
+
+/** Whether someone meets a requirement. */
+export function meets(member: Membership, need: Requirement): boolean {
+  if (need === 'owner') return member.role === 'owner';
+  if (need === 'manage') return managesAccess(member.role);
+  return member.permissions.has(need);
+}
+
+function refusal(need: Requirement): string {
+  if (need === 'owner') return 'Only an owner can do this';
+  if (need === 'manage') return 'Only an owner or admin can do this';
+  return missingPermission(need);
+}
+
+/**
+ * Confirms membership and, when given, a requirement and an app the workspace
  * must have turned on. Non-members get 404 rather than 403 so workspace ids
  * stay unguessable.
  */
 export async function assertWorkspaceAccess(
   req: FastifyRequest,
   workspaceId: string,
-  minimum: Role = 'viewer',
+  need?: Requirement,
   app?: WorkspaceApp,
-): Promise<Role> {
+): Promise<Membership> {
   if (!req.user) throw unauthorized();
-  const role = await workspaceRole(req.user.id, workspaceId);
-  if (!role) throw notFound('Workspace not found');
+  const member = await workspaceMembership(req.user.id, workspaceId);
+  if (!member) throw notFound('Workspace not found');
   if (app) await assertAppEnabled(workspaceId, app);
-  if (!roleAtLeast(role, minimum)) {
-    throw forbidden(`This action requires the ${minimum} role or higher`);
-  }
-  return role;
+  assertMeets(member, need);
+  return member;
+}
+
+/** Refuses someone who does not meet a requirement. */
+export function assertMeets(member: Membership, need: Requirement | undefined): void {
+  if (need && !meets(member, need)) throw forbidden(refusal(need));
 }
 
 /**
  * Resolves a document and checks what the caller may do with it: their role in
- * its workspace, and any lock on the document or its folders. `editor` asks
- * whether they may change it; `admin` and `owner` are about the workspace role
- * alone. Someone who may not see it at all gets 404, as for a document that
- * does not exist.
+ * its workspace, and any lock on the document or its folders. `comment` asks
+ * only that their role lets them comment on what they can see; `edit` and
+ * `delete` also that no lock holds them to viewing. Someone who may not see it
+ * at all gets 404, as for a document that does not exist.
  */
 export async function assertDocumentAccess(
   req: FastifyRequest,
   documentId: string,
-  minimum: Role = 'viewer',
-): Promise<{ workspaceId: string; role: Role; canEdit: boolean }> {
+  need: 'view' | 'comment' | 'edit' | 'delete' = 'view',
+): Promise<ResourceAccess & { canEdit: boolean }> {
   if (!req.user) throw unauthorized();
   const access = await documentAccess(req.user.id, documentId);
   if (!access) throw notFound('Document not found');
-  if (roleAtLeast(minimum, 'admin')) {
-    if (!roleAtLeast(access.role, minimum)) throw forbidden(`This action requires the ${minimum} role or higher`);
-  } else if (minimum === 'editor' && access.level < 2) {
-    throw forbidden(
-      access.role === 'viewer'
-        ? 'This action requires the editor role or higher'
-        : 'You can view this document but not change it',
-    );
+  if (need !== 'view') assertMeets(access, `docs.${need}`);
+  if (need === 'edit' || need === 'delete') {
+    if (access.level < 2) {
+      throw forbidden(
+        access.permissions.has('docs.edit')
+          ? 'You can view this document but not change it'
+          : missingPermission('docs.edit'),
+      );
+    }
   }
-  return { workspaceId: access.workspaceId, role: access.role, canEdit: access.level === 2 };
+  return { ...access, canEdit: access.level === 2 };
 }
 
 /** Same check without a request, for the websocket handshake. */
 export async function documentAccessForUser(
   userId: string,
   documentId: string,
-): Promise<{ workspaceId: string; role: Role; canEdit: boolean } | null> {
+): Promise<{ workspaceId: string; canEdit: boolean } | null> {
   const access = await documentAccess(userId, documentId);
-  return access ? { workspaceId: access.workspaceId, role: access.role, canEdit: access.level === 2 } : null;
+  return access ? { workspaceId: access.workspaceId, canEdit: access.level === 2 } : null;
 }

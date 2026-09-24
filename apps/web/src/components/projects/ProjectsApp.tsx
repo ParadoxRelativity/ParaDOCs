@@ -7,6 +7,7 @@ import {
   isEpicType,
   type WorkItemListing,
   type WorkspaceMember,
+  projectPermission,
 } from '@paradocs/shared';
 import {
   useMarkWorkItemsRead,
@@ -18,6 +19,7 @@ import {
   useWorkItems,
   type WorkspaceSummary,
 } from '../../api/hooks';
+import { canFrom } from '../../lib/permissions';
 import { cx, useLocalStorage } from '../../lib/util';
 import Icon, { type IconName } from '../Icon';
 import { Button, EmptyState, Spinner } from '../ui';
@@ -150,8 +152,14 @@ function ProjectView({
   // A view with nothing to show — no backlog status, no epic-kind type — falls back to the default.
   const chosen = (storedView === 'backlog' && !hasBacklog) || (storedView === 'epics' && !hasEpics) ? null : storedView;
   const view: View = chosen ?? (data?.kind === 'queue' ? 'list' : 'board');
-  // The workspace role, and then any lock on the project.
-  const canEdit = workspace.role !== 'viewer' && data?.permission === 'edit';
+  // The workspace role, and then any lock on the project, which the server has
+  // weighed together as `permission`. Past working on items, a role allows
+  // setting a project up, running its sprints and commenting separately.
+  const can = canFrom(workspace.permissions);
+  const canEdit = data?.permission === 'edit';
+  const canConfigure = canEdit && data !== undefined && can(projectPermission(data.kind, 'configure'));
+  const canRunSprints = canEdit && data !== undefined && can(projectPermission(data.kind, 'sprints'));
+  const canComment = data !== undefined && can(projectPermission(data.kind, 'comment'));
   const canManageAccess = workspace.role === 'owner' || workspace.role === 'admin';
 
   const filtered = useMemo(() => {
@@ -291,7 +299,7 @@ function ProjectView({
             <ProjectSettings
               project={data}
               items={items.data ?? []}
-              canEdit={canEdit}
+              canEdit={canConfigure}
               canManageAccess={canManageAccess}
               onDeleted={onProjectDeleted}
             />
@@ -312,7 +320,7 @@ function ProjectView({
               project={data}
               items={worked}
               memberMap={memberMap}
-              canEdit={canEdit}
+              canEdit={canRunSprints}
               activeItemId={itemId}
               onOpenItem={onOpenItem}
               onOpenBoard={() => setView('board')}
@@ -334,7 +342,7 @@ function ProjectView({
               hint={canEdit ? 'Add the first with New. Work items can be linked from documents, canvases and chat.' : undefined}
             />
           ) : view === 'board' && sprints && !running ? (
-            <NoSprintRunning project={data} canEdit={canEdit} onOpenBacklog={() => setView('backlog')} />
+            <NoSprintRunning project={data} canEdit={canRunSprints} onOpenBacklog={() => setView('backlog')} />
           ) : view === 'board' ? (
             <div className="flex h-full flex-col">
               {running && (
@@ -342,7 +350,7 @@ function ProjectView({
                   project={data}
                   sprint={running}
                   items={sprintItems}
-                  canEdit={canEdit}
+                  canEdit={canRunSprints}
                   onOpenBacklog={() => setView('backlog')}
                 />
               )}
@@ -390,6 +398,7 @@ function ProjectView({
             members={members}
             selfId={user.id}
             canEdit={canEdit}
+            canComment={canComment}
             onClose={onCloseItem}
             navigation={navigation}
           />
@@ -435,7 +444,8 @@ function MyWork({
   const listing = useWorkItemListing(workspace.id, { mine: true, limit: 200 });
   const projects = useProjects(workspace.id);
   const [creating, setCreating] = useState(false);
-  const canCreate = workspace.role !== 'viewer';
+  const can = canFrom(workspace.permissions);
+  const canCreate = can('projects.create') || can('queues.create');
 
   const { open, done } = useMemo(() => {
     const all = listing.data ?? [];
@@ -543,6 +553,7 @@ function MyWork({
         <NewProjectDialog
           workspaceId={workspace.id}
           initialKind="project"
+          allowedKinds={(['project', 'queue'] as const).filter((kind) => can(projectPermission(kind, 'create')))}
           onClose={() => setCreating(false)}
           onCreated={(project) => {
             setCreating(false);

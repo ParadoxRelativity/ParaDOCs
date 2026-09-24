@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WORKSPACE_PERMISSIONS } from './permissions.js';
 
 const uuid = z.string().uuid();
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be a #rrggbb hex color');
@@ -92,19 +93,35 @@ export const updateDocumentSchema = z.object({
   tagIds: z.array(uuid).optional(),
 });
 
-/** Roles that can be granted. 'owner' is only reachable by promotion from an owner. */
-export const assignableRoleSchema = z.enum(['admin', 'editor', 'viewer']);
-export const memberRoleSchema = z.enum(['owner', 'admin', 'editor', 'viewer']);
-
 export const createInviteSchema = z.object({
   /** Omit for a shareable link that anyone with the token may redeem. */
   email: z.string().email().max(254).nullish(),
-  role: assignableRoleSchema.default('editor'),
+  /** A workspace role, but never Owner. Omit for the workspace's default role. */
+  roleId: uuid.optional(),
   expiresInDays: z.number().int().min(1).max(90).default(14),
 });
 
 export const updateMemberSchema = z.object({
-  role: memberRoleSchema,
+  roleId: uuid,
+});
+
+const workspacePermissionSchema = z.enum(WORKSPACE_PERMISSIONS);
+
+export const createWorkspaceRoleSchema = z.object({
+  name: z.string().trim().min(1, 'Name the role').max(40),
+  description: z.string().trim().max(200).default(''),
+  permissions: z.array(workspacePermissionSchema).max(WORKSPACE_PERMISSIONS.length).default([]),
+  /** Another role to start from. Its permissions are used when none are given. */
+  copyFrom: uuid.optional(),
+});
+
+export const updateWorkspaceRoleSchema = z.object({
+  name: z.string().trim().min(1, 'Name the role').max(40).optional(),
+  description: z.string().trim().max(200).optional(),
+  permissions: z.array(workspacePermissionSchema).max(WORKSPACE_PERMISSIONS.length).optional(),
+  /** True makes this the role new invites start with. */
+  isDefault: z.literal(true).optional(),
+  position: z.number().int().min(0).optional(),
 });
 
 /** The colours a tag can be given, cycled through for new ones. */

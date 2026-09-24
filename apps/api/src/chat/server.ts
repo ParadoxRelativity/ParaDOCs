@@ -3,7 +3,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ChatEvent, PresenceStatus } from '@paradocs/shared';
-import { resolveSession, selectProtocol, upgradeToken, workspaceRole, type SessionUser } from '../plugins/session.js';
+import { resolveSession, selectProtocol, upgradeToken, workspaceMembership, type SessionUser } from '../plugins/session.js';
 import { query } from '../db/pool.js';
 import { channelAccessFor, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { subscribeToChannel, subscribeToUser, subscribeToWorkspace } from './hub.js';
@@ -152,7 +152,7 @@ export function createChatServer(log: FastifyBaseLogger) {
         const allowed =
           target.kind === 'channel'
             ? (await channelAccessFor(user.id, target.id)) !== null
-            : (await workspaceRole(user.id, target.id)) !== null;
+            : (await workspaceMembership(user.id, target.id)) !== null;
         // The socket may have closed, or the same subscription landed twice,
         // while that was being checked.
         if (!allowed || closed || subscriptions.has(key)) return;
@@ -180,7 +180,7 @@ export function createChatServer(log: FastifyBaseLogger) {
         const [kind, id] = key.split(':');
         let allowed: boolean;
         if (kind === 'channel') allowed = (await channelAccessFor(user.id, id)) !== null;
-        else if (id === workspaceId) allowed = (await workspaceRole(user.id, id)) !== null;
+        else if (id === workspaceId) allowed = (await workspaceMembership(user.id, id)) !== null;
         else continue;
         if (allowed || closed) continue;
         subscriptions.get(key)?.();

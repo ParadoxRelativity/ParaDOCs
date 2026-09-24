@@ -1,5 +1,6 @@
 import type { Doc } from '@paradocs/shared';
 import type { DocumentPatch } from '../api/hooks';
+import type { Can } from '../lib/permissions';
 import { cx } from '../lib/util';
 import { EmptyState } from './ui';
 import Icon, { type IconName } from './Icon';
@@ -27,6 +28,8 @@ interface Props {
   currentUserId: string;
   onPatch: (patch: DocumentPatch) => void;
   onDelete: () => void;
+  /** What this person's role lets them do in Docs. */
+  can: Can;
 }
 
 export default function RightSidebar(props: Props) {
@@ -53,7 +56,11 @@ export default function RightSidebar(props: Props) {
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {props.tab === 'calendar' ? (
-          <CalendarPanel workspaceId={props.workspaceId} documentId={props.doc?.id ?? null} />
+          <CalendarPanel
+            workspaceId={props.workspaceId}
+            documentId={props.doc?.id ?? null}
+            canEdit={props.can('docs.calendar')}
+          />
         ) : !props.doc ? (
           <EmptyState icon="file-earmark-text" title="No document open" />
         ) : props.tab === 'toc' ? (
@@ -64,9 +71,15 @@ export default function RightSidebar(props: Props) {
             workspaceId={props.workspaceId}
             onPatch={props.onPatch}
             onDelete={props.onDelete}
+            canEdit={props.doc.permission === 'edit'}
+            canDelete={props.doc.permission === 'edit' && props.can('docs.delete')}
           />
         ) : (
-          <CommentsPanel documentId={props.doc.id} currentUserId={props.currentUserId} />
+          <CommentsPanel
+            documentId={props.doc.id}
+            currentUserId={props.currentUserId}
+            canComment={props.can('docs.comment')}
+          />
         )}
       </div>
     </div>

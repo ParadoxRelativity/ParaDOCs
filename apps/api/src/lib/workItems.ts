@@ -67,7 +67,7 @@ export async function notifyAboutWorkItem(
        JOIN workspace_members m ON m.workspace_id = p.workspace_id
       WHERE i.id = $1
         AND m.user_id = ANY($2::uuid[])
-        AND ${projectLevelSql('m.user_id', 'm.role')} > 0
+        AND ${projectLevelSql('m.user_id', 'm.role_id')} > 0
      ON CONFLICT (work_item_id, user_id) DO UPDATE
         -- Being handed the item outranks being named in it, so an unread role
         -- is not turned into a mere mention by a later comment.

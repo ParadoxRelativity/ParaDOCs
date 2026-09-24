@@ -45,7 +45,7 @@ export async function recordMentions(
        JOIN workspace_members m ON m.workspace_id = d.workspace_id
       WHERE d.id = $1
         AND m.user_id = ANY($2::uuid[])
-        AND ${documentLevelSql('m.user_id', 'm.role')} > 0
+        AND ${documentLevelSql('m.user_id', 'm.role_id')} > 0
      ON CONFLICT (document_id, user_id) DO NOTHING`,
     [documentId, candidates, taggedBy],
   );

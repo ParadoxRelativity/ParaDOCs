@@ -1,8 +1,11 @@
 import type { FastifyRequest } from 'fastify';
-import type { FolderApp, Permission, Role } from '@paradocs/shared';
+import { projectPermission, type FolderApp, type Permission, type ProjectAction, type ProjectKind, type WorkspacePermission } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { appEnabledSql } from './apps.js';
 import { forbidden, notFound, unauthorized } from './http.js';
+import { MEMBERSHIP_COLUMNS, managesAccess, membershipFrom, missingPermission, type Membership } from './roles.js';
+
+export { managesAccess };
 
 /**
  * Who may reach a folder, document, spreadsheet or channel.
@@ -13,7 +16,8 @@ import { forbidden, notFound, unauthorized } from './http.js';
  * checks a route makes before acting on one thing.
  *
  * The database counts in levels — 0 nothing, 1 view, 2 edit — and the wire
- * speaks in permissions.
+ * speaks in permissions. The SQL functions take the person's role (its id),
+ * whose permissions set how far a lock can let them go: see migration 0031.
  *
  * Nothing here imports the session plugin, which imports this.
  */
@@ -32,14 +36,14 @@ export function levelOf(permission: Permission): Level {
   return PERMISSIONS.indexOf(permission) as Level;
 }
 
-/** Owners and admins manage locks and teams, and no lock keeps them out. */
-export function managesAccess(role: Role): boolean {
-  return role === 'owner' || role === 'admin';
+/** SQL for someone's role (its id) in a workspace, for a query with no membership row to join. */
+export function roleIdSql(user: string, workspace: string): string {
+  return `(SELECT m.role_id FROM workspace_members m WHERE m.workspace_id = ${workspace} AND m.user_id = ${user})`;
 }
 
-/** SQL for someone's role in a workspace, for a query with no membership row to join. */
-export function roleSql(user: string, workspace: string): string {
-  return `(SELECT m.role FROM workspace_members m WHERE m.workspace_id = ${workspace} AND m.user_id = ${user})`;
+/** SQL for whether the role `role` grants `permission`. */
+export function roleGrantsSql(role: string, permission: WorkspacePermission): string {
+  return `role_grants(${role}, '${permission}')`;
 }
 
 /** SQL for what `user`, with `role`, may do with the document aliased `alias`. */
@@ -72,11 +76,24 @@ export function permissionSql(level: string): string {
   return `(ARRAY['none', 'view', 'edit'])[(${level}) + 1]`;
 }
 
-export interface ResourceAccess {
+export interface ResourceAccess extends Membership {
   workspaceId: string;
-  role: Role;
   /** Never 0: something the person cannot see at all resolves to null instead. */
   level: Level;
+}
+
+type AccessRow = {
+  workspace_id: string;
+  role: Membership['role'] | null;
+  role_id: string | null;
+  permissions: string[] | null;
+  level: number | null;
+};
+
+/** Joins the member `$2` and their role, for the queries below. */
+function memberJoin(workspace: string): string {
+  return `LEFT JOIN workspace_members m ON m.workspace_id = ${workspace} AND m.user_id = $2
+       LEFT JOIN workspace_roles r ON r.id = m.role_id`;
 }
 
 /**
@@ -85,10 +102,10 @@ export interface ResourceAccess {
  */
 export async function documentAccess(userId: string, documentId: string): Promise<ResourceAccess | null> {
   if (!UUID.test(documentId)) return null;
-  const { rows } = await query<{ workspace_id: string; role: Role | null; level: number | null }>(
-    `SELECT d.workspace_id, m.role, ${documentLevelSql('$2', 'm.role')} AS level
+  const { rows } = await query<AccessRow>(
+    `SELECT d.workspace_id, ${MEMBERSHIP_COLUMNS}, ${documentLevelSql('$2', 'm.role_id')} AS level
        FROM documents d
-       LEFT JOIN workspace_members m ON m.workspace_id = d.workspace_id AND m.user_id = $2
+       ${memberJoin('d.workspace_id')}
       WHERE d.id = $1 AND ${appEnabledSql('d.workspace_id', 'docs')}`,
     [documentId, userId],
   );
@@ -98,46 +115,51 @@ export async function documentAccess(userId: string, documentId: string): Promis
 /** What someone may do with a spreadsheet, or null when they may not see it or Sheets is off. */
 export async function spreadsheetAccess(userId: string, spreadsheetId: string): Promise<ResourceAccess | null> {
   if (!UUID.test(spreadsheetId)) return null;
-  const { rows } = await query<{ workspace_id: string; role: Role | null; level: number | null }>(
-    `SELECT s.workspace_id, m.role, ${spreadsheetLevelSql('$2', 'm.role')} AS level
+  const { rows } = await query<AccessRow>(
+    `SELECT s.workspace_id, ${MEMBERSHIP_COLUMNS}, ${spreadsheetLevelSql('$2', 'm.role_id')} AS level
        FROM spreadsheets s
-       LEFT JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = $2
+       ${memberJoin('s.workspace_id')}
       WHERE s.id = $1 AND ${appEnabledSql('s.workspace_id', 'sheets')}`,
     [spreadsheetId, userId],
   );
   return resolved(rows[0]);
 }
 
-/** What someone may do with a project, or null when they may not see it or Projects is off. */
-export async function projectAccess(userId: string, projectId: string): Promise<ResourceAccess | null> {
+export interface ProjectAccess extends ResourceAccess {
+  kind: ProjectKind;
+}
+
+/** What someone may do with a project or queue, or null when they may not see it or Projects is off. */
+export async function projectAccess(userId: string, projectId: string): Promise<ProjectAccess | null> {
   if (!UUID.test(projectId)) return null;
-  const { rows } = await query<{ workspace_id: string; role: Role | null; level: number | null }>(
-    `SELECT p.workspace_id, m.role, ${projectLevelSql('$2', 'm.role')} AS level
+  const { rows } = await query<AccessRow & { kind: ProjectKind }>(
+    `SELECT p.workspace_id, p.kind, ${MEMBERSHIP_COLUMNS}, ${projectLevelSql('$2', 'm.role_id')} AS level
        FROM projects p
-       LEFT JOIN workspace_members m ON m.workspace_id = p.workspace_id AND m.user_id = $2
+       ${memberJoin('p.workspace_id')}
       WHERE p.id = $1 AND ${appEnabledSql('p.workspace_id', 'projects')}`,
     [projectId, userId],
   );
-  return resolved(rows[0]);
+  const access = resolved(rows[0]);
+  return access && { ...access, kind: rows[0].kind };
 }
 
-export interface WorkItemAccess extends ResourceAccess {
+export interface WorkItemAccess extends ProjectAccess {
   projectId: string;
 }
 
 /** What someone may do with a work item: whatever they may do with its project. */
 export async function workItemAccess(userId: string, itemId: string): Promise<WorkItemAccess | null> {
   if (!UUID.test(itemId)) return null;
-  const { rows } = await query<{ workspace_id: string; project_id: string; role: Role | null; level: number | null }>(
-    `SELECT p.workspace_id, p.id AS project_id, m.role, ${projectLevelSql('$2', 'm.role')} AS level
+  const { rows } = await query<AccessRow & { project_id: string; kind: ProjectKind }>(
+    `SELECT p.workspace_id, p.id AS project_id, p.kind, ${MEMBERSHIP_COLUMNS}, ${projectLevelSql('$2', 'm.role_id')} AS level
        FROM work_items i
        JOIN projects p ON p.id = i.project_id
-       LEFT JOIN workspace_members m ON m.workspace_id = p.workspace_id AND m.user_id = $2
+       ${memberJoin('p.workspace_id')}
       WHERE i.id = $1 AND ${appEnabledSql('p.workspace_id', 'projects')}`,
     [itemId, userId],
   );
   const access = resolved(rows[0]);
-  return access && { ...access, projectId: rows[0].project_id };
+  return access && { ...access, projectId: rows[0].project_id, kind: rows[0].kind };
 }
 
 export interface FolderAccess extends ResourceAccess {
@@ -147,10 +169,10 @@ export interface FolderAccess extends ResourceAccess {
 /** What someone may do in a folder, or null when they may not see it or its app is off. */
 export async function folderAccess(userId: string, folderId: string): Promise<FolderAccess | null> {
   if (!UUID.test(folderId)) return null;
-  const { rows } = await query<{ workspace_id: string; app: FolderApp; role: Role | null; level: number | null }>(
-    `SELECT f.workspace_id, f.app, m.role, ${folderLevelSql('$2', 'm.role', 'f.id')} AS level
+  const { rows } = await query<AccessRow & { app: FolderApp }>(
+    `SELECT f.workspace_id, f.app, ${MEMBERSHIP_COLUMNS}, ${folderLevelSql('$2', 'm.role_id', 'f.id')} AS level
        FROM folders f
-       LEFT JOIN workspace_members m ON m.workspace_id = f.workspace_id AND m.user_id = $2
+       ${memberJoin('f.workspace_id')}
       WHERE f.id = $1 AND workspace_app_enabled(f.workspace_id, f.app)`,
     [folderId, userId],
   );
@@ -158,23 +180,39 @@ export async function folderAccess(userId: string, folderId: string): Promise<Fo
   return access && { ...access, app: rows[0].app };
 }
 
-function resolved(
-  row: { workspace_id: string; role: Role | null; level: number | null } | undefined,
-): ResourceAccess | null {
-  if (!row?.role || !row.level) return null;
-  return { workspaceId: row.workspace_id, role: row.role, level: row.level as Level };
+function resolved(row: AccessRow | undefined): ResourceAccess | null {
+  if (!row?.role || !row.role_id || !row.level) return null;
+  return {
+    ...membershipFrom({ role: row.role, role_id: row.role_id, permissions: row.permissions }),
+    workspaceId: row.workspace_id,
+    level: row.level as Level,
+  };
 }
 
 /**
- * Resolves a folder and checks the caller may see it, or change what is in it.
- * One they may not see, one outside `workspaceId` or one in another app's tree
- * when those are given, is not found rather than forbidden, so a folder id
- * reveals nothing — and a document can never be filed among spreadsheets.
+ * Refuses someone whose role does not grant `permission`, or whom a lock keeps
+ * from changing this one thing. `what` names it: "this document".
+ */
+function assertMayChange(access: ResourceAccess, permission: WorkspacePermission, editPermission: WorkspacePermission, what: string): void {
+  if (!access.permissions.has(permission)) throw forbidden(missingPermission(permission));
+  if (access.level < 2) {
+    throw forbidden(
+      access.permissions.has(editPermission) ? `You can view ${what} but not change it` : missingPermission(editPermission),
+    );
+  }
+}
+
+/**
+ * Resolves a folder and checks the caller may see it, or do `need` to it and
+ * what is in it: `edit` covers renaming, moving and filing into it. One they
+ * may not see, one outside `workspaceId` or one in another app's tree when
+ * those are given, is not found rather than forbidden, so a folder id reveals
+ * nothing — and a document can never be filed among spreadsheets.
  */
 export async function assertFolderAccess(
   req: FastifyRequest,
   folderId: string,
-  need: 'view' | 'edit' = 'view',
+  need: 'view' | 'edit' | 'create' | 'delete' = 'view',
   workspaceId?: string,
   app?: FolderApp,
 ): Promise<FolderAccess> {
@@ -183,13 +221,7 @@ export async function assertFolderAccess(
   if (!access || (workspaceId && access.workspaceId !== workspaceId) || (app && access.app !== app)) {
     throw notFound('Folder not found');
   }
-  if (need === 'edit' && access.level < 2) {
-    throw forbidden(
-      access.role === 'viewer'
-        ? 'This action requires the editor role or higher'
-        : 'You can view this folder but not change what is in it',
-    );
-  }
+  if (need !== 'view') assertMayChange(access, `${access.app}.${need}`, `${access.app}.edit`, 'this folder');
   return access;
 }
 
@@ -200,37 +232,42 @@ export async function assertFolderAccess(
 export async function assertSpreadsheetAccess(
   req: FastifyRequest,
   spreadsheetId: string,
-  need: 'view' | 'edit' = 'view',
+  need: 'view' | 'edit' | 'delete' = 'view',
 ): Promise<ResourceAccess> {
   if (!req.user) throw unauthorized();
   const access = await spreadsheetAccess(req.user.id, spreadsheetId);
   if (!access) throw notFound('Spreadsheet not found');
-  if (need === 'edit' && access.level < 2) {
-    throw forbidden(
-      access.role === 'viewer'
-        ? 'This action requires the editor role or higher'
-        : 'You can view this spreadsheet but not change it',
-    );
-  }
+  if (need !== 'view') assertMayChange(access, `sheets.${need}`, 'sheets.edit', 'this spreadsheet');
   return access;
+}
+
+/**
+ * Checks someone may do `action` in a project or queue they can see. Anything
+ * past viewing needs their role to allow it there — projects and queues are
+ * allowed separately — and, except for commenting, for no lock to hold them to
+ * viewing.
+ */
+export function assertProjectAction(access: ProjectAccess, action: ProjectAction): void {
+  if (action === 'view') return;
+  const permission = projectPermission(access.kind, action);
+  const what = access.kind === 'queue' ? 'this queue' : 'this project';
+  if (action === 'comment') {
+    if (!access.permissions.has(permission)) throw forbidden(missingPermission(permission));
+    return;
+  }
+  assertMayChange(access, permission, projectPermission(access.kind, 'items'), what);
 }
 
 /** Resolves a project and checks what the caller may do with it. One they may not see is not found. */
 export async function assertProjectAccess(
   req: FastifyRequest,
   projectId: string,
-  need: 'view' | 'edit' = 'view',
-): Promise<ResourceAccess> {
+  action: ProjectAction = 'view',
+): Promise<ProjectAccess> {
   if (!req.user) throw unauthorized();
   const access = await projectAccess(req.user.id, projectId);
   if (!access) throw notFound('Project not found');
-  if (need === 'edit' && access.level < 2) {
-    throw forbidden(
-      access.role === 'viewer'
-        ? 'This action requires the editor role or higher'
-        : 'You can view this project but not change it',
-    );
-  }
+  assertProjectAction(access, action);
   return access;
 }
 
@@ -238,18 +275,12 @@ export async function assertProjectAccess(
 export async function assertWorkItemAccess(
   req: FastifyRequest,
   itemId: string,
-  need: 'view' | 'edit' = 'view',
+  action: ProjectAction = 'view',
 ): Promise<WorkItemAccess> {
   if (!req.user) throw unauthorized();
   const access = await workItemAccess(req.user.id, itemId);
   if (!access) throw notFound('Work item not found');
-  if (need === 'edit' && access.level < 2) {
-    throw forbidden(
-      access.role === 'viewer'
-        ? 'This action requires the editor role or higher'
-        : 'You can view this project but not change it',
-    );
-  }
+  assertProjectAction(access, action);
   return access;
 }
 
@@ -263,7 +294,7 @@ export async function assertWorkItemAccess(
  * folder it sits in now.
  */
 export async function assertMoveKeepsAccess(
-  role: Role,
+  role: Membership['role'],
   item: { access: string; folderId: string | null },
   toFolderId: string | null,
 ): Promise<void> {

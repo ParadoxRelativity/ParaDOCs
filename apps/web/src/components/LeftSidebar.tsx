@@ -39,7 +39,8 @@ import Icon, { DocumentIcon, type IconName } from './Icon';
 import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
 import type { SettingsSection } from './SettingsDialog';
-import { managesWorkspace, type AccessSection } from './AccessApp';
+import type { AccessSection } from './AccessApp';
+import type { Can } from '../lib/permissions';
 import WorkspaceIcon from './WorkspaceIcon';
 import { MODIFIER, asksForNewTab, openTab } from '../lib/tabs';
 import { useToast } from './Toast';
@@ -63,8 +64,8 @@ interface Props {
   onSelectWorkspace: (id: string) => void;
   documentId: string | null;
   onSelectDocument: (id: string) => void;
-  /** Whether this person may change anything; viewers get no destructive controls. */
-  canEdit: boolean;
+  /** What this person's role lets them do, so nothing is offered that would be refused. */
+  can: Can;
   /** Owners and admins, who decide who can see each folder, document and channel. */
   canManageAccess: boolean;
   /** A document was deleted from the tree, so anything showing it must move off. */
@@ -280,7 +281,7 @@ export default function LeftSidebar(props: Props) {
               { id: 'projects', label: 'Projects', icon: 'kanban' },
               { id: 'access', label: 'Access', icon: 'shield-lock' },
             ] satisfies AppEntry[]
-          ).filter((app) => app.id === 'access' || (current?.apps ?? []).includes(app.id as WorkspaceApp))}
+          ).filter((app) => app.id === 'access' || (current?.visibleApps ?? []).includes(app.id as WorkspaceApp))}
           currentId={props.section}
           onSelect={(id) => props.onSelectSection(id as SidebarSection)}
         />
@@ -294,6 +295,8 @@ export default function LeftSidebar(props: Props) {
           presence={props.presence}
           activeChannelId={props.activeChannelId}
           canManage={props.canManageChannels}
+          canManageAccess={props.canManageAccess}
+          canStartDirect={props.can('chat.direct')}
           voiceEnabled={props.voiceEnabled}
           occupancy={props.voiceOccupancy}
           connectedChannelId={props.connectedChannelId}
@@ -317,6 +320,12 @@ export default function LeftSidebar(props: Props) {
             active={props.activeAccessSection === 'teams'}
             onClick={() => props.onSelectAccessSection('teams')}
           />
+          <SidebarAction
+            icon="person-badge"
+            label="Roles"
+            active={props.activeAccessSection === 'roles'}
+            onClick={() => props.onSelectAccessSection('roles')}
+          />
           <div className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             Workspace
           </div>
@@ -333,8 +342,8 @@ export default function LeftSidebar(props: Props) {
             active={props.activeAccessSection === 'apps'}
             onClick={() => props.onSelectAccessSection('apps')}
           />
-          {/* Storage housekeeping is an owner's or admin's job, so nobody else sees it. */}
-          {current && managesWorkspace(current) && (
+          {/* Storage housekeeping is for those whose role allows it, so nobody else sees it. */}
+          {props.can('uploads.manage') && (
             <SidebarAction
               icon="paperclip"
               label="Uploads"
@@ -347,7 +356,7 @@ export default function LeftSidebar(props: Props) {
         <ProjectList
           workspaceId={workspaceId}
           activeProjectId={props.activeProjectId}
-          canEdit={props.canEdit}
+          can={props.can}
           canManageAccess={props.canManageAccess}
           myWorkCount={props.myWorkCount}
           onOpenMyWork={props.onOpenMyWork}
@@ -357,7 +366,7 @@ export default function LeftSidebar(props: Props) {
         <SheetList
           workspaceId={workspaceId}
           activeSheetId={props.activeSheetId}
-          canEdit={props.canEdit}
+          can={props.can}
           canManageAccess={props.canManageAccess}
           onSelect={props.onSelectSheet}
           onDeleted={props.onSheetDeleted}
@@ -374,14 +383,18 @@ export default function LeftSidebar(props: Props) {
           active={props.allDocumentsActive}
           onClick={props.onOpenAllDocuments}
         />
-        <SidebarAction icon="file-earmark-plus" label="New document" onClick={() => addDocument(null)} />
-        <SidebarAction icon="easel" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
-        <SidebarAction
-          icon="file-earmark-arrow-up"
-          label={documentImport.importing ? 'Importing…' : 'Import document'}
-          onClick={documentImport.choose}
-        />
-        {documentImport.input}
+        {props.can('docs.create') && (
+          <>
+            <SidebarAction icon="file-earmark-plus" label="New document" onClick={() => addDocument(null)} />
+            <SidebarAction icon="easel" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
+            <SidebarAction
+              icon="file-earmark-arrow-up"
+              label={documentImport.importing ? 'Importing…' : 'Import document'}
+              onClick={documentImport.choose}
+            />
+            {documentImport.input}
+          </>
+        )}
         <SidebarAction
           icon="people"
           label="Members"
@@ -396,7 +409,7 @@ export default function LeftSidebar(props: Props) {
           <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             Folders
           </span>
-          {props.canEdit && (
+          {props.can('docs.create') && (
             <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
               <Icon name="folder-plus" />
             </IconButton>
@@ -420,7 +433,7 @@ export default function LeftSidebar(props: Props) {
             depth={0}
             workspaceId={workspaceId}
             activeDocumentId={props.documentId}
-            canEdit={props.canEdit}
+            can={props.can}
             canManageAccess={props.canManageAccess}
             onManageAccess={setSecuring}
             onSelectDocument={props.onSelectDocument}
@@ -445,7 +458,7 @@ export default function LeftSidebar(props: Props) {
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                 Tags
               </span>
-              {props.canEdit && (
+              {props.can('docs.tags') && (
                 <IconButton label="Manage tags" onClick={() => setManagingTags(true)}>
                   <Icon name="pencil" />
                 </IconButton>
@@ -655,7 +668,7 @@ function FolderRow({
   depth,
   workspaceId,
   activeDocumentId,
-  canEdit,
+  can,
   canManageAccess,
   onManageAccess,
   onSelectDocument,
@@ -669,7 +682,7 @@ function FolderRow({
   depth: number;
   workspaceId: string;
   activeDocumentId: string | null;
-  canEdit: boolean;
+  can: Can;
   canManageAccess: boolean;
   onManageAccess: (target: NamedAccessTarget) => void;
   onSelectDocument: (id: string) => void;
@@ -694,14 +707,17 @@ function FolderRow({
   const creatingHere = creatingIn === folder.id;
   const expanded = open || creatingHere;
   // A lock can leave someone able to see a folder without changing what is in
-  // it, or shown it only as the way to something inside.
-  const canChange = canEdit && folder.permission === 'edit';
+  // it, or shown it only as the way to something inside. Their role has
+  // already been weighed into `permission`; adding and deleting are asked of
+  // it separately.
+  const canChange = folder.permission === 'edit';
+  const canAdd = canChange && can('docs.create');
   const pathOnly = folder.permission === 'none';
 
   // Everything but the most common action lives in one menu, so a row stays
   // readable however many things can be done to a folder.
   const menuItems: SheetMenuItem[] = [];
-  if (canChange) {
+  if (canAdd) {
     menuItems.push(
       { label: 'New document', icon: 'file-earmark-plus', onSelect: () => onAddDocument(folder.id) },
       { label: 'New canvas', icon: 'easel', onSelect: () => onAddDocument(folder.id, 'canvas') },
@@ -713,8 +729,10 @@ function FolderRow({
           onStartCreate(folder.id);
         },
       },
-      { label: 'Rename or change icon', icon: 'pencil', onSelect: () => setRenaming(true) },
     );
+  }
+  if (canChange) {
+    menuItems.push({ label: 'Rename or change icon', icon: 'pencil', onSelect: () => setRenaming(true) });
   }
   if (canManageAccess) {
     if (menuItems.length > 0) menuItems.push('divider');
@@ -724,7 +742,7 @@ function FolderRow({
       onSelect: () => onManageAccess({ kind: 'folder', id: folder.id, name: folder.name }),
     });
   }
-  if (canChange) {
+  if (canChange && can('docs.delete')) {
     menuItems.push('divider', {
       label: 'Delete folder…',
       icon: 'trash3',
@@ -783,7 +801,7 @@ function FolderRow({
         {menuItems.length > 0 && (
           // Kept showing while the menu is open, so it stays anchored to something.
           <div className={cx('items-center', renaming ? 'hidden' : menu ? 'flex' : 'hidden group-hover:flex')}>
-            {canChange && (
+            {canAdd && (
               <IconButton label="New document here" onClick={() => onAddDocument(folder.id)}>
                 <Icon name="file-earmark-plus" />
               </IconButton>
@@ -821,7 +839,7 @@ function FolderRow({
               depth={depth + 1}
               workspaceId={workspaceId}
               activeDocumentId={activeDocumentId}
-              canEdit={canEdit}
+              can={can}
               canManageAccess={canManageAccess}
               onManageAccess={onManageAccess}
               onSelectDocument={onSelectDocument}
@@ -839,7 +857,7 @@ function FolderRow({
               depth={depth + 1}
               active={doc.id === activeDocumentId}
               workspaceId={workspaceId}
-              canEdit={canEdit}
+              canDelete={doc.permission === 'edit' && can('docs.delete')}
               canManageAccess={canManageAccess}
               onManageAccess={onManageAccess}
               onSelect={onSelectDocument}
@@ -891,7 +909,7 @@ function DocumentRow({
   depth,
   active,
   workspaceId,
-  canEdit,
+  canDelete,
   canManageAccess,
   onManageAccess,
   onSelect,
@@ -901,8 +919,8 @@ function DocumentRow({
   depth: number;
   active: boolean;
   workspaceId: string;
-  /** Viewers see no delete button rather than one the server would refuse. */
-  canEdit: boolean;
+  /** No delete button is shown that the server would refuse. */
+  canDelete: boolean;
   canManageAccess: boolean;
   onManageAccess: (target: NamedAccessTarget) => void;
   onSelect: (id: string) => void;
@@ -952,7 +970,7 @@ function DocumentRow({
         ))}
       </button>
 
-      {((canEdit && doc.permission === 'edit') || canManageAccess) && (
+      {(canDelete || canManageAccess) && (
         <div className="hidden items-center group-hover:flex">
           {canManageAccess && (
             <IconButton
@@ -962,7 +980,7 @@ function DocumentRow({
               <Icon name="shield-lock" />
             </IconButton>
           )}
-          {canEdit && doc.permission === 'edit' && (
+          {canDelete && (
             <IconButton label={`Delete ${doc.title}`} onClick={() => setConfirmingDelete(true)}>
               <Icon name="trash3" />
             </IconButton>

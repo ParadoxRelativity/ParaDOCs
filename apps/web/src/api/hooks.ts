@@ -19,6 +19,9 @@ import type {
   PresenceSettings,
   PresenceStatus,
   Role,
+  RoleRef,
+  WorkspacePermission,
+  WorkspaceRole,
   SearchHit,
   SheetFolderNode,
   SheetSearchHit,
@@ -59,6 +62,7 @@ import type {
   WorkItemTimeline,
 } from '@paradocs/shared';
 import { WORKSPACE_APPS } from '@paradocs/shared';
+import { canFrom, roleName, seesApp, withPermissions } from '../lib/permissions';
 import { formatBytes } from '../lib/util';
 import { measure } from '../lib/chatFiles';
 import { rememberNewDocument } from '../lib/newDocuments';
@@ -68,8 +72,14 @@ import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken } fr
 export interface WorkspaceSummary extends Workspace {
   documentCount: number;
   memberCount: number;
-  /** The signed-in user's role in this workspace. */
+  /** Whether the signed-in user is an owner, an admin or a member here. */
   role: Role;
+  /** Their role itself. Missing from a server from before roles could be configured. */
+  workspaceRole?: RoleRef;
+  /** What their role lets them do: everything, for an owner or admin. */
+  permissions: WorkspacePermission[];
+  /** The apps turned on that their role reaches, in WORKSPACE_APPS order. */
+  visibleApps: WorkspaceApp[];
 }
 
 /** The sidebar tree. Unfiled documents are not included; see useAllDocuments. */
@@ -219,21 +229,23 @@ export function useWorkspaces() {
   return useQuery({
     queryKey: keys.workspaces,
     queryFn: async () =>
-      (await api.get<WorkspaceSummary[]>('/workspaces')).map((w) => ({
-        ...w,
+      (await api.get<Omit<WorkspaceSummary, 'visibleApps'>[]>('/workspaces')).map((raw) => {
+        const w = withPermissions(raw);
         // A server from before apps could be turned off has every app on.
-        apps: w.apps ?? [...WORKSPACE_APPS],
-      })),
+        const apps = w.apps ?? [...WORKSPACE_APPS];
+        const can = canFrom(w.permissions);
+        return { ...w, apps, visibleApps: apps.filter((app) => seesApp(can, app)) };
+      }),
   });
 }
 
 /**
- * Whether a workspace has an app turned on. False until the workspace list has
- * loaded, so nothing asks an app's routes for data the server may refuse.
+ * Whether a workspace has an app turned on and the signed-in person's role
+ * reaches it. False until the workspace list has loaded, so nothing asks an app's routes for data the server may refuse.
  */
 export function useAppEnabled(workspaceId: string | undefined, app: WorkspaceApp): boolean {
   const workspaces = useWorkspaces();
-  return workspaces.data?.find((w) => w.id === workspaceId)?.apps.includes(app) ?? false;
+  return workspaces.data?.find((w) => w.id === workspaceId)?.visibleApps.includes(app) ?? false;
 }
 
 export function useCreateWorkspace() {
@@ -434,7 +446,11 @@ export function useUpdateAccess(target: AccessTarget) {
 export function useMembers(workspaceId: string | undefined) {
   return useQuery({
     queryKey: ['members', workspaceId],
-    queryFn: () => api.get<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`),
+    queryFn: async () =>
+      (await api.get<(Omit<WorkspaceMember, 'workspaceRole'> & { workspaceRole?: RoleRef })[]>(`/workspaces/${workspaceId}/members`)).map(
+        // A server from before roles could be configured names only the role's key.
+        (m): WorkspaceMember => ({ ...m, workspaceRole: m.workspaceRole ?? { id: m.role, name: roleName(m.role) } }),
+      ),
     enabled: Boolean(workspaceId),
   });
 }
@@ -442,8 +458,8 @@ export function useMembers(workspaceId: string | undefined) {
 export function useUpdateMember(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ userId, role }: { userId: string; role: Role }) =>
-      api.patch(`/workspaces/${workspaceId}/members/${userId}`, { role }),
+    mutationFn: ({ userId, roleId }: { userId: string; roleId: string }) =>
+      api.patch(`/workspaces/${workspaceId}/members/${userId}`, { roleId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['members', workspaceId] });
       qc.invalidateQueries({ queryKey: keys.workspaces });
@@ -465,7 +481,11 @@ export function useRemoveMember(workspaceId: string) {
 export function useInvites(workspaceId: string | undefined, enabled: boolean) {
   return useQuery({
     queryKey: ['invites', workspaceId],
-    queryFn: () => api.get<WorkspaceInvite[]>(`/workspaces/${workspaceId}/invites`),
+    queryFn: async () =>
+      (await api.get<(Omit<WorkspaceInvite, 'role'> & { role: RoleRef | string })[]>(`/workspaces/${workspaceId}/invites`)).map(
+        // A server from before roles could be configured names only the role's key.
+        (i): WorkspaceInvite => ({ ...i, role: typeof i.role === 'string' ? { id: i.role, name: roleName(i.role) } : i.role }),
+      ),
     enabled: Boolean(workspaceId) && enabled,
   });
 }
@@ -473,9 +493,71 @@ export function useInvites(workspaceId: string | undefined, enabled: boolean) {
 export function useCreateInvite(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { email?: string | null; role: Role }) =>
+    /** Leave out `roleId` for the workspace's default role. */
+    mutationFn: (input: { email?: string | null; roleId?: string }) =>
       api.post<WorkspaceInvite>(`/workspaces/${workspaceId}/invites`, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['invites', workspaceId] }),
+  });
+}
+
+// --- roles -------------------------------------------------------------------
+
+/**
+ * A workspace's roles. Kept under the members key, so the `members.changed`
+ * event every change to a role sends refreshes them with the member list.
+ */
+export function useWorkspaceRoles(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['members', workspaceId, 'roles'],
+    queryFn: () => api.get<WorkspaceRole[]>(`/workspaces/${workspaceId}/roles`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+/** What someone's role allows is what they may do, so everything shown is asked for again. */
+function afterRoleChange(qc: QueryClient, workspaceId: string) {
+  void qc.invalidateQueries({ queryKey: ['members', workspaceId] });
+  void qc.invalidateQueries({ queryKey: ['invites', workspaceId] });
+  void qc.invalidateQueries({ queryKey: keys.workspaces });
+}
+
+export function useCreateWorkspaceRole(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; description?: string; permissions?: WorkspacePermission[]; copyFrom?: string }) =>
+      api.post<WorkspaceRole>(`/workspaces/${workspaceId}/roles`, input),
+    onSuccess: () => afterRoleChange(qc, workspaceId),
+  });
+}
+
+export function useUpdateWorkspaceRole(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...input
+    }: {
+      id: string;
+      name?: string;
+      description?: string;
+      permissions?: WorkspacePermission[];
+      isDefault?: true;
+      position?: number;
+    }) => api.patch<WorkspaceRole>(`/workspace-roles/${id}`, input),
+    onSuccess: () => afterRoleChange(qc, workspaceId),
+  });
+}
+
+export function useDeleteWorkspaceRole(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, moveTo }: { id: string; moveTo?: string }) =>
+      api.delete(`/workspace-roles/${id}${qs({ moveTo })}`),
+    onSuccess: () => {
+      afterRoleChange(qc, workspaceId);
+      // Moving people to another role changes what they may see.
+      void refetchAfterAccessChange(qc);
+    },
   });
 }
 
@@ -499,7 +581,8 @@ export function useAcceptInvite() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (token: string) =>
-      api.post<{ workspaceId: string; role: Role; alreadyMember: boolean }>(`/invites/${token}/accept`),
+      // `role` is the name of the role they hold.
+      api.post<{ workspaceId: string; role: string; alreadyMember: boolean }>(`/invites/${token}/accept`),
     onSuccess: () => qc.invalidateQueries(),
   });
 }

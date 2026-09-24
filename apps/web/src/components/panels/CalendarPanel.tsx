@@ -7,9 +7,11 @@ import Icon from '../Icon';
 interface Props {
   workspaceId: string;
   documentId: string | null;
+  /** Whether their role lets them add and remove events. */
+  canEdit: boolean;
 }
 
-export default function CalendarPanel({ workspaceId, documentId }: Props) {
+export default function CalendarPanel({ workspaceId, documentId, canEdit }: Props) {
   const [cursor, setCursor] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -134,9 +136,11 @@ export default function CalendarPanel({ workspaceId, documentId }: Props) {
               day: 'numeric',
             })}
           </span>
-          <IconButton label="Add event" onClick={() => setAdding((v) => !v)}>
-            <Icon name="plus-lg" />
-          </IconButton>
+          {canEdit && (
+            <IconButton label="Add event" onClick={() => setAdding((v) => !v)}>
+              <Icon name="plus-lg" />
+            </IconButton>
+          )}
         </div>
 
         {adding && (
@@ -161,6 +165,7 @@ export default function CalendarPanel({ workspaceId, documentId }: Props) {
                   ? 'all day'
                   : new Date(event.startAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
               </span>
+              {canEdit && (
               <button
                 onClick={() => deleteEvent.mutate(event.id)}
                 aria-label={`Delete event ${event.title}`}
@@ -168,6 +173,7 @@ export default function CalendarPanel({ workspaceId, documentId }: Props) {
               >
                 <Icon name="trash3" />
               </button>
+              )}
             </div>
           ))}
           {selectedEvents.length === 0 && !adding && (

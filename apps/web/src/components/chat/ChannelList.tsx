@@ -28,6 +28,8 @@ export function ChannelList({
   presence,
   activeChannelId,
   canManage,
+  canManageAccess,
+  canStartDirect,
   voiceEnabled,
   occupancy,
   connectedChannelId,
@@ -42,7 +44,12 @@ export function ChannelList({
   /** Who is around, keyed by user id. */
   presence: Record<string, PresenceStatus>;
   activeChannelId: string | null;
+  /** Whether their role lets them add, rename and delete channels. */
   canManage: boolean;
+  /** Owners and admins, who decide who can see each channel. */
+  canManageAccess: boolean;
+  /** Whether their role lets them start direct and group conversations. */
+  canStartDirect: boolean;
   /** Whether this server has a voice service at all. */
   voiceEnabled: boolean;
   /** Who is currently in each voice channel, keyed by channel id. */
@@ -52,7 +59,7 @@ export function ChannelList({
   /** Conversations open in windows of their own, in the desktop app. */
   poppedOut: string[];
   onSelect: (id: string) => void;
-  /** Opens who can see a channel. Offered wherever `canManage` is. */
+  /** Opens who can see a channel. Offered wherever `canManageAccess` is. */
   onManageAccess: (target: NamedAccessTarget) => void;
 }) {
   const createChannel = useCreateChannel(workspaceId);
@@ -139,7 +146,7 @@ export function ChannelList({
             poppedOut={poppedOut.includes(channel.id)}
             onSelect={onSelect}
             onEdit={setEditing}
-            onSecure={secure}
+            onSecure={canManageAccess ? secure : undefined}
             onDelete={remove}
           />
         ))}
@@ -169,7 +176,7 @@ export function ChannelList({
               people={occupancy[channel.id] ?? []}
               onSelect={onSelect}
               onEdit={setEditing}
-              onSecure={secure}
+              onSecure={canManageAccess ? secure : undefined}
               onDelete={remove}
             />
           ))}
@@ -179,7 +186,7 @@ export function ChannelList({
       <Group
         label="Direct messages"
         addLabel="New direct message"
-        canAdd
+        canAdd={canStartDirect}
         onAdd={() => setChoosingPerson(true)}
         creating={null}
         empty=""
@@ -311,7 +318,8 @@ function TextRow({
   poppedOut: boolean;
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
-  onSecure: (channel: Channel) => void;
+  /** Absent for someone who may not change who can see a channel. */
+  onSecure?: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
 }) {
   const unread = channel.unread ?? 0;
@@ -383,7 +391,8 @@ function VoiceRow({
   people: VoiceOccupant[];
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
-  onSecure: (channel: Channel) => void;
+  /** Absent for someone who may not change who can see a channel. */
+  onSecure?: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
 }) {
   return (
@@ -508,7 +517,8 @@ function Row({
   workspaceId: string;
   onSelect: (id: string) => void;
   onEdit: (channel: Channel) => void;
-  onSecure: (channel: Channel) => void;
+  /** Absent for someone who may not change who can see a channel. */
+  onSecure?: (channel: Channel) => void;
   onDelete: (channel: Channel) => void;
   children: React.ReactNode;
 }) {
@@ -526,17 +536,23 @@ function Row({
       >
         {children}
       </button>
-      {canManage && (
+      {(canManage || onSecure) && (
         <span className="absolute right-1 top-1/2 flex -translate-y-1/2 rounded-md bg-[var(--color-surface)] opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <IconButton label={`Edit ${channel.name}`} onClick={() => onEdit(channel)}>
-            <Icon name="pencil" />
-          </IconButton>
-          <IconButton label={`Permissions for ${channel.name}`} onClick={() => onSecure(channel)}>
-            <Icon name="shield-lock" />
-          </IconButton>
-          <IconButton label={`Delete ${channel.name}`} onClick={() => onDelete(channel)}>
-            <Icon name="trash3" />
-          </IconButton>
+          {canManage && (
+            <IconButton label={`Edit ${channel.name}`} onClick={() => onEdit(channel)}>
+              <Icon name="pencil" />
+            </IconButton>
+          )}
+          {onSecure && (
+            <IconButton label={`Permissions for ${channel.name}`} onClick={() => onSecure(channel)}>
+              <Icon name="shield-lock" />
+            </IconButton>
+          )}
+          {canManage && (
+            <IconButton label={`Delete ${channel.name}`} onClick={() => onDelete(channel)}>
+              <Icon name="trash3" />
+            </IconButton>
+          )}
         </span>
       )}
     </div>

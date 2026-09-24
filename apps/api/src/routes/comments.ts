@@ -36,7 +36,7 @@ export const commentRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>('/documents/:id/comments', async (req, reply) => {
-    await assertDocumentAccess(req, req.params.id);
+    await assertDocumentAccess(req, req.params.id, 'comment');
     const input = parse(createCommentSchema, req.body);
     if (input.parentId) {
       const { rowCount } = await query('SELECT 1 FROM comments WHERE id = $1 AND document_id = $2', [
@@ -63,8 +63,8 @@ export const commentRoutes: FastifyPluginAsync = async (app) => {
       [req.params.id],
     );
     if (!found[0]) throw notFound('Comment not found');
-    // Any member may resolve a thread; only the author may edit the text.
-    await assertDocumentAccess(req, found[0].document_id);
+    // Anyone who may comment may resolve a thread; only the author may edit the text.
+    await assertDocumentAccess(req, found[0].document_id, 'comment');
 
     const input = parse(updateCommentSchema, req.body);
     // Anyone with document access may resolve a thread, but only the author may edit the text.
@@ -89,7 +89,7 @@ export const commentRoutes: FastifyPluginAsync = async (app) => {
       [req.params.id],
     );
     if (!rows[0]) throw notFound('Comment not found');
-    await assertDocumentAccess(req, rows[0].document_id);
+    await assertDocumentAccess(req, rows[0].document_id, 'comment');
     if (rows[0].author_id !== req.user!.id) throw forbidden('You can only delete your own comments');
     await query('DELETE FROM comments WHERE id = $1', [req.params.id]);
     reply.status(204);

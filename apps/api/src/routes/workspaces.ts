@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createFolderSchema, createWorkspaceSchema, updateFolderSchema, updateWorkspaceSchema } from '@paradocs/shared';
 import {
   WORKSPACE_APPS,
+  WORKSPACE_PERMISSIONS,
   type AccessMode,
   type DocumentSummary,
   type FolderApp,
@@ -128,16 +129,19 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       `SELECT w.id, w.name, w.slug, w.icon, ${uploadUrlSql('w.avatar_key')} AS "avatarUrl",
               ${enabledAppsSql('w.disabled_apps')} AS apps,
               w.created_at AS "createdAt", m.role,
+              json_build_object('id', r.id, 'name', r.name) AS "workspaceRole",
+              CASE WHEN m.role = 'member' THEN r.permissions ELSE $2::text[] END AS permissions,
               (SELECT count(*) FROM documents d
                 WHERE d.workspace_id = w.id AND d.archived_at IS NULL
-                  AND ${documentLevelSql('$1', 'm.role')} > 0) AS "documentCount",
+                  AND ${documentLevelSql('$1', 'm.role_id')} > 0) AS "documentCount",
               (SELECT count(*) FROM workspace_members wm
                 WHERE wm.workspace_id = w.id) AS "memberCount"
          FROM workspace_members m
          JOIN workspaces w ON w.id = m.workspace_id
+         JOIN workspace_roles r ON r.id = m.role_id
         WHERE m.user_id = $1
         ORDER BY w.created_at`,
-      [req.user!.id],
+      [req.user!.id, WORKSPACE_PERMISSIONS],
     );
     return rows;
   });
@@ -161,8 +165,12 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
          RETURNING ${WORKSPACE_COLUMNS}`,
         [req.user!.id, input.name, slug, input.icon ?? null],
       );
-      await client.query(
-        `INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+      // The workspace's roles are made with it (migration 0031); this takes Owner.
+      const { rows: member } = await client.query<{ id: string; name: string }>(
+        `WITH m AS (
+           INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner') RETURNING role_id
+         )
+         SELECT r.id, r.name FROM m JOIN workspace_roles r ON r.id = m.role_id`,
         [rows[0].id, req.user!.id],
       );
       // Somewhere to talk, so the chat tab is never an empty room.
@@ -171,14 +179,14 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         [rows[0].id, 'Everything else', req.user!.id],
       );
       await addDefaultVoiceChannel(client, rows[0].id as string, req.user!.id);
-      return rows[0];
+      return { ...rows[0], workspaceRole: member[0] };
     });
     reply.status(201);
-    return { ...created, role: 'owner', documentCount: 0, memberCount: 1 };
+    return { ...created, role: 'owner', permissions: WORKSPACE_PERMISSIONS, documentCount: 0, memberCount: 1 };
   });
 
   app.patch<{ Params: { id: string } }>('/workspaces/:id', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    await assertWorkspaceAccess(req, req.params.id, 'manage');
     const input = parse(updateWorkspaceSchema, req.body);
     // Stored as what is off, so an app added later starts out on.
     const disabled = input.apps ? WORKSPACE_APPS.filter((app) => !input.apps!.includes(app)) : null;
@@ -205,13 +213,13 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
 
   /** Sets the workspace picture, which takes the place of its icon. */
   app.put<{ Params: { id: string } }>('/workspaces/:id/avatar', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    await assertWorkspaceAccess(req, req.params.id, 'manage');
     const key = await storeAvatar(req, 'workspaces');
     return replaceAvatar('workspaces', req.params.id, key, WORKSPACE_COLUMNS);
   });
 
   app.delete<{ Params: { id: string } }>('/workspaces/:id/avatar', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    await assertWorkspaceAccess(req, req.params.id, 'manage');
     return replaceAvatar('workspaces', req.params.id, null, WORKSPACE_COLUMNS);
   });
 
@@ -256,14 +264,14 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
    * Only what the reader may see is included; see buildTree.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/tree', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'docs.view', 'docs');
 
     const [{ rows: folders }, { rows: documents }] = await Promise.all([
       query<FolderRow>(
         `SELECT id, workspace_id, app, parent_id, name, icon, position, created_at, access,
                 ${folderLevelSql('$2', '$3', 'id')} AS level
            FROM folders WHERE workspace_id = $1 AND app = 'docs' ORDER BY position, name`,
-        [req.params.id, req.user!.id, role],
+        [req.params.id, req.user!.id, roleId],
       ),
       query<DocumentSummary>(
         `SELECT ${documentSummaryColumns('$2', '$3')}
@@ -271,7 +279,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           WHERE d.workspace_id = $1 AND d.archived_at IS NULL AND d.folder_id IS NOT NULL
             AND ${documentLevelSql('$2', '$3')} > 0
           ORDER BY d.title`,
-        [req.params.id, req.user!.id, role],
+        [req.params.id, req.user!.id, roleId],
       ),
     ]);
 
@@ -292,14 +300,14 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
    * of the answer rather than left to a listing of their own.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/sheet-tree', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'sheets');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'sheets.view', 'sheets');
 
     const [{ rows: folders }, { rows: spreadsheets }] = await Promise.all([
       query<FolderRow>(
         `SELECT id, workspace_id, app, parent_id, name, icon, position, created_at, access,
                 ${folderLevelSql('$2', '$3', 'id')} AS level
            FROM folders WHERE workspace_id = $1 AND app = 'sheets' ORDER BY position, name`,
-        [req.params.id, req.user!.id, role],
+        [req.params.id, req.user!.id, roleId],
       ),
       query<SpreadsheetSummary>(
         `SELECT ${spreadsheetSummaryColumns('$2', '$3')}
@@ -307,7 +315,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           WHERE s.workspace_id = $1 AND s.archived_at IS NULL
             AND ${spreadsheetLevelSql('$2', '$3')} > 0
           ORDER BY s.folder_id IS NULL, lower(s.title), s.updated_at DESC`,
-        [req.params.id, req.user!.id, role],
+        [req.params.id, req.user!.id, roleId],
       ),
     ]);
 
@@ -327,7 +335,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/folders', async (req, reply) => {
     const input = parse(createFolderSchema, req.body);
-    await assertWorkspaceAccess(req, req.params.id, 'editor', input.app);
+    await assertWorkspaceAccess(req, req.params.id, `${input.app ?? 'docs'}.create`, input.app);
     // A subfolder is something put in its parent, which takes being allowed to
     // change what is in it. It must be in the same app's tree.
     if (input.parentId) await assertFolderAccess(req, input.parentId, 'edit', req.params.id, input.app);
@@ -402,7 +410,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.delete<{ Params: { id: string }; Querystring: { documents?: string; contents?: string } }>(
     '/folders/:id',
     async (req, reply) => {
-      const { workspaceId, role, app: folderApp } = await assertFolderAccess(req, req.params.id, 'edit');
+      const { workspaceId, role, roleId, app: folderApp } = await assertFolderAccess(req, req.params.id, 'delete');
       const deleteContents = req.query.contents === 'delete' || req.query.documents === 'delete';
       const items = FOLDER_CONTENTS[folderApp];
       if (!managesAccess(role)) {
@@ -410,7 +418,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         // cannot delete it by deleting its parent.
         const { rows: locked } = await query(
           `${SUBTREE} SELECT 1 FROM sub WHERE ${folderLevelSql('$2', '$3', 'sub.id')} < 2 LIMIT 1`,
-          [req.params.id, req.user!.id, role],
+          [req.params.id, req.user!.id, roleId],
         );
         if (locked.length) throw forbidden('This folder holds folders you cannot change, so you cannot delete it');
         // The same goes for what is filed in them, including things locked away
@@ -421,7 +429,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
              SELECT 1 FROM ${items.table} ${items.alias}
               WHERE ${items.alias}.folder_id IN (SELECT id FROM sub) AND ${items.levelSql('$2', '$3')} < 2
               LIMIT 1`,
-            [req.params.id, req.user!.id, role],
+            [req.params.id, req.user!.id, roleId],
           );
           if (protectedItems.length) {
             throw forbidden(`This folder holds ${items.noun} you cannot change, so they cannot be deleted with it`);

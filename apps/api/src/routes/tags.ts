@@ -10,7 +10,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/tags', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'docs.view', 'docs');
     // Counts only what the reader may see, so a tag's number matches what
     // following it turns up.
     const { rows } = await query(
@@ -22,13 +22,13 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
         WHERE t.workspace_id = $1
         GROUP BY t.id
         ORDER BY t.name`,
-      [req.params.id, req.user!.id, role],
+      [req.params.id, req.user!.id, roleId],
     );
     return rows;
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/tags', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, req.params.id, 'docs.tags', 'docs');
     const input = parse(createTagSchema, req.body);
     const name = input.name.trim();
 
@@ -59,7 +59,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       req.params.id,
     ]);
     if (!found[0]) throw notFound('Tag not found');
-    await assertWorkspaceAccess(req, found[0].workspace_id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, found[0].workspace_id, 'docs.tags', 'docs');
     const input = parse(updateTagSchema, req.body);
     const name = input.name?.trim() || null;
     // The same case-insensitive rule as creating one, so a rename cannot make
@@ -87,7 +87,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       req.params.id,
     ]);
     if (!rows[0]) throw notFound('Tag not found');
-    await assertWorkspaceAccess(req, rows[0].workspace_id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, rows[0].workspace_id, 'docs.tags', 'docs');
     await query('DELETE FROM tags WHERE id = $1', [req.params.id]);
     treeChanged(rows[0].workspace_id, 'docs');
     reply.status(204);

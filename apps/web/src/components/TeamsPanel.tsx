@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { Role, Team } from '@paradocs/shared';
+import type { Team } from '@paradocs/shared';
 import { useCreateTeam, useDeleteTeam, useMembers, useTeams, useUpdateTeam } from '../api/hooks';
+import { teamChanger, type Can, type MayChangeTeam } from '../lib/permissions';
 import { cx } from '../lib/util';
 import Avatar from './Avatar';
 import Icon from './Icon';
@@ -14,12 +15,14 @@ type MemberSummary = { userId: string; name: string; email: string; avatarUrl: s
 /**
  * Teams: named groups of members, so a folder, document or channel can be
  * locked to a team in one line instead of a list of people. Everyone can see
- * who is on which team; owners and admins make and change them.
+ * who is on which team. Owners and admins (`canManage`) make, rename and
+ * delete them and change anyone's place on them; a role can let someone else
+ * change who else is on the teams they are on.
  */
-export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: string; myRole: Role }) {
-  const canManage = myRole === 'owner' || myRole === 'admin';
+export default function TeamsPanel({ workspaceId, canManage, can }: { workspaceId: string; canManage: boolean; can: Can }) {
   const teams = useTeams(workspaceId);
   const members = useMembers(workspaceId);
+  const mayChange = teamChanger(members.data?.find((m) => m.isSelf)?.userId, canManage, can);
   const createTeam = useCreateTeam(workspaceId);
   const toast = useToast();
   const [name, setName] = useState('');
@@ -44,7 +47,13 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
 
   return (
     <div className="space-y-4">
-      {!canManage && <p className="text-xs text-[var(--color-muted)]">Ask an owner or admin to change a team.</p>}
+      {!canManage && (
+        <p className="text-xs text-[var(--color-muted)]">
+          {can('teams.members')
+            ? 'You can change who else is on the teams you are on. Ask an owner or admin to make a team, or to change your own place on one.'
+            : 'Ask an owner or admin to change a team.'}
+        </p>
+      )}
 
       {canManage && (
         <form onSubmit={(e) => void create(e)} className="flex gap-1.5">
@@ -76,6 +85,7 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
               team={team}
               members={members.data ?? []}
               canManage={canManage}
+              canEditMembers={members.data?.some((m) => mayChange(team, m.userId)) ?? false}
               open={openId === team.id}
               onToggle={() => setOpenId(openId === team.id ? null : team.id)}
               onManage={() => setManagingId(team.id)}
@@ -84,11 +94,12 @@ export default function TeamsPanel({ workspaceId, myRole }: { workspaceId: strin
         </ul>
       )}
 
-      {canManage && managing && (
+      {managing && (
         <ManageTeamDialog
           workspaceId={workspaceId}
           team={managing}
           members={members.data ?? []}
+          mayChange={mayChange}
           onClose={() => setManagingId(null)}
         />
       )}
@@ -101,6 +112,7 @@ function TeamRow({
   team,
   members,
   canManage,
+  canEditMembers,
   open,
   onToggle,
   onManage,
@@ -108,7 +120,10 @@ function TeamRow({
   workspaceId: string;
   team: Team;
   members: MemberSummary[];
+  /** Owners and admins, who rename and delete teams. */
   canManage: boolean;
+  /** Whether the viewer may change anyone's place on this team. */
+  canEditMembers: boolean;
   open: boolean;
   onToggle: () => void;
   onManage: () => void;
@@ -144,9 +159,9 @@ function TeamRow({
             {team.memberIds.length} {team.memberIds.length === 1 ? 'member' : 'members'}
           </span>
         </button>
-        {canManage && (
+        {canEditMembers && (
           <Button variant="subtle" className="text-xs" onClick={onManage}>
-            Manage team
+            {canManage ? 'Manage team' : 'Manage members'}
           </Button>
         )}
         {canManage && (
@@ -205,11 +220,13 @@ function ManageTeamDialog({
   workspaceId,
   team,
   members,
+  mayChange,
   onClose,
 }: {
   workspaceId: string;
   team: Team;
   members: MemberSummary[];
+  mayChange: MayChangeTeam;
   onClose: () => void;
 }) {
   const updateTeam = useUpdateTeam(workspaceId);
@@ -257,11 +274,14 @@ function ManageTeamDialog({
         <ul className="scroll-thin max-h-80 space-y-1 overflow-y-auto">
           {listed.map((member) => (
             <li key={member.userId}>
-              <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <label
+                className={cx('flex items-center gap-2 text-sm', mayChange(team, member.userId) ? 'cursor-pointer' : 'cursor-default opacity-60')}
+                title={mayChange(team, member.userId) ? undefined : 'Only an owner or admin can change this'}
+              >
                 <input
                   type="checkbox"
                   checked={team.memberIds.includes(member.userId)}
-                  disabled={updateTeam.isPending}
+                  disabled={updateTeam.isPending || !mayChange(team, member.userId)}
                   onChange={(e) => toggleMember(member.userId, e.target.checked)}
                 />
                 <MemberLine member={member} />

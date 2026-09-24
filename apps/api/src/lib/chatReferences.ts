@@ -9,7 +9,7 @@ import {
   type WorkItemReference,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql, roleSql, spreadsheetLevelSql } from './access.js';
+import { channelLevelSql, documentLevelSql, projectLevelSql, roleIdSql, spreadsheetLevelSql } from './access.js';
 import { appEnabledSql } from './apps.js';
 
 export type {
@@ -56,7 +56,7 @@ export async function resolveReferences(
     return empty;
   }
 
-  const viewerRole = roleSql('$3', '$2');
+  const viewerRole = roleIdSql('$3', '$2');
   const viewer = viewerId ? [viewerId] : [];
 
   const [documents, spreadsheets, channels, members, workItems, projects] = await Promise.all([
@@ -126,7 +126,7 @@ export async function resolveWorkItems(
   viewerId: string | null,
 ): Promise<WorkItemReference[]> {
   if (ids.length === 0) return [];
-  const viewerRole = roleSql('$3', 'p.workspace_id');
+  const viewerRole = roleIdSql('$3', 'p.workspace_id');
   const { rows } = await query<WorkItemReference>(
     `SELECT i.id, i.project_id AS "projectId", p.key || '-' || i.number AS key, i.title,
             st.name AS "statusName", st.category AS "statusCategory", st.color AS "statusColor"

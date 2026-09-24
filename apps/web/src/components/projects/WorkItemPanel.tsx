@@ -88,6 +88,7 @@ export default function WorkItemPanel({
   members,
   selfId,
   canEdit,
+  canComment,
   onClose,
   navigation,
 }: {
@@ -97,6 +98,8 @@ export default function WorkItemPanel({
   members: WorkspaceMember[];
   selfId: string;
   canEdit: boolean;
+  /** A role can let someone comment on work without changing it, or the other way round. */
+  canComment: boolean;
   onClose: () => void;
   navigation: ProjectNavigation;
 }) {
@@ -131,6 +134,7 @@ export default function WorkItemPanel({
       memberMap={memberMap}
       selfId={selfId}
       canEdit={canEdit}
+      canComment={canComment}
       onClose={onClose}
       navigation={navigation}
     />
@@ -145,6 +149,7 @@ function ItemDetail({
   memberMap,
   selfId,
   canEdit,
+  canComment,
   onClose,
   navigation,
 }: {
@@ -155,6 +160,7 @@ function ItemDetail({
   memberMap: Map<string, WorkspaceMember>;
   selfId: string;
   canEdit: boolean;
+  canComment: boolean;
   onClose: () => void;
   navigation: ProjectNavigation;
 }) {
@@ -461,7 +467,7 @@ function ItemDetail({
           item={item}
           memberMap={memberMap}
           selfId={selfId}
-          canEdit={canEdit}
+          canComment={canComment}
           navigation={navigation}
         />
 
@@ -920,14 +926,14 @@ function Timeline({
   item,
   memberMap,
   selfId,
-  canEdit,
+  canComment,
   navigation,
 }: {
   workspaceId: string;
   item: WorkItem;
   memberMap: Map<string, WorkspaceMember>;
   selfId: string;
-  canEdit: boolean;
+  canComment: boolean;
   navigation: ProjectNavigation;
 }) {
   const timeline = useWorkItemTimeline(item.id);
@@ -963,7 +969,7 @@ function Timeline({
                     {entry.comment.editedAt && ' (edited)'}
                   </span>
                   <span className="flex-1" />
-                  {canEdit && entry.comment.author?.id === selfId && editing !== entry.comment.id && (
+                  {canComment && entry.comment.author?.id === selfId && editing !== entry.comment.id && (
                     <button
                       onClick={() => setEditing(entry.comment.id)}
                       className="hidden text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)] group-hover:inline"
@@ -1021,7 +1027,7 @@ function Timeline({
         </ol>
       )}
 
-      {canEdit && (
+      {canComment && (
         <div className="mt-4">
           <ReferenceEditor
             workspaceId={workspaceId}

@@ -63,7 +63,7 @@ interface WorkspaceColumns {
 interface InviteRow extends WorkspaceColumns {
   id: string;
   token: string;
-  role: Role;
+  role: string;
   invited_by: string | null;
   created_at: string;
   expires_at: string;
@@ -101,10 +101,10 @@ const WORKSPACE_SELECT = `w.id AS workspace_id, w.name AS workspace_name, w.icon
  * The channels a person can read messages in: the text channels of their
  * workspaces not locked away from them, and the direct conversations they are
  * part of. Expects the channel as `c` and the person's id as $1; `role` is SQL
- * for their role in the channel's workspace.
+ * for their role (its id) in the channel's workspace, which must let them read chat.
  */
 function readableChannel(role: string): string {
-  return `((c.kind = 'text' AND ${channelLevelSql('$1', role)} > 0) OR (c.kind = 'direct' AND EXISTS (
+  return `((c.kind = 'text' AND ${channelLevelSql('$1', role)} > 0) OR (c.kind = 'direct' AND role_ceiling(${role}, 'chat') > 0 AND EXISTS (
   SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = $1)))`;
 }
 
@@ -143,9 +143,10 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
 
     const [{ rows: inviteRows }, { rows: channelRows }, { rows: mentionRows }, { rows: workItemRows }] = await Promise.all([
       query<InviteRow>(
-        `SELECT i.id, i.token, i.role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
+        `SELECT i.id, i.token, r.name AS role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
            FROM workspace_invites i
            JOIN workspaces w ON w.id = i.workspace_id
+           JOIN workspace_roles r ON r.id = i.role_id
            LEFT JOIN users u ON u.id = i.invited_by
           -- Only invitations tied to this account: an address alone proves
           -- nothing, and this hands out the token that accepts it.
@@ -175,7 +176,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
                 ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
            FROM workspace_members wm
            JOIN workspaces w ON w.id = wm.workspace_id
-           JOIN channels c ON c.workspace_id = w.id AND ${readableChannel('wm.role')}
+           JOIN channels c ON c.workspace_id = w.id AND ${readableChannel('wm.role_id')}
                           AND ${appEnabledSql('w.id', 'chat')}
            LEFT JOIN LATERAL (
              SELECT string_agg(u.name, ', ' ORDER BY lower(u.name), u.id) AS names
@@ -230,7 +231,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
             -- An archived document is off the shelf; a tag in one is not news.
             AND d.archived_at IS NULL
             AND ${appEnabledSql('d.workspace_id', 'docs')}
-            AND ${documentLevelSql('$1', 'wm.role')} > 0
+            AND ${documentLevelSql('$1', 'wm.role_id')} > 0
           ORDER BY dm.created_at DESC
           LIMIT ${MAX_MENTIONS}`,
         [user.id],
@@ -253,7 +254,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
             AND n.read_at IS NULL
             AND p.archived_at IS NULL
             AND ${appEnabledSql('p.workspace_id', 'projects')}
-            AND ${projectLevelSql('$1', 'wm.role')} > 0
+            AND ${projectLevelSql('$1', 'wm.role_id')} > 0
           ORDER BY n.created_at DESC
           LIMIT ${MAX_MENTIONS}`,
         [user.id],
@@ -354,7 +355,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
        SELECT c.id, $1, now()
          FROM channels c
          JOIN workspace_members m ON m.workspace_id = c.workspace_id AND m.user_id = $1
-        WHERE ${readableChannel('m.role')} AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
+        WHERE ${readableChannel('m.role_id')} AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
        ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`,
       [req.user!.id, input.channelIds ?? null],
     );

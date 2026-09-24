@@ -4,6 +4,7 @@ export * from './canvas.js';
 export * from './chart.js';
 export * from './chat.js';
 export * from './mentions.js';
+export * from './permissions.js';
 export * from './formula.js';
 export * from './formulaEval.js';
 export * from './formulaHelp.js';

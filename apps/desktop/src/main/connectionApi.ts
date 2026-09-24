@@ -6,7 +6,6 @@ import type {
   MentionNotification,
   MessageNotification,
   Notifications,
-  Role,
 } from '@paradocs/shared';
 import { partitionFor, type Connection } from './connections.js';
 import { paths } from './paths.js';
@@ -51,7 +50,6 @@ const SESSION_COOKIE = 'paradocs_session';
 const TIMEOUT_MS = 8000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_PICTURE_BYTES = 512 * 1024;
-const ROLES = new Set<Role>(['owner', 'admin', 'editor', 'viewer']);
 
 interface Reply {
   status: number;
@@ -242,7 +240,8 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
       records(body.invites, 100).map(async (invite) => ({
         id: text(invite.id),
         token: text(invite.token),
-        role: ROLES.has(invite.role as Role) ? (invite.role as Role) : 'viewer',
+        // The role's name, which a server from before custom roles sent as a bare key.
+        role: text(invite.role),
         invitedBy: nullable(invite.invitedBy),
         createdAt: text(invite.createdAt),
         expiresAt: text(invite.expiresAt),

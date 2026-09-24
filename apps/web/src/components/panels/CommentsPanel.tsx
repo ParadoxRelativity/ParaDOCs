@@ -6,7 +6,16 @@ import { Button, Spinner } from '../ui';
 import Avatar from '../Avatar';
 import Icon from '../Icon';
 
-export default function CommentsPanel({ documentId, currentUserId }: { documentId: string; currentUserId: string }) {
+/** `canComment` is whether their role lets them comment; anyone who can see the document can read them. */
+export default function CommentsPanel({
+  documentId,
+  currentUserId,
+  canComment,
+}: {
+  documentId: string;
+  currentUserId: string;
+  canComment: boolean;
+}) {
   const comments = useComments(documentId);
   const create = useCreateComment(documentId);
   const [draft, setDraft] = useState('');
@@ -40,6 +49,7 @@ export default function CommentsPanel({ documentId, currentUserId }: { documentI
               comment={comment}
               documentId={documentId}
               currentUserId={currentUserId}
+              canComment={canComment}
             />
           ))}
         </div>
@@ -53,6 +63,7 @@ export default function CommentsPanel({ documentId, currentUserId }: { documentI
         )}
       </div>
 
+      {canComment && (
       <form onSubmit={submit} className="border-t border-[var(--color-line)] p-3">
         <textarea
           value={draft}
@@ -72,6 +83,7 @@ export default function CommentsPanel({ documentId, currentUserId }: { documentI
           Comment
         </Button>
       </form>
+      )}
     </div>
   );
 }
@@ -80,10 +92,12 @@ function CommentThread({
   comment,
   documentId,
   currentUserId,
+  canComment,
 }: {
   comment: Comment;
   documentId: string;
   currentUserId: string;
+  canComment: boolean;
 }) {
   const update = useUpdateComment(documentId);
   const remove = useDeleteComment(documentId);
@@ -101,6 +115,7 @@ function CommentThread({
         </div>
       ))}
 
+      {canComment && (
       <div className="mt-2 flex gap-2 text-[11px]">
         <button
           onClick={() => setReplying((v) => !v)}
@@ -115,6 +130,7 @@ function CommentThread({
           {comment.resolved ? 'Reopen' : 'Resolve'}
         </button>
       </div>
+      )}
 
       {replying && (
         <form

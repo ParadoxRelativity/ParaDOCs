@@ -10,6 +10,7 @@ import {
   useVoiceConfig,
   useWorkspaces,
 } from '../api/hooks';
+import { canFrom } from '../lib/permissions';
 import { desktop } from '../lib/desktop';
 import { useCall } from '../lib/call';
 import { useDirectCalls } from '../lib/directCalls';
@@ -167,7 +168,7 @@ export default function PopoutWindow({ user }: { user: User }) {
   const direct = channel.kind === 'direct' ? channel : null;
   const peerName = direct ? directName(direct) : 'them';
   const group = direct !== null && isGroupDirect(direct);
-  const canManage = workspace?.role === 'owner' || workspace?.role === 'admin';
+  const can = canFrom(workspace?.permissions);
 
   return (
     <div className="h-full">
@@ -177,8 +178,8 @@ export default function PopoutWindow({ user }: { user: User }) {
         channels={channelList}
         selfId={user.id}
         canPost={Boolean(workspace) && channel.permission !== 'view'}
-        canModerate={Boolean(canManage) && !direct}
-        canEditChannel={Boolean(canManage) && channel.kind === 'text'}
+        canModerate={can('chat.moderate') && !direct}
+        canEditChannel={can('chat.channels') && channel.kind === 'text'}
         title={
           direct ? (
             <DirectTitle

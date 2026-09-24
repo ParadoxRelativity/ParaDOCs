@@ -216,7 +216,7 @@ with other spreadsheet apps. The toolbar and the right-click menu cover number
 formats (number, whole number, currency, percent, scientific, date, time,
 plain text) and decimal places, bold, italic and alignment, sorting a
 selection, summing it into the cell below, and inserting or deleting rows and
-columns. Viewers get the same grid, read-only.
+columns. Anyone whose role cannot edit spreadsheets gets the same grid, read-only.
 
 **Formulas.** Over 80 functions across maths, statistics, logic, lookup
 (`VLOOKUP`, `HLOOKUP`, `INDEX`, `MATCH`), text and dates. While a formula is being
@@ -255,7 +255,8 @@ as with any link into a spreadsheet — inserting rows above the cell moves the
 data out from under it. A reference the reader cannot see shows as unavailable,
 without saying whether the spreadsheet exists.
 
-Spreadsheets follow workspace roles: editors edit and viewers read. Unlike
+Spreadsheets follow workspace roles: a role can edit them, only read them, or
+not see Sheets at all. Unlike
 folders, documents and channels, they cannot be locked individually yet.
 
 ## Chat
@@ -485,20 +486,41 @@ server you are signed in to.
 
 ## Users, roles and sharing
 
-A workspace has members, each with one role:
+A workspace has members, each with one role. Every workspace starts with four:
 
 | Role     | Can do                                                        |
 | -------- | ------------------------------------------------------------- |
-| `owner`  | Everything, including deleting the workspace                   |
-| `admin`  | Manage members and invites, plus everything an editor can do    |
-| `editor` | Create and edit documents, folders and tags                     |
-| `viewer` | Read, search and comment; cannot change content, but can post in chat |
+| Owner    | Everything, including deleting the workspace. Built in         |
+| Admin    | Everything but deleting the workspace: people, roles, locks and settings. Built in |
+| Editor   | Create and edit content in every app                           |
+| Viewer   | Read, search and comment on documents; post in chat            |
+
+Owner and Admin are fixed. Every other role, Editor and Viewer included, is a
+set of permissions that owners and admins choose under **Access → Roles**, and
+they can add as many roles as they like: one that writes documents but never
+touches chat or projects, one that works on queue requests without being able to
+change how the queue is set up, one that never sees Sheets at all. Permissions
+cover each app separately — seeing it, commenting, editing, creating and
+deleting, and for projects and queues (held apart) working on items, running
+sprints, configuring them and deleting them — plus inviting people, managing
+the members of teams and managing uploads. One that needs another brings it along: deleting
+documents needs editing them, which needs seeing them.
+
+Some things stay with owners and admins whatever a role says: locks, roles,
+who holds which role, removing people, making, renaming and deleting teams, the
+workspace's name, picture and apps, and getting past a workflow's rules. Someone whose role lets them invite people
+can only invite with a role that allows nothing theirs does not.
+
+New invites start with the role marked as the default, Editor to begin with. A
+role in use can be deleted by choosing the role its members and pending invites
+move to.
 
 A workspace always keeps at least one owner: the last one cannot be demoted or
 removed. Non-members get `404` rather than `403` so workspace ids stay unguessable.
 
-**Inviting people.** This server does not send email. An admin creates an invite
-from the Members panel and gets a link to pass along:
+**Inviting people.** This server does not send email. Anyone whose role allows
+it creates an invite from the Members panel, choosing the role it joins with,
+and gets a link to pass along:
 
 - with an email address — single use, and only that address may redeem it. If
   that address already has an account, the invitation also appears in its
@@ -507,10 +529,18 @@ from the Members panel and gets a link to pass along:
 
 ### Teams and access
 
-**Teams** are named groups of members, under **Settings → Teams**, so access can
+**Teams** are named groups of members, under **Access → Teams**, so access can
 be given to a group in one line instead of a list of people. Everyone in a
-workspace can see who is on which team; owners and admins create and change
-them.
+workspace can see who is on which team. Owners and admins make, rename and
+delete teams, and can put anyone on one or take them off — themselves included.
+A role with **Manage team members** lets someone else add and remove other
+people on the teams they are on themselves, but never their own place, and
+never on a team they are not on: joining a team an allow list names, or leaving
+one a deny list names, would get them past a lock.
+
+Teams and roles do different jobs. A team says whose things are whose, by being
+named on a lock. A role says what kind of work someone does, everywhere in the
+workspace.
 
 **Locks.** Everything in a workspace is open to all its members until someone
 locks it. Owners and admins can lock a folder, a document or a channel in one
@@ -532,10 +562,11 @@ conversation is only ever its two people.
 
 A list gives a person the level of the line naming them. With no such line, it
 gives the most any of their teams gets, and failing that, nothing on an allow
-list and everything on a deny list. Roles still set a ceiling: a viewer never
-gets past viewing a document, whatever a list says. Chat has no such ceiling,
-since viewers have always been able to post. Owners and admins are never kept
-out, so a lock can always be undone.
+list and everything on a deny list. Roles still set a ceiling: someone whose
+role cannot edit documents never gets past viewing one, and someone whose role
+cannot post in chat never gets past reading, whatever a list says. A lock only
+ever narrows what a role allows. Owners and admins are never kept out, so a lock
+can always be undone.
 
 The rules live in the database as SQL functions, so listings, search, links in
 chat and notifications only return what the reader may see, and a link to a
@@ -546,7 +577,8 @@ granted when they opened.
 
 ## Managing uploads
 
-Owners and admins get a **Uploads** section in Settings listing the workspace's
+Owners, admins and anyone whose role lets them manage uploads get an **Uploads**
+section in Access listing the workspace's
 files, with a running total of how much storage they use. A file counts as
 *unattached* when no document owns it: it was uploaded on its own, or the
 document holding it was deleted, which nulls the reference rather than removing

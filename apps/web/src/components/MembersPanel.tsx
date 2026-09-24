@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Role, Team, WorkspaceMember } from '@paradocs/shared';
+import type { Role, Team, WorkspaceMember, WorkspaceRole } from '@paradocs/shared';
 import {
   useCreateInvite,
   useInvites,
@@ -9,7 +9,9 @@ import {
   useSetMemberTeams,
   useTeams,
   useUpdateMember,
+  useWorkspaceRoles,
 } from '../api/hooks';
+import { teamChanger, type Can, type MayChangeTeam } from '../lib/permissions';
 import { cx, formatRelative } from '../lib/util';
 import { shareOrigin } from '../lib/server';
 import { useToast } from './Toast';
@@ -18,24 +20,33 @@ import Avatar from './Avatar';
 import Icon from './Icon';
 import { Popover } from './Popover';
 
-const ROLE_HELP: Record<Role, string> = {
-  owner: 'Full control, including deleting the workspace',
-  admin: 'Manage members and all content',
-  editor: 'Create and edit documents',
-  viewer: 'Read and comment only',
-};
-
 interface Props {
   workspaceId: string;
   myRole: Role;
+  /** What the viewer's role lets them do: invite people, or put them on teams. */
+  can: Can;
+}
+
+/**
+ * The roles someone may give out: any but Owner for an admin, and Owner too
+ * for an owner. Anyone else who may invite people may give out only a role
+ * that allows nothing theirs does not, which the server holds them to.
+ */
+export function grantableRoles(roles: WorkspaceRole[], myRole: Role, can: Can): WorkspaceRole[] {
+  if (myRole === 'owner') return roles;
+  if (myRole === 'admin') return roles.filter((r) => r.system !== 'owner');
+  return roles.filter((r) => !r.system && r.permissions.every(can));
 }
 
 /** Member list, team designations and invite management. Rendered in the Access app. */
-export default function MembersPanel({ workspaceId, myRole }: Props) {
+export default function MembersPanel({ workspaceId, myRole, can }: Props) {
   const canManage = myRole === 'owner' || myRole === 'admin';
+  const canInvite = can('members.invite');
   const members = useMembers(workspaceId);
   const teams = useTeams(workspaceId);
-  const invites = useInvites(workspaceId, canManage);
+  const roles = useWorkspaceRoles(workspaceId);
+  const mayChangeTeam = teamChanger(members.data?.find((m) => m.isSelf)?.userId, canManage, can);
+  const invites = useInvites(workspaceId, canInvite);
   const updateMember = useUpdateMember(workspaceId);
   const removeMember = useRemoveMember(workspaceId);
   const createInvite = useCreateInvite(workspaceId);
@@ -43,8 +54,17 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
   const toast = useToast();
 
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<Role>('editor');
+  // Unset until chosen, which means the workspace's default role.
+  const [inviteRoleId, setInviteRoleId] = useState('');
   const [search, setSearch] = useState('');
+
+  const roleList = roles.data ?? [];
+  const roleById = new Map(roleList.map((r) => [r.id, r]));
+  const invitable = grantableRoles(roleList, myRole, can).filter((r) => r.system !== 'owner');
+  const defaultRole = roleList.find((r) => r.isDefault);
+  const chosenInviteRole =
+    invitable.find((r) => r.id === inviteRoleId) ??
+    (defaultRole && invitable.includes(defaultRole) ? defaultRole : invitable[invitable.length - 1]);
 
   const control =
     'rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]';
@@ -58,7 +78,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
         [
           member.name,
           member.email,
-          member.role,
+          member.workspaceRole.name,
           ...teamList.filter((team) => team.memberIds.includes(member.userId)).map((team) => team.name),
         ].some((value) => value.toLowerCase().includes(needle)),
       )
@@ -82,7 +102,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
   async function submitInvite(e: React.FormEvent) {
     e.preventDefault();
     try {
-      const invite = await createInvite.mutateAsync({ email: email.trim() || null, role });
+      const invite = await createInvite.mutateAsync({ email: email.trim() || null, roleId: chosenInviteRole?.id });
       setEmail('');
       await copy(invite.token);
     } catch (err) {
@@ -90,9 +110,9 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
     }
   }
 
-  function changeRole(userId: string, next: Role) {
+  function changeRole(userId: string, roleId: string) {
     updateMember.mutate(
-      { userId, role: next },
+      { userId, roleId },
       {
         onSuccess: () => toast('Role updated'),
         onError: (err) => toast(err instanceof Error ? err.message : 'Could not update role', 'error'),
@@ -104,8 +124,10 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
     <div className="space-y-4">
       <p className="text-xs text-[var(--color-muted)]">
         {canManage
-          ? 'Invite people by email, or create a link anyone can use to join. Set each person’s role and the teams they are on.'
-          : 'You can see who has access and which teams they are on. Ask an admin to make changes.'}
+          ? 'Invite people by email, or create a link anyone can use to join. Set each person’s role and the teams they are on. What each role allows is under Roles.'
+          : canInvite
+            ? 'Invite people by email, or create a link anyone can use to join. Ask an admin to change anyone’s role.'
+            : 'You can see who has access and which teams they are on. Ask an admin to make changes.'}
       </p>
 
       <section>
@@ -146,30 +168,30 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
                     {member.isSelf && <span className="text-[var(--color-muted)]"> (you)</span>}
                   </p>
                   <p className="truncate text-[11px] text-[var(--color-muted)]">{member.email}</p>
-                  <MemberTeams workspaceId={workspaceId} member={member} teams={teamList} canManage={canManage} />
+                  <MemberTeams workspaceId={workspaceId} member={member} teams={teamList} mayChange={mayChangeTeam} />
                 </div>
 
-                {canManage && !(member.role === 'owner' && myRole !== 'owner') ? (
+                {canManage && !(member.role === 'owner' && myRole !== 'owner') && roleList.length > 0 ? (
                   <select
                     className={control}
-                    value={member.role}
-                    onChange={(e) => changeRole(member.userId, e.target.value as Role)}
-                    title={ROLE_HELP[member.role]}
+                    value={member.workspaceRole.id}
+                    onChange={(e) => changeRole(member.userId, e.target.value)}
+                    title={roleById.get(member.workspaceRole.id)?.description}
                     aria-label={`Role for ${member.name}`}
                   >
                     {/* Only an owner can hand out ownership. */}
-                    {(myRole === 'owner'
-                      ? (['owner', 'admin', 'editor', 'viewer'] as Role[])
-                      : (['admin', 'editor', 'viewer'] as Role[])
-                    ).map((r) => (
-                      <option key={r} value={r}>
-                        {r}
+                    {grantableRoles(roleList, myRole, can).map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
                       </option>
                     ))}
                   </select>
                 ) : (
-                  <span className="pt-1 text-xs text-[var(--color-muted)]" title={ROLE_HELP[member.role]}>
-                    {member.role}
+                  <span
+                    className="pt-1 text-xs text-[var(--color-muted)]"
+                    title={roleById.get(member.workspaceRole.id)?.description}
+                  >
+                    {member.workspaceRole.name}
                   </span>
                 )}
 
@@ -194,7 +216,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
         )}
       </section>
 
-      {canManage && (
+      {canInvite && invitable.length > 0 && (
         <>
           <section className="border-t border-[var(--color-line)] pt-3">
             <form onSubmit={submitInvite} className="flex gap-1.5">
@@ -205,10 +227,18 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
-              <select className={control} value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                <option value="admin">admin</option>
-                <option value="editor">editor</option>
-                <option value="viewer">viewer</option>
+              <select
+                className={control}
+                value={chosenInviteRole?.id ?? ''}
+                onChange={(e) => setInviteRoleId(e.target.value)}
+                title={chosenInviteRole?.description}
+                aria-label="Role to invite with"
+              >
+                {invitable.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
               </select>
               <Button variant="primary" className="shrink-0 text-xs" type="submit" disabled={createInvite.isPending}>
                 Invite
@@ -229,7 +259,7 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
                   <li key={invite.id} className="flex items-center gap-2 text-xs">
                     <span className="min-w-0 flex-1 truncate">
                       {invite.email ?? 'Anyone with the link'}
-                      <span className="text-[var(--color-muted)]"> · {invite.role}</span>
+                      <span className="text-[var(--color-muted)]"> · {invite.role.name}</span>
                     </span>
                     <span className="shrink-0 text-[10px] text-[var(--color-muted)]">
                       expires {formatRelative(invite.expiresAt)}
@@ -256,25 +286,28 @@ export default function MembersPanel({ workspaceId, myRole }: Props) {
 }
 
 /**
- * The teams one person is on, as chips under their name. Owners and admins can
- * take them off a team from its chip, or pick teams from the list beside them.
+ * The teams one person is on, as chips under their name. Whoever may change
+ * their place on a team (see `mayChangeTeamMember`) can take them off it from
+ * its chip, or pick teams from the list beside them.
  */
 function MemberTeams({
   workspaceId,
   member,
   teams,
-  canManage,
+  mayChange,
 }: {
   workspaceId: string;
   member: WorkspaceMember;
   teams: Team[];
-  canManage: boolean;
+  mayChange: MayChangeTeam;
 }) {
   const setTeams = useSetMemberTeams(workspaceId);
   const toast = useToast();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
 
   const onTeams = teams.filter((team) => team.memberIds.includes(member.userId));
+  const changeable = teams.filter((team) => mayChange(team, member.userId));
+  const canManage = changeable.length > 0;
   if (!canManage && onTeams.length === 0) return null;
 
   function toggle(teamId: string, on: boolean) {
@@ -295,7 +328,7 @@ function MemberTeams({
         >
           <Icon name="people-fill" className="text-[var(--color-muted)]" />
           <span className="truncate">{team.name}</span>
-          {canManage && (
+          {mayChange(team, member.userId) && (
             <button
               onClick={() => toggle(team.id, false)}
               disabled={setTeams.isPending}
@@ -330,7 +363,7 @@ function MemberTeams({
               <p className="px-1 py-2 text-xs text-[var(--color-muted)]">No teams yet. Create one under Teams.</p>
             ) : (
               <ul className="scroll-thin max-h-64 overflow-y-auto">
-                {teams.map((team) => (
+                {changeable.map((team) => (
                   <li key={team.id}>
                     <label className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-[var(--color-surface)]">
                       <input

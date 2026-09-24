@@ -22,7 +22,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>(
     '/workspaces/:id/events',
     async (req) => {
-      await assertWorkspaceAccess(req, req.params.id, 'viewer', 'docs');
+      await assertWorkspaceAccess(req, req.params.id, 'docs.view', 'docs');
       const conditions = ['e.workspace_id = $1'];
       const params: unknown[] = [req.params.id];
       if (req.query.from) {
@@ -45,7 +45,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   );
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/events', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, req.params.id, 'docs.calendar', 'docs');
     const input = parse(createEventSchema, req.body);
     if (input.documentId) await assertLinkable(req.user!.id, input.documentId, req.params.id);
     const { rows } = await query(
@@ -74,7 +74,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
       req.params.id,
     ]);
     if (!found[0]) throw notFound('Event not found');
-    await assertWorkspaceAccess(req, found[0].workspace_id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, found[0].workspace_id, 'docs.calendar', 'docs');
     const input = parse(updateEventSchema, req.body);
     if (input.documentId) await assertLinkable(req.user!.id, input.documentId, found[0].workspace_id);
     const { rows } = await query(
@@ -111,7 +111,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
       req.params.id,
     ]);
     if (!rows[0]) throw notFound('Event not found');
-    await assertWorkspaceAccess(req, rows[0].workspace_id, 'editor', 'docs');
+    await assertWorkspaceAccess(req, rows[0].workspace_id, 'docs.calendar', 'docs');
     await query('DELETE FROM events WHERE id = $1', [req.params.id]);
     reply.status(204);
   });

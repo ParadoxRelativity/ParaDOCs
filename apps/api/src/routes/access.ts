@@ -4,24 +4,29 @@ import {
   updateAccessSchema,
   updateMemberTeamsSchema,
   updateTeamSchema,
+  mayChangeTeamMember,
   type AccessEntry,
   type AccessMode,
   type AccessSettings,
   type Team,
+  type WorkspacePermission,
 } from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
-import { badRequest, conflict, notFound, parse } from '../lib/http.js';
+import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { UUID, levelOf, permissionOf } from '../lib/access.js';
 import { accessChanged } from '../lib/accessEvents.js';
 import { uploadUrlSql } from '../lib/storage.js';
-import { assertWorkspaceAccess } from '../plugins/session.js';
+import { assertWorkspaceAccess, type Membership } from '../plugins/session.js';
+import { managesAccess } from '../lib/roles.js';
 
 /**
  * Teams, and the locks on folders, documents, spreadsheets, channels and projects.
  *
  * Anyone in a workspace can see its teams, since they are how access is
- * described. Changing a team or a lock is for owners and admins, who no lock
- * keeps out — so whatever they set up, they can always see and undo.
+ * described. Making, renaming and deleting a team, and changing a lock, is for
+ * owners and admins, who no lock keeps out — so whatever they set up, they can
+ * always see and undo. A role can let someone change who else is on the teams
+ * they are on themselves; see `mayChangeTeamMember`.
  */
 
 /** The kinds of thing that can be locked, and where each keeps its setting. */
@@ -89,6 +94,38 @@ async function assertTeams(workspaceId: string, teamIds: string[]): Promise<void
     [workspaceId, unique],
   );
   if (rows[0].count !== unique.length) throw badRequest('Every team listed must belong to this workspace');
+}
+
+/** Who is on each of these teams now. */
+async function teamMemberIds(teamIds: string[]): Promise<Map<string, string[]>> {
+  const { rows } = await query<{ team_id: string; user_id: string }>(
+    'SELECT team_id, user_id FROM team_members WHERE team_id = ANY($1::uuid[])',
+    [teamIds],
+  );
+  const members = new Map(teamIds.map((id) => [id, [] as string[]]));
+  for (const row of rows) members.get(row.team_id)?.push(row.user_id);
+  return members;
+}
+
+/**
+ * Refuses a change to who is on a team that the caller may not make: putting
+ * someone on it or taking them off, as `mayChangeTeamMember` decides. Checked
+ * against who is on it before the change.
+ */
+function assertTeamChanges(
+  actor: Membership,
+  actorId: string,
+  changes: { teamName: string; memberIds: string[]; userId: string }[],
+): void {
+  const who = { id: actorId, manages: managesAccess(actor.role), can: (p: WorkspacePermission) => actor.permissions.has(p) };
+  for (const change of changes) {
+    if (mayChangeTeamMember(who, change.memberIds, change.userId)) continue;
+    throw forbidden(
+      change.userId === actorId
+        ? 'Only an owner or admin can put you on a team or take you off one'
+        : `You can only change who is on ${change.teamName} if you are on it yourself and your role lets you manage team members`,
+    );
+  }
 }
 
 async function replaceTeamMembers(client: DbClient, teamId: string, userIds: string[]): Promise<void> {
@@ -169,7 +206,7 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/teams', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'admin');
+    await assertWorkspaceAccess(req, req.params.id, 'manage');
     const input = parse(createTeamSchema, req.body);
     const memberIds = input.memberIds ?? [];
     await assertTeamNameFree(req.params.id, input.name);
@@ -189,10 +226,26 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/teams/:id', async (req) => {
     const workspaceId = await teamWorkspace(req.params.id);
-    await assertWorkspaceAccess(req, workspaceId, 'admin');
+    const actor = await assertWorkspaceAccess(req, workspaceId);
     const input = parse(updateTeamSchema, req.body);
+    if (input.name !== undefined && !managesAccess(actor.role)) {
+      throw forbidden('Only an owner or admin can rename a team');
+    }
     if (input.name) await assertTeamNameFree(workspaceId, input.name, req.params.id);
-    if (input.memberIds) await assertMembers(workspaceId, input.memberIds);
+    if (input.memberIds) {
+      await assertMembers(workspaceId, input.memberIds);
+      const team = await fetchTeam(req.params.id);
+      const next = new Set(input.memberIds);
+      const changed = [
+        ...input.memberIds.filter((id) => !team.memberIds.includes(id)),
+        ...team.memberIds.filter((id) => !next.has(id)),
+      ];
+      assertTeamChanges(
+        actor,
+        req.user!.id,
+        changed.map((userId) => ({ teamName: team.name, memberIds: team.memberIds, userId })),
+      );
+    }
 
     await transaction(async (client) => {
       if (input.name) await client.query('UPDATE teams SET name = $2 WHERE id = $1', [req.params.id, input.name]);
@@ -205,7 +258,7 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { id: string } }>('/teams/:id', async (req, reply) => {
     const workspaceId = await teamWorkspace(req.params.id);
-    await assertWorkspaceAccess(req, workspaceId, 'admin');
+    await assertWorkspaceAccess(req, workspaceId, 'manage');
     // Its lines on every list go with it: on an allow list that takes access
     // away from its members, and on a deny list it gives it back.
     await query('DELETE FROM teams WHERE id = $1', [req.params.id]);
@@ -217,7 +270,7 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
   // than from each team in turn. Teams left as they were keep their place.
   app.put<{ Params: { id: string; userId: string } }>('/workspaces/:id/members/:userId/teams', async (req) => {
     const workspaceId = req.params.id;
-    await assertWorkspaceAccess(req, workspaceId, 'admin');
+    const actor = await assertWorkspaceAccess(req, workspaceId);
     const teamIds = [...new Set(parse(updateMemberTeamsSchema, req.body).teamIds)];
     const { userId } = req.params;
     if (!UUID.test(userId)) throw notFound('That person is not a member of this workspace');
@@ -227,6 +280,21 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
     ]);
     if (!rows.length) throw notFound('That person is not a member of this workspace');
     await assertTeams(workspaceId, teamIds);
+
+    // Only the teams this changes are asked about, so a teams list sent back
+    // with others left as they were is not refused for them.
+    const { rows: current } = await query<{ id: string; name: string; is_on: boolean }>(
+      `SELECT t.id, t.name, EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = t.id AND tm.user_id = $2) AS is_on
+         FROM teams t WHERE t.workspace_id = $1`,
+      [workspaceId, userId],
+    );
+    const changed = current.filter((team) => team.is_on !== teamIds.includes(team.id));
+    const members = await teamMemberIds(changed.map((team) => team.id));
+    assertTeamChanges(
+      actor,
+      req.user!.id,
+      changed.map((team) => ({ teamName: team.name, memberIds: members.get(team.id) ?? [], userId })),
+    );
 
     await transaction(async (client) => {
       await client.query(
@@ -252,13 +320,13 @@ export const accessRoutes: FastifyPluginAsync = async (app) => {
   for (const kind of Object.keys(TARGETS) as TargetKind[]) {
     app.get<{ Params: { id: string } }>(`/${kind}/:id/access`, async (req) => {
       const target = await resolveTarget(kind, req.params.id);
-      await assertWorkspaceAccess(req, target.workspaceId, 'admin');
+      await assertWorkspaceAccess(req, target.workspaceId, 'manage');
       return readSettings(target);
     });
 
     app.put<{ Params: { id: string } }>(`/${kind}/:id/access`, async (req) => {
       const target = await resolveTarget(kind, req.params.id);
-      await assertWorkspaceAccess(req, target.workspaceId, 'admin');
+      await assertWorkspaceAccess(req, target.workspaceId, 'manage');
       const input = parse(updateAccessSchema, req.body);
       const { table, column, parent } = TARGETS[kind];
       if (!parent && input.access === 'inherit') throw badRequest(`A ${TARGETS[kind].label.toLowerCase()} has no folder to inherit from`);

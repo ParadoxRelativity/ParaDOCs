@@ -15,10 +15,11 @@ import {
 } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
-import { assertWorkspaceAccess, roleAtLeast, type Role } from '../plugins/session.js';
+import { assertMeets, assertWorkspaceAccess, type Requirement } from '../plugins/session.js';
 import { resolveReferences } from '../lib/chatReferences.js';
 import { channelAccessFor, mentionsUserSql, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
 import { channelLevelSql, permissionSql } from '../lib/access.js';
+import { missingPermission } from '../lib/roles.js';
 import {
   dimension,
   displayName,
@@ -95,14 +96,19 @@ async function selectMessage(db: Queryable, id: string): Promise<Message> {
 async function channelAccess(
   req: FastifyRequest,
   channelId: string,
-  { minimum = 'viewer', post = false }: { minimum?: Role; post?: boolean } = {},
+  { need, post = false, change = false }: { need?: Requirement; post?: boolean; change?: boolean } = {},
 ): Promise<ChannelAccess> {
   const access = await channelAccessFor(req.user!.id, channelId);
   if (!access) throw notFound('Channel not found');
-  if (!roleAtLeast(access.role, minimum)) {
-    throw forbidden(`This action requires the ${minimum} role or higher`);
+  assertMeets(access, need);
+  if (post && access.level < 2) {
+    throw forbidden(
+      access.permissions.has('chat.post') ? 'You can read this channel but not post in it' : missingPermission('chat.post'),
+    );
   }
-  if (post && access.level < 2) throw forbidden('You can read this channel but not post in it');
+  // A lock that leaves someone reading a channel keeps them from changing it,
+  // whatever their role allows elsewhere. Owners and admins pass every lock.
+  if (change && access.level < 2) throw forbidden('You can read this channel but not change it');
   return access;
 }
 
@@ -127,7 +133,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   // --- channels ------------------------------------------------------------
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/channels', async (req) => {
-    const role = await assertWorkspaceAccess(req, req.params.id, 'viewer', 'chat');
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'chat.view', 'chat');
     // Direct conversations are listed on their own, and only to the people in
     // them. A channel locked away from someone is not listed to them at all.
     const { rows } = await query<Channel>(
@@ -147,14 +153,13 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
          LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $2
         WHERE c.workspace_id = $1 AND c.kind <> 'direct' AND ${channelLevelSql('$2', '$3')} > 0
         ORDER BY c.kind, c.position, lower(c.name)`,
-      [req.params.id, req.user!.id, role],
+      [req.params.id, req.user!.id, roleId],
     );
     return rows;
   });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/channels', async (req, reply) => {
-    // Adding and removing channels is an owner/admin job, as asked.
-    await assertWorkspaceAccess(req, req.params.id, 'admin', 'chat');
+    await assertWorkspaceAccess(req, req.params.id, 'chat.channels', 'chat');
     const input = parse(createChannelSchema, req.body);
 
     const { rows: clash } = await query(
@@ -179,7 +184,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch<{ Params: { id: string } }>('/channels/:id', async (req) => {
-    const { workspaceId, kind } = await channelAccess(req, req.params.id, { minimum: 'admin' });
+    const { workspaceId, kind } = await channelAccess(req, req.params.id, { need: 'chat.channels', change: true });
     if (kind === 'direct') throw badRequest('A direct conversation has no name or topic to change');
     const input = parse(updateChannelSchema, req.body);
 
@@ -214,7 +219,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete<{ Params: { id: string } }>('/channels/:id', async (req, reply) => {
-    const { workspaceId, kind } = await channelAccess(req, req.params.id, { minimum: 'admin' });
+    const { workspaceId, kind } = await channelAccess(req, req.params.id, { need: 'chat.channels', change: true });
     if (kind === 'direct') throw badRequest('A direct conversation cannot be deleted');
     const { rows } = await query<{ count: number }>(
       `SELECT count(*)::int AS count FROM channels WHERE workspace_id = $1 AND kind <> 'direct'`,
@@ -359,8 +364,9 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     const found = await messageRow(req.params.id);
     const access = await channelAccess(req, found.channel_id);
     // Your own message, or anyone's if you moderate the workspace — except in a
-    // direct conversation, which no one else can see to moderate.
-    const moderates = access.kind !== 'direct' && roleAtLeast(access.role, 'admin');
+    // direct conversation, which no one else can see to moderate, or in a
+    // channel a lock leaves you only reading.
+    const moderates = access.kind !== 'direct' && access.level === 2 && access.permissions.has('chat.moderate');
     if (found.author_id !== req.user!.id && !moderates) {
       throw forbidden('You can only delete your own messages');
     }

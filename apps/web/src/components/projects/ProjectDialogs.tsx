@@ -30,17 +30,22 @@ import {
 export function NewProjectDialog({
   workspaceId,
   initialKind,
+  allowedKinds,
   onCreated,
   onClose,
 }: {
   workspaceId: string;
   initialKind: ProjectKind;
+  /** The kinds their role lets them start. Both when left out. */
+  allowedKinds?: ProjectKind[];
   onCreated: (project: Project) => void;
   onClose: () => void;
 }) {
   const create = useCreateProject(workspaceId);
   const toast = useToast();
-  const [kind, setKind] = useState<ProjectKind>(initialKind);
+  const [kind, setKind] = useState<ProjectKind>(
+    !allowedKinds || allowedKinds.includes(initialKind) ? initialKind : (allowedKinds[0] ?? initialKind),
+  );
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
   // The key follows the name until someone types one of their own.
@@ -62,10 +67,10 @@ export function NewProjectDialog({
     }
   }
 
-  const kinds: { id: ProjectKind; hint: string }[] = [
+  const kinds = ([
     { id: 'project', hint: 'Planned work on a board, moved along as it gets done.' },
     { id: 'queue', hint: 'Requests that come in and are worked through, oldest first.' },
-  ];
+  ] satisfies { id: ProjectKind; hint: string }[]).filter((option) => !allowedKinds || allowedKinds.includes(option.id));
 
   return (
     <Modal
