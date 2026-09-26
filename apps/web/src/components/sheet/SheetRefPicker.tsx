@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { isValidSheetRef, type SheetRef } from '@paradocs/shared';
-import { useSpreadsheets } from '../../api/hooks';
+import { MAX_LINK_TARGETS, isValidSheetRef, type SheetRef } from '@paradocs/shared';
+import { useLinkTargets } from '../../api/hooks';
 import { fetchOutline, useSheetRef } from '../../lib/sheetRefs';
-import { cx } from '../../lib/util';
+import { cx, useDebounced } from '../../lib/util';
 import { Modal } from '../Modal';
 import { Button } from '../ui';
 
@@ -27,8 +27,14 @@ export default function SheetRefPicker({
   onInsert: (ref: PickedSheetRef) => void;
   onCancel: () => void;
 }) {
-  const spreadsheets = useSpreadsheets(workspaceId);
+  // Searched on the server by title, since there can be more spreadsheets
+  // than any one list would hold; the most recently touched show first.
+  const [find, setFind] = useState('');
+  const typed = useDebounced(find.trim(), 150);
+  const found = useLinkTargets(workspaceId, typed, { kinds: ['spreadsheets'], limit: MAX_LINK_TARGETS });
   const [spreadsheetId, setSpreadsheetId] = useState('');
+  // The one chosen stays on offer after a new search stops finding it.
+  const [chosen, setChosen] = useState<{ id: string; title: string } | null>(null);
   const [sheetId, setSheetId] = useState('');
   const [cell, setCell] = useState('A1');
   const [chartId, setChartId] = useState('');
@@ -81,7 +87,9 @@ export default function SheetRefPicker({
   const field =
     'w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]';
   const caption = 'mb-1 block text-xs text-[var(--color-muted)]';
-  const available = (spreadsheets.data ?? []).filter((entry) => !entry.archivedAt);
+  const results = found.data?.spreadsheets ?? [];
+  const available = chosen && !results.some((entry) => entry.id === chosen.id) ? [chosen, ...results] : results;
+  const none = !typed && !found.isLoading && results.length === 0;
 
   return (
     <Modal
@@ -101,8 +109,27 @@ export default function SheetRefPicker({
       <div className="space-y-3">
         <label className="block">
           <span className={caption}>Spreadsheet</span>
-          <select autoFocus className={field} value={spreadsheetId} onChange={(e) => setSpreadsheetId(e.target.value)}>
-            <option value="">{available.length ? 'Choose a spreadsheet…' : 'This workspace has no spreadsheets yet'}</option>
+          {!none && (
+            <input
+              autoFocus
+              value={find}
+              onChange={(e) => setFind(e.target.value)}
+              placeholder="Find a spreadsheet by name"
+              aria-label="Find a spreadsheet by name"
+              className={cx(field, 'mb-1.5')}
+            />
+          )}
+          <select
+            className={field}
+            value={spreadsheetId}
+            onChange={(e) => {
+              setSpreadsheetId(e.target.value);
+              setChosen(available.find((entry) => entry.id === e.target.value) ?? null);
+            }}
+          >
+            <option value="">
+              {none ? 'This workspace has no spreadsheets yet' : available.length ? 'Choose a spreadsheet…' : 'No spreadsheet by that name'}
+            </option>
             {available.map((entry) => (
               <option key={entry.id} value={entry.id}>
                 {entry.title}

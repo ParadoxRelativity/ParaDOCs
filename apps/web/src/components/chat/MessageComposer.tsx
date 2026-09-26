@@ -25,18 +25,17 @@ import {
 } from '@paradocs/shared';
 import { api } from '../../api/client';
 import {
-  useAllDocuments,
   useAppEnabled,
   useMembers,
   useProjects,
-  useSpreadsheets,
+  useLinkTargets,
   useUploadConfig,
   useWorkItemListing,
 } from '../../api/hooks';
 import { uploadChatFile } from '../../lib/chatFiles';
 import { useTypingReporter } from '../../lib/typing';
 import { replaceShortcodes, searchEmoji, type EmojiOption } from '../../lib/emoji';
-import { cx, formatBytes } from '../../lib/util';
+import { cx, formatBytes, useDebounced } from '../../lib/util';
 import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
 import { useToast } from '../Toast';
 import { IconButton } from '../ui';
@@ -188,12 +187,15 @@ export const MessageComposer = forwardRef<
   // And only from the apps the workspace has on.
   const docsOn = useAppEnabled(workspaceId, 'docs');
   const sheetsOn = useAppEnabled(workspaceId, 'sheets');
-  const documents = useAllDocuments(trigger?.kind === 'document' && docsOn ? workspaceId : undefined, {
-    sort: 'updated',
-    archived: false,
-    limit: 200,
-  });
-  const spreadsheets = useSpreadsheets(trigger?.kind === 'document' && sheetsOn ? workspaceId : undefined);
+  // Searched on the server as the name is typed, since a workspace can hold
+  // more documents and spreadsheets than any list it would send. Each kind is
+  // asked for a full picker's worth, so either can fill the list alone.
+  const linkQuery = useDebounced(trigger?.kind === 'document' ? trigger.query.trim() : '', 150);
+  const targets = useLinkTargets(
+    trigger?.kind === 'document' && (docsOn || sheetsOn) ? workspaceId : undefined,
+    linkQuery,
+    { limit: PICKER_LIMIT },
+  );
   // Work items are searched on the server, since a workspace can have thousands:
   // by title, or by key, so `[[ENG-12` finds the one meant.
   const projectsOn = useAppEnabled(workspaceId, 'projects');
@@ -277,7 +279,7 @@ export const MessageComposer = forwardRef<
     // sheet someone just touched under documents they have not opened in
     // months. They are matched separately and concatenated, documents first.
     const matchesTitle = (title: string) => (title || 'Untitled').toLowerCase().includes(needle);
-    const documentOptions = (documents.data?.documents ?? []).filter((d) => matchesTitle(d.title)).map((d) => ({
+    const documentOptions = (targets.data?.documents ?? []).filter((d) => matchesTitle(d.title)).map((d) => ({
       id: d.id,
       icon: <DocumentIcon doc={d} />,
       label: d.title || 'Untitled',
@@ -286,7 +288,7 @@ export const MessageComposer = forwardRef<
       insert: `[[${d.title || 'Untitled'}]]`,
       token: documentRef(d.id),
     }));
-    const sheetOptions = (spreadsheets.data ?? []).filter((s) => matchesTitle(s.title)).map((s) => ({
+    const sheetOptions = (targets.data?.spreadsheets ?? []).filter((s) => matchesTitle(s.title)).map((s) => ({
       id: s.id,
       icon: <SpreadsheetIcon sheet={s} />,
       label: s.title || 'Untitled',
@@ -305,7 +307,7 @@ export const MessageComposer = forwardRef<
       ...documentOptions.slice(0, documentShare),
       ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
     ];
-  }, [trigger, channels, direct, documents.data, spreadsheets.data, workItems.data, projects.data, members.data, emojiOptions]);
+  }, [trigger, channels, direct, targets.data, workItems.data, projects.data, members.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {

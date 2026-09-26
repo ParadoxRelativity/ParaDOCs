@@ -11,6 +11,7 @@ export * from './formulaEval.js';
 export * from './formulaHelp.js';
 export * from './presence.js';
 export * from './projects.js';
+export * from './projectInsights.js';
 export * from './schemas.js';
 export * from './sheet.js';
 export * from './sheetCompute.js';

@@ -10,15 +10,14 @@ import {
   type MessageReferences,
 } from '@paradocs/shared';
 import {
-  useAllDocuments,
   useAppEnabled,
   useChannels,
   useMembers,
+  useLinkTargets,
   useProjects,
-  useSpreadsheets,
   useWorkItemListing,
 } from '../../api/hooks';
-import { cx } from '../../lib/util';
+import { cx, useDebounced } from '../../lib/util';
 import Avatar from '../Avatar';
 import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
 import { INSERTED_REF, WORK_ITEM_TRIGGER, matchProjects, projectLabel } from '../chat/MessageComposer';
@@ -156,8 +155,10 @@ export default function ReferenceEditor({
   const itemSearch = trigger?.kind === 'item';
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
   const channels = useChannels(trigger?.kind === 'channel' && chatOn ? workspaceId : undefined);
-  const documents = useAllDocuments(linking && docsOn ? workspaceId : undefined, { sort: 'updated', archived: false, limit: 200 });
-  const spreadsheets = useSpreadsheets(linking && sheetsOn ? workspaceId : undefined);
+  // Searched on the server as the name is typed, so nothing is out of reach
+  // however many documents and spreadsheets the workspace holds.
+  const linkQuery = useDebounced(linking ? trigger.query.trim() : '', 150);
+  const targets = useLinkTargets(linking && (docsOn || sheetsOn) ? workspaceId : undefined, linkQuery, { limit: 4 });
   const workItems = useWorkItemListing(itemSearch ? workspaceId : undefined, {
     q: itemSearch ? trigger.query || undefined : undefined,
     limit: LIMIT,
@@ -205,8 +206,10 @@ export default function ReferenceEditor({
       }));
       return [...boards, ...items].slice(0, LIMIT);
     }
+    // The last answer stays up while the next is asked, so anything it holds
+    // that no longer matches what is typed is left out.
     const matches = (title: string) => (title || 'Untitled').toLowerCase().includes(needle);
-    const docs = (documents.data?.documents ?? []).filter((d) => matches(d.title)).slice(0, 4).map((d) => ({
+    const docs = (targets.data?.documents ?? []).filter((d) => matches(d.title)).slice(0, 4).map((d) => ({
       id: d.id,
       icon: <DocumentIcon doc={d} />,
       label: d.title || 'Untitled',
@@ -214,7 +217,7 @@ export default function ReferenceEditor({
       insert: `[[${d.title || 'Untitled'}]]`,
       token: documentRef(d.id),
     }));
-    const sheets = (spreadsheets.data ?? []).filter((s) => matches(s.title)).slice(0, 3).map((s) => ({
+    const sheets = (targets.data?.spreadsheets ?? []).filter((s) => matches(s.title)).slice(0, 3).map((s) => ({
       id: s.id,
       icon: <SpreadsheetIcon sheet={s} />,
       label: s.title || 'Untitled',
@@ -223,7 +226,7 @@ export default function ReferenceEditor({
       token: spreadsheetRef(s.id),
     }));
     return [...docs, ...sheets].slice(0, LIMIT);
-  }, [trigger, members.data, channels.data, documents.data, spreadsheets.data, workItems.data, projects.data]);
+  }, [trigger, members.data, channels.data, targets.data, workItems.data, projects.data]);
 
   useLayoutEffect(() => {
     const el = input.current;

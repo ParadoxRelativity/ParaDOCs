@@ -33,6 +33,8 @@ import { directRoutes } from './routes/direct.js';
 import { presenceRoutes } from './routes/presence.js';
 import { accessRoutes } from './routes/access.js';
 import { projectRoutes } from './routes/projects.js';
+import { intakeRoutes } from './routes/intake.js';
+import { scheduleWorkItemArchiving } from './lib/workItemArchive.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -123,6 +125,7 @@ export async function buildApp() {
     documentRoutes,
     spreadsheetRoutes,
     projectRoutes,
+    intakeRoutes,
     searchRoutes,
     tagRoutes,
     commentRoutes,
@@ -145,6 +148,10 @@ export async function buildApp() {
 
   // Voice signalling under /rtc, relayed to LiveKit when this server has it.
   await app.register(voiceProxyRoutes);
+
+  // Here rather than in server.ts, so the server the desktop app runs locally
+  // puts finished work away too.
+  scheduleWorkItemArchiving(app);
 
   return app;
 }

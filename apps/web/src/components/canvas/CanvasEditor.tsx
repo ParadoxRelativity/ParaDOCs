@@ -27,9 +27,9 @@ import type { CollabSession, Peer } from '../../lib/collaboration';
 import { boundsOf, useCanvasElements } from '../../lib/canvasStore';
 import { alignBoxes, colorName, distributeBoxes, type Alignment } from '../../lib/canvasArrange';
 import { peerPointer, usePublishPointer } from '../../lib/canvasPresence';
-import { cx, randomId, useAutosave } from '../../lib/util';
+import { cx, randomId, useAutosave, useDebounced } from '../../lib/util';
 import { claimNewDocument } from '../../lib/newDocuments';
-import { useAllDocuments, useAppEnabled, useCreateDocument, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
+import { useAppEnabled, useCreateDocument, useLinkTargets, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
 import { useToast } from '../Toast';
 import CanvasSurface, { MAX_SCALE, MIN_SCALE, zoomAround, type PendingBox, type Viewport } from './CanvasSurface';
 import PresentMode from './PresentMode';
@@ -1877,7 +1877,10 @@ function DocumentSearch({
   onResults: (documents: { id: string; title: string }[]) => void;
 }) {
   const [query, setQuery] = useState('');
-  const documents = useAllDocuments(workspaceId, { sort: 'updated', archived: false, limit: 200 });
+  // Searched on the server as the title is typed, so any document can be
+  // found, not only the most recently touched.
+  const typed = useDebounced(query.trim(), 150);
+  const documents = useLinkTargets(workspaceId, typed, { kinds: ['documents'], limit: 50 });
   const all = useMemo(() => documents.data?.documents ?? [], [documents.data]);
   useEffect(() => onResults(all), [all, onResults]);
   const matches = useMemo(() => {

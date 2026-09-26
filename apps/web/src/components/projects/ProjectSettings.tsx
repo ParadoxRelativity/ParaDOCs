@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
+  DEFAULT_ARCHIVE_DAYS,
+  MAX_ARCHIVE_DAYS,
   STATUS_CATEGORIES,
   STATUS_CATEGORY_LABELS,
   STATUS_COLORS,
@@ -24,6 +26,7 @@ import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
 import { CATEGORY_ICON, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
+import IntakeSection from './ProjectIntake';
 
 /**
  * How a project is set up: its name and key, the statuses its work moves
@@ -59,6 +62,8 @@ export default function ProjectSettings({
         <WorkflowSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
         {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
+        <ArchiveSection project={project} canEdit={canEdit} />
+        {project.kind === 'queue' && canEdit && <IntakeSection project={project} />}
 
         <Section
           title="Permissions"
@@ -203,6 +208,70 @@ function SprintSection({ project, canEdit }: { project: Project; canEdit: boolea
             )}
           />
         </button>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * How long finished work stays on the board and in the list once nobody is
+ * touching it. Archived work is still in All items, and comes back if it is
+ * reopened, commented on or restored. Turning archiving off leaves what is
+ * already archived where it is.
+ */
+function ArchiveSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
+  const update = useUpdateProject(project.workspaceId, project.id);
+  const toast = useToast();
+  const saved = project.archiveAfterDays;
+  const [days, setDays] = useState(saved === null ? '' : String(saved));
+  useEffect(() => setDays(saved === null ? '' : String(saved)), [saved]);
+
+  const never = saved === null;
+  const parsed = Number(days);
+  const valid = Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_ARCHIVE_DAYS;
+  const disabled = !canEdit || update.isPending;
+
+  function save(archiveAfterDays: number | null) {
+    update.mutate(
+      { archiveAfterDays },
+      {
+        onSuccess: () => toast(archiveAfterDays === null ? 'Finished work will not be archived' : 'Saved'),
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not save', 'error'),
+      },
+    );
+  }
+
+  return (
+    <Section
+      title="Archiving"
+      hint="Finished work that sits untouched is archived: taken off the board and the list so the done column stays short. It is kept in All items, and comes back if it is reopened, commented on or restored. Changes to the setting apply from now on: shortening it archives what has already sat long enough, and turning it off leaves the archive as it is."
+    >
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={!never}
+            disabled={disabled}
+            onChange={(e) => save(e.target.checked ? DEFAULT_ARCHIVE_DAYS[project.kind] : null)}
+          />
+          Archive finished work after
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={MAX_ARCHIVE_DAYS}
+          value={days}
+          disabled={disabled || never}
+          onChange={(e) => setDays(e.target.value)}
+          onBlur={() => {
+            if (valid && parsed !== saved) save(parsed);
+            else if (!valid) setDays(saved === null ? '' : String(saved));
+          }}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          className={`${FIELD_BASE} w-20 tabular-nums`}
+          aria-label="Days untouched before finished work is archived"
+        />
+        <span>{parsed === 1 ? 'day' : 'days'} untouched</span>
       </div>
     </Section>
   );

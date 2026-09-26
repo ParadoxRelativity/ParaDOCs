@@ -1,9 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
 import { createFolderSchema, createWorkspaceSchema, updateFolderSchema, updateWorkspaceSchema } from '@paradocs/shared';
 import {
+  CONTENTS_PAGE_SIZE,
+  MAX_CONTENTS_PAGE_SIZE,
   WORKSPACE_APPS,
   WORKSPACE_PERMISSIONS,
   type AccessMode,
+  type ContentsPage,
   type DocumentSummary,
   type FolderApp,
   type FolderNode,
@@ -11,10 +15,12 @@ import {
   type SpreadsheetSummary,
 } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
-import { badRequest, forbidden, parse } from '../lib/http.js';
+import { badRequest, forbidden, notFound, parse } from '../lib/http.js';
+import { decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 import { slugify } from '../lib/auth.js';
 import { documentSummaryColumns, spreadsheetSummaryColumns } from '../lib/documentColumns.js';
 import {
+  UUID,
   assertFolderAccess,
   assertMoveKeepsAccess,
   documentLevelSql,
@@ -51,21 +57,17 @@ interface FolderRow {
 }
 
 /**
- * Builds a folder tree for the reader and files `items` into it.
- *
- * Only what the reader may see is included. The nearest setting wins, so an
- * item can be open to someone inside a folder that is not; its folders are
- * kept as the path to it, marked `none`, and a folder with nothing in it they
- * may see is left out altogether.
+ * Folders nested as a tree, each with how many of its contents the reader may
+ * see. A folder the reader has no access to of their own is kept only when
+ * something beneath it is visible to them, as the way to it.
  */
-function buildTree<Item extends { folderId: string | null }, Node extends { permission: string; children: Node[] }>(
+function buildTree<Node extends { id: string; permission: string; children: Node[] }>(
   folders: FolderRow[],
-  items: Item[],
-  makeNode: (folder: FolderRow) => Node,
-  contents: (node: Node) => Item[],
+  counts: Map<string, number>,
+  makeNode: (folder: FolderRow, count: number) => Node,
 ): Node[] {
   const nodes = new Map<string, Node>();
-  for (const f of folders) nodes.set(f.id, makeNode(f));
+  for (const f of folders) nodes.set(f.id, makeNode(f, counts.get(f.id) ?? 0));
 
   const roots: Node[] = [];
   for (const f of folders) {
@@ -75,14 +77,9 @@ function buildTree<Item extends { folderId: string | null }, Node extends { perm
     else roots.push(node);
   }
 
-  for (const item of items) {
-    const node = item.folderId ? nodes.get(item.folderId) : undefined;
-    if (node) contents(node).push(item);
-  }
-
   const visible = (node: Node): boolean => {
     node.children = node.children.filter(visible);
-    return node.permission !== 'none' || node.children.length > 0 || contents(node).length > 0;
+    return node.permission !== 'none' || node.children.length > 0 || (counts.get(node.id) ?? 0) > 0;
   };
   return roots.filter(visible);
 }
@@ -120,6 +117,38 @@ const SUBTREE = `WITH RECURSIVE sub AS (
   UNION ALL
   SELECT f.id FROM folders f JOIN sub ON f.parent_id = sub.id
 )`;
+
+const contentsPageSchema = z.object({
+  cursor: z.string().max(2000).optional(),
+  limit: z.coerce.number().int().min(1).max(MAX_CONTENTS_PAGE_SIZE).default(CONTENTS_PAGE_SIZE),
+});
+
+/** Which workspace a folder of this app is in, or a 404 for one that is not there. */
+async function folderOf(id: string, app: FolderApp): Promise<{ workspaceId: string }> {
+  if (!UUID.test(id)) throw notFound('Folder not found');
+  const { rows } = await query<{ workspaceId: string }>(
+    'SELECT workspace_id AS "workspaceId" FROM folders WHERE id = $1 AND app = $2',
+    [id, app],
+  );
+  if (!rows[0]) throw notFound('Folder not found');
+  return rows[0];
+}
+
+/**
+ * A page from rows fetched one past the page size, which is how a page tells
+ * whether there is another; the cursor is the last row's sort value and id.
+ */
+function contentsPage<T extends { id: string; sortValue: string }>(
+  rows: T[],
+  limit: number,
+): ContentsPage<Omit<T, 'sortValue'>> {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map(({ sortValue: _, ...item }) => item),
+    nextCursor: rows.length > limit && last ? encodeCursor(last.sortValue, last.id) : null,
+  };
+}
 
 export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
@@ -263,22 +292,28 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
    * documents only, and everything else lives in the All Documents view.
    * Only what the reader may see is included; see buildTree.
    */
+  /**
+   * The Docs app's folders, each with how many documents the reader may see
+   * in it. The documents are not sent: a folder's are read a page at a time
+   * from `/folders/:id/documents` when it is opened, so the sidebar costs the
+   * same however many documents the workspace holds.
+   */
   app.get<{ Params: { id: string } }>('/workspaces/:id/tree', async (req) => {
     const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'docs.view', 'docs');
 
-    const [{ rows: folders }, { rows: documents }] = await Promise.all([
+    const [{ rows: folders }, { rows: counted }] = await Promise.all([
       query<FolderRow>(
         `SELECT id, workspace_id, app, parent_id, name, icon, position, created_at, access,
                 ${folderLevelSql('$2', '$3', 'id')} AS level
            FROM folders WHERE workspace_id = $1 AND app = 'docs' ORDER BY position, name`,
         [req.params.id, req.user!.id, roleId],
       ),
-      query<DocumentSummary>(
-        `SELECT ${documentSummaryColumns('$2', '$3')}
+      query<{ folderId: string; count: number }>(
+        `SELECT d.folder_id AS "folderId", count(*)::int AS count
            FROM documents d
           WHERE d.workspace_id = $1 AND d.archived_at IS NULL AND d.folder_id IS NOT NULL
             AND ${documentLevelSql('$2', '$3')} > 0
-          ORDER BY d.title`,
+          GROUP BY d.folder_id`,
         [req.params.id, req.user!.id, roleId],
       ),
     ]);
@@ -286,52 +321,103 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     return {
       folders: buildTree(
         folders,
-        documents,
-        (f): FolderNode => ({ ...folderNodeBase(f), children: [], documents: [] }),
-        (node) => node.documents,
+        new Map(counted.map((row) => [row.folderId, row.count])),
+        (f, count): FolderNode => ({ ...folderNodeBase(f), children: [], documentCount: count }),
       ),
     };
   });
 
   /**
-   * The Sheets app's tree: its folders with the spreadsheets filed in each,
-   * and beside them the spreadsheets in no folder. Unlike documents there is
-   * no other view of a workspace's spreadsheets, so the unfiled ones are part
-   * of the answer rather than left to a listing of their own.
+   * The Sheets app's folders, each with how many spreadsheets the reader may
+   * see in it, and how many are in no folder. The spreadsheets themselves are
+   * read a page at a time: a folder's from `/folders/:id/spreadsheets`, and
+   * the unfiled from `/workspaces/:id/spreadsheets?unfiled=true`.
    */
   app.get<{ Params: { id: string } }>('/workspaces/:id/sheet-tree', async (req) => {
     const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'sheets.view', 'sheets');
 
-    const [{ rows: folders }, { rows: spreadsheets }] = await Promise.all([
+    const [{ rows: folders }, { rows: counted }] = await Promise.all([
       query<FolderRow>(
         `SELECT id, workspace_id, app, parent_id, name, icon, position, created_at, access,
                 ${folderLevelSql('$2', '$3', 'id')} AS level
            FROM folders WHERE workspace_id = $1 AND app = 'sheets' ORDER BY position, name`,
         [req.params.id, req.user!.id, roleId],
       ),
-      query<SpreadsheetSummary>(
-        `SELECT ${spreadsheetSummaryColumns('$2', '$3')}
+      query<{ folderId: string | null; count: number }>(
+        `SELECT s.folder_id AS "folderId", count(*)::int AS count
            FROM spreadsheets s
           WHERE s.workspace_id = $1 AND s.archived_at IS NULL
             AND ${spreadsheetLevelSql('$2', '$3')} > 0
-          ORDER BY s.folder_id IS NULL, lower(s.title), s.updated_at DESC`,
+          GROUP BY s.folder_id`,
         [req.params.id, req.user!.id, roleId],
       ),
     ]);
 
+    const counts = new Map<string, number>();
+    let unfiledCount = 0;
+    for (const row of counted) {
+      if (row.folderId) counts.set(row.folderId, row.count);
+      else unfiledCount = row.count;
+    }
     return {
       folders: buildTree(
         folders,
-        spreadsheets,
-        (f): SheetFolderNode => ({ ...folderNodeBase(f), children: [], spreadsheets: [] }),
-        (node) => node.spreadsheets,
+        counts,
+        (f, count): SheetFolderNode => ({ ...folderNodeBase(f), children: [], spreadsheetCount: count }),
       ),
-      // Unfiled, most recently touched first, as the flat list always showed them.
-      unfiled: spreadsheets
-        .filter((sheet) => sheet.folderId === null)
-        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)),
+      unfiledCount,
     };
   });
+
+  /**
+   * The documents filed in a folder that the reader may see, by title, a page
+   * at a time. A folder shown only as the way to something inside it lists
+   * just what inside it is theirs to see.
+   */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    '/folders/:id/documents',
+    async (req): Promise<ContentsPage<DocumentSummary>> => {
+      const folder = await folderOf(req.params.id, 'docs');
+      const { roleId } = await assertWorkspaceAccess(req, folder.workspaceId, 'docs.view', 'docs');
+      const page = parse(contentsPageSchema, req.query ?? {});
+      const limit = page.limit ?? CONTENTS_PAGE_SIZE;
+      const after = page.cursor ? decodeCursor(page.cursor, () => true, isUuid) : null;
+      const { rows } = await query<DocumentSummary & { sortValue: string }>(
+        `SELECT ${documentSummaryColumns('$2', '$3')}, d.title AS "sortValue"
+           FROM documents d
+          WHERE d.folder_id = $1 AND d.archived_at IS NULL
+            AND ${documentLevelSql('$2', '$3')} > 0
+            AND ($4::text IS NULL OR (d.title, d.id) > ($4::text, $5::uuid))
+          ORDER BY d.title, d.id
+          LIMIT $6`,
+        [req.params.id, req.user!.id, roleId, after?.[0] ?? null, after?.[1] ?? null, limit + 1],
+      );
+      return contentsPage(rows, limit);
+    },
+  );
+
+  /** The same, for the spreadsheets filed in a Sheets folder. */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    '/folders/:id/spreadsheets',
+    async (req): Promise<ContentsPage<SpreadsheetSummary>> => {
+      const folder = await folderOf(req.params.id, 'sheets');
+      const { roleId } = await assertWorkspaceAccess(req, folder.workspaceId, 'sheets.view', 'sheets');
+      const page = parse(contentsPageSchema, req.query ?? {});
+      const limit = page.limit ?? CONTENTS_PAGE_SIZE;
+      const after = page.cursor ? decodeCursor(page.cursor, () => true, isUuid) : null;
+      const { rows } = await query<SpreadsheetSummary & { sortValue: string }>(
+        `SELECT ${spreadsheetSummaryColumns('$2', '$3')}, lower(s.title) AS "sortValue"
+           FROM spreadsheets s
+          WHERE s.folder_id = $1 AND s.archived_at IS NULL
+            AND ${spreadsheetLevelSql('$2', '$3')} > 0
+            AND ($4::text IS NULL OR (lower(s.title), s.id) > ($4::text, $5::uuid))
+          ORDER BY lower(s.title), s.id
+          LIMIT $6`,
+        [req.params.id, req.user!.id, roleId, after?.[0] ?? null, after?.[1] ?? null, limit + 1],
+      );
+      return contentsPage(rows, limit);
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/folders', async (req, reply) => {
     const input = parse(createFolderSchema, req.body);
@@ -438,15 +524,18 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       }
 
       if (deleteContents) {
-        await transaction(async (client) => {
-          await client.query(`${SUBTREE} DELETE FROM ${items.table} WHERE folder_id IN (SELECT id FROM sub)`, [
-            req.params.id,
-          ]);
+        const deleted = await transaction(async (client) => {
+          const { rows } = await client.query<{ id: string }>(
+            `${SUBTREE} DELETE FROM ${items.table} WHERE folder_id IN (SELECT id FROM sub) RETURNING id`,
+            [req.params.id],
+          );
           await client.query('DELETE FROM folders WHERE id = $1', [req.params.id]);
+          return rows.map((row) => row.id);
         });
         treeChanged(workspaceId, folderApp);
-        reply.status(204);
-        return;
+        // Named, so whoever has one of them open can be moved off it: the
+        // sidebar no longer holds every document to work that out itself.
+        return { deleted };
       }
 
       await transaction(async (client) => {

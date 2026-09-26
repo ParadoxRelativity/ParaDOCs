@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  type ArchivedTotal,
   UNKNOWN_ITEM_TYPE,
   epicProgress,
   type ItemTypeLook,
@@ -77,13 +78,16 @@ export function TypeIcon({ type, className }: { type: ItemTypeLook | null | unde
 export function EpicProgressBar({
   project,
   items,
+  archived,
   className,
 }: {
   project: Pick<Project, 'statuses'>;
   items: Pick<WorkItemSummary, 'statusId' | 'estimate'>[];
+  /** What under the epic has been archived, which is done but not among `items`. */
+  archived?: ArchivedTotal;
   className?: string;
 }) {
-  const progress = epicProgress(project, items);
+  const progress = epicProgress(project, items, archived);
   const share = progress.total === 0 ? 0 : progress.done / progress.total;
   const percent = Math.round(share * 100);
   return (

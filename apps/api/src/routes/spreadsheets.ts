@@ -1,6 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { createSpreadsheetSchema, updateSpreadsheetSchema } from '@paradocs/shared';
+import {
+  CONTENTS_PAGE_SIZE,
+  MAX_CONTENTS_PAGE_SIZE,
+  createSpreadsheetSchema,
+  updateSpreadsheetSchema,
+  type ContentsPage,
+  type SpreadsheetSummary,
+} from '@paradocs/shared';
+import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 import { query } from '../db/pool.js';
 import { notFound, parse } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
@@ -68,26 +76,56 @@ async function fetchSheet(id: string, userId: string) {
   return rows[0];
 }
 
+const spreadsheetListSchema = z.object({
+  archived: z.enum(['true', 'false']).optional(),
+  unfiled: z.enum(['true', 'false']).optional(),
+  cursor: z.string().max(500).optional(),
+  limit: z.coerce.number().int().min(1).max(MAX_CONTENTS_PAGE_SIZE).default(CONTENTS_PAGE_SIZE),
+});
+
 export const spreadsheetRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
-  app.get<{ Params: { id: string }; Querystring: { archived?: string } }>(
+  /**
+   * A workspace's spreadsheets the reader may see, most recently touched first,
+   * a page at a time: the archived ones with `archived=true`, and only those in
+   * no folder with `unfiled=true`, which is what the Sheets sidebar lists below
+   * its folders.
+   */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
     '/workspaces/:id/spreadsheets',
-    async (req) => {
+    async (req): Promise<ContentsPage<SpreadsheetSummary>> => {
       const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'sheets.view', 'sheets');
-      const archived = req.query.archived === 'true';
-      // Only what the reader may see is listed.
-      const { rows } = await query(
-        `SELECT ${spreadsheetSummaryColumns('$3', '$4')}
+      const input = parse(spreadsheetListSchema, req.query ?? {});
+      const limit = input.limit ?? CONTENTS_PAGE_SIZE;
+      const after = input.cursor ? decodeCursor(input.cursor, (v) => CURSOR_TEXT.timestamp.test(v), isUuid) : null;
+      const { rows } = await query<SpreadsheetSummary & { sortValue: string }>(
+        `SELECT ${spreadsheetSummaryColumns('$3', '$4')}, s.updated_at::text AS "sortValue"
            FROM spreadsheets s
           WHERE s.workspace_id = $1
             AND (s.archived_at IS NOT NULL) = $2
+            AND ($5::boolean IS NOT TRUE OR s.folder_id IS NULL)
             AND ${spreadsheetLevelSql('$3', '$4')} > 0
-          ORDER BY s.updated_at DESC
-          LIMIT 500`,
-        [req.params.id, archived, req.user!.id, roleId],
+            AND ($6::timestamptz IS NULL OR (s.updated_at, s.id) < ($6::timestamptz, $7::uuid))
+          ORDER BY s.updated_at DESC, s.id DESC
+          LIMIT $8`,
+        [
+          req.params.id,
+          input.archived === 'true',
+          req.user!.id,
+          roleId,
+          input.unfiled === 'true',
+          after?.[0] ?? null,
+          after?.[1] ?? null,
+          limit + 1,
+        ],
       );
-      return rows;
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      return {
+        items: page.map(({ sortValue: _, ...sheet }) => sheet),
+        nextCursor: rows.length > limit && last ? encodeCursor(last.sortValue, last.id) : null,
+      };
     },
   );
 

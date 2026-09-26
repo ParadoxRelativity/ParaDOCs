@@ -17,6 +17,7 @@ function defaults(): ServerSettings {
     allowRegistration: config.allowRegistration,
     messageRetentionMaxDays: null,
     passwordSignIn: true,
+    intakeWebhooks: false,
   };
 }
 

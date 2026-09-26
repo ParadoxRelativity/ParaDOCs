@@ -641,6 +641,10 @@ Step-by-step setup for Google, Entra ID, Keycloak, Authentik, Authelia, Okta,
 Auth0, GitLab and Zitadel is in
 [docs/single-sign-on-providers.md](docs/single-sign-on-providers.md).
 
+Queues can also take in work from web forms and other systems through an intake
+webhook. It is off until turned on under Server settings; see
+[docs/intake-webhook.md](docs/intake-webhook.md).
+
 Signing in uses the authorization code flow with PKCE, state and nonce. The
 account it signs in to is, in order: the one already linked to that provider
 subject; an existing account with the same email, **only** when the provider

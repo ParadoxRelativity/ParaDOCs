@@ -433,6 +433,8 @@ export default forwardRef<SheetGridHandle, Props>(function SheetGrid(
                     key={cellKey(row, column)}
                     className={cx(
                       'absolute flex items-center overflow-hidden border-b border-r border-[var(--color-line)] px-1.5 text-xs',
+                      // Dragging selects cells, not the text in them; the editor keeps its own selection.
+                      !beingEdited && 'select-none',
                       inRange && !isFocus && 'bg-[var(--color-accent-soft)]',
                       isFocus && 'z-10 outline outline-2 -outline-offset-1 outline-[var(--color-accent)]',
                       isError(value) && 'text-red-500',

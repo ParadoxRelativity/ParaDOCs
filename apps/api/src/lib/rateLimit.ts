@@ -112,3 +112,28 @@ export const ssoLimits = {
     ssoByAddress.hit(address);
   },
 };
+
+/** Work sent in through one intake token. */
+const intakeByToken = new RateLimiter(60, MINUTE);
+/** Intake requests whose token was wrong, from one address. */
+const intakeFailuresByAddress = new RateLimiter(20, 15 * MINUTE);
+
+/**
+ * The intake webhook. A token is meant for a form or another system, so its
+ * limit is generous for that and stops one flooding its queue; wrong tokens
+ * from one address are stopped before they can be guessed at.
+ */
+export const intakeLimits = {
+  checkAddress(address: string): void {
+    const wait = intakeFailuresByAddress.retryAfter(address);
+    if (wait) throw tooMany(wait, 'Too many requests with a wrong token. Try again later.');
+  },
+  failed(address: string): void {
+    intakeFailuresByAddress.hit(address);
+  },
+  checkToken(tokenId: string): void {
+    const wait = intakeByToken.retryAfter(tokenId);
+    if (wait) throw tooMany(wait, 'Too much has been sent in with this token. Wait a minute and try again.');
+    intakeByToken.hit(tokenId);
+  },
+};

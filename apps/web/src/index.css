@@ -13,6 +13,10 @@
   --color-muted: #71717a;
   --color-accent: #6366f1;
   --color-accent-soft: #eef2ff;
+  /* Chart series, in fixed order: checked for colour-blind separation and
+     contrast against the canvas in each theme. */
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
 }
 
 .dark {
@@ -24,6 +28,8 @@
   --color-muted: #8f8f9c;
   --color-accent: #818cf8;
   --color-accent-soft: #1e1b3a;
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
 }
 
 html,

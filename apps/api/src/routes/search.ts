@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { searchQuerySchema } from '@paradocs/shared';
+import { linkTargetsQuerySchema, searchQuerySchema, type LinkTargets } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { parse } from '../lib/http.js';
 import { documentLevelSql, projectLevelSql, spreadsheetLevelSql } from '../lib/access.js';
@@ -119,6 +119,57 @@ async function searchWorkItems(
 
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
+
+  /**
+   * Documents and spreadsheets for a picker, by title: what starts with what
+   * was typed first, then what contains it, most recently touched first within
+   * each. Nothing typed gives the most recently touched. Kept to titles, and
+   * to what the reader may open in apps the workspace has on, so it is quick
+   * enough to ask on every pause in typing, whatever the workspace holds.
+   */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    '/workspaces/:id/link-targets',
+    async (req): Promise<LinkTargets> => {
+      const { roleId } = await assertWorkspaceAccess(req, req.params.id);
+      const input = parse(linkTargetsQuerySchema, req.query ?? {});
+      const kinds = new Set((input.kinds ?? '').split(','));
+      const limit = input.limit ?? 20;
+      const [docsOn, sheetsOn] = await Promise.all([
+        appEnabled(req.params.id, 'docs'),
+        appEnabled(req.params.id, 'sheets'),
+      ]);
+      // Typed text is matched literally, not as a pattern.
+      const q = input.q ? input.q.replace(/[\\%_]/g, (c) => `\\${c}`) : null;
+      const params = [req.params.id, req.user!.id, roleId, q, limit];
+      const match = (title: string) => `($4::text IS NULL OR ${title} ILIKE '%' || $4 || '%')`;
+      const order = (title: string, touched: string) =>
+        `($4::text IS NOT NULL AND ${title} ILIKE $4 || '%') DESC, ${touched} DESC`;
+
+      const [documents, spreadsheets] = await Promise.all([
+        docsOn && kinds.has('documents')
+          ? query<LinkTargets['documents'][number]>(
+              `SELECT d.id, d.title, d.icon, d.mode FROM documents d
+                WHERE d.workspace_id = $1 AND d.archived_at IS NULL AND ${match('d.title')}
+                  AND ${documentLevelSql('$2', '$3')} > 0
+                ORDER BY ${order('d.title', 'd.updated_at')}
+                LIMIT $5`,
+              params,
+            )
+          : { rows: [] },
+        sheetsOn && kinds.has('spreadsheets')
+          ? query<LinkTargets['spreadsheets'][number]>(
+              `SELECT s.id, s.title, s.icon FROM spreadsheets s
+                WHERE s.workspace_id = $1 AND s.archived_at IS NULL AND ${match('s.title')}
+                  AND ${spreadsheetLevelSql('$2', '$3')} > 0
+                ORDER BY ${order('s.title', 's.updated_at')}
+                LIMIT $5`,
+              params,
+            )
+          : { rows: [] },
+      ]);
+      return { documents: documents.rows, spreadsheets: spreadsheets.rows };
+    },
+  );
 
   app.get<{ Params: { id: string }; Querystring: Record<string, string | string[]> }>(
     '/workspaces/:id/search',

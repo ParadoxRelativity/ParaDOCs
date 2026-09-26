@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
   itemTypeOf,
   type Project,
+  type WorkItemSort,
   type WorkItemSummary,
   type WorkspaceMember,
 } from '@paradocs/shared';
@@ -12,12 +13,38 @@ import Icon from '../Icon';
 import { useToast } from '../Toast';
 import { BlockedBadge, PeopleStack, PriorityIcon, TypeIcon, formatDue, isOverdue } from './projectUi';
 
-type SortKey = 'key' | 'title' | 'status' | 'priority' | 'due' | 'estimate' | 'updated' | 'created';
+export interface TableSort {
+  key: WorkItemSort;
+  descending: boolean;
+}
+
+/** A queue is worked through oldest first, so that is how it starts; a project starts by status. */
+export function defaultSort(project: Pick<Project, 'kind'>): TableSort {
+  return project.kind === 'queue' ? { key: 'created', descending: false } : { key: 'status', descending: false };
+}
 
 /**
- * Work items as rows. A queue is worked through oldest first, so that is how
- * it starts; a project starts by status. Any column header re-sorts, and the
- * status can be changed without opening the item.
+ * Archived work shown under the current work, a page at a time. It is ordered
+ * by the server by the same column as the rest, and the next page is asked for
+ * as the reader nears the end of the list.
+ */
+export interface ArchiveRows {
+  items: WorkItemSummary[];
+  /** How many archived items match, loaded or not. Null until the first page is in. */
+  total: number | null;
+  loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
+  failed: boolean;
+  onLoadMore: () => void;
+}
+
+/**
+ * Work items as rows. Any column header re-sorts, and the status can be
+ * changed without opening the item.
+ *
+ * All items passes `archive` to list archived work beneath the rest, and
+ * controls the order itself, since the server orders the archive.
  */
 export default function ProjectTable({
   project,
@@ -26,6 +53,10 @@ export default function ProjectTable({
   canEdit,
   activeItemId,
   onOpenItem,
+  sort: controlledSort,
+  onSort,
+  showEverything = false,
+  archive,
 }: {
   project: Project;
   items: WorkItemSummary[];
@@ -33,15 +64,20 @@ export default function ProjectTable({
   canEdit: boolean;
   activeItemId: string | null;
   onOpenItem: (itemId: string) => void;
+  sort?: TableSort;
+  onSort?: (sort: TableSort) => void;
+  /** Start with done and backlog work showing, as All items does. */
+  showEverything?: boolean;
+  archive?: ArchiveRows;
 }) {
   const update = useUpdateWorkItem(project.id);
   const toast = useToast();
-  const [sort, setSort] = useState<{ key: SortKey; descending: boolean }>(
-    project.kind === 'queue' ? { key: 'created', descending: false } : { key: 'status', descending: false },
-  );
-  const [showDone, setShowDone] = useState(project.kind !== 'queue');
+  const [ownSort, setOwnSort] = useState<TableSort>(() => defaultSort(project));
+  const sort = controlledSort ?? ownSort;
+  const setSort = onSort ?? setOwnSort;
+  const [showDone, setShowDone] = useState(showEverything || project.kind !== 'queue');
   // Unplanned work stays out of the way unless asked for.
-  const [showBacklog, setShowBacklog] = useState(false);
+  const [showBacklog, setShowBacklog] = useState(showEverything);
 
   const statusIndex = useMemo(() => new Map(project.statuses.map((s, index) => [s.id, index])), [project.statuses]);
   const statusOf = (item: WorkItemSummary) => project.statuses[statusIndex.get(item.statusId) ?? 0];
@@ -54,7 +90,7 @@ export default function ProjectTable({
       const category = statusOf(item)?.category;
       return (showDone || category !== 'done') && (showBacklog || category !== 'backlog');
     });
-    const compare: Record<SortKey, (a: WorkItemSummary, b: WorkItemSummary) => number> = {
+    const compare: Record<WorkItemSort, (a: WorkItemSummary, b: WorkItemSummary) => number> = {
       key: (a, b) => a.number - b.number,
       title: (a, b) => a.title.localeCompare(b.title),
       status: (a, b) => (statusIndex.get(a.statusId) ?? 0) - (statusIndex.get(b.statusId) ?? 0) || a.position - b.position,
@@ -71,7 +107,7 @@ export default function ProjectTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, sort, showDone, showBacklog, statusIndex]);
 
-  function header(key: SortKey, label: string, className?: string) {
+  function header(key: WorkItemSort, label: string, className?: string) {
     const active = sort.key === key;
     return (
       <th className={cx('px-2 py-1.5 font-medium', className)}>
@@ -85,6 +121,84 @@ export default function ProjectTable({
       </th>
     );
   }
+
+  function row(item: WorkItemSummary) {
+    const status = statusOf(item);
+    const done = status?.category === 'done';
+    return (
+      <tr
+        key={item.id}
+        onClick={() => onOpenItem(item.id)}
+        className={cx(
+          'cursor-pointer border-b border-[var(--color-line)]',
+          item.id === activeItemId ? 'bg-[var(--color-accent-soft)]' : 'hover:bg-[var(--color-surface)]',
+        )}
+      >
+        <td className="whitespace-nowrap py-1.5 pl-4 pr-2 text-xs text-[var(--color-muted)]">
+          <span className="inline-flex items-center gap-1.5">
+            <TypeIcon type={itemTypeOf(project, item.typeId)} />
+            {item.key}
+            {!done && <BlockedBadge count={item.blockedBy} />}
+            {item.archivedAt && (
+              <span title={`Archived ${formatRelative(item.archivedAt)}`} className="inline-flex items-center">
+                <Icon name="archive" className="text-[10px]" />
+                <span className="sr-only">Archived</span>
+              </span>
+            )}
+          </span>
+        </td>
+        <td className={cx('max-w-0 truncate px-2 py-1.5', done && 'text-[var(--color-muted)] line-through')}>
+          {item.title}
+          {item.commentCount > 0 && (
+            <span className="ml-2 text-xs text-[var(--color-muted)] no-underline">
+              <Icon name="chat-left-text" className="text-[10px]" /> {item.commentCount}
+            </span>
+          )}
+        </td>
+        <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
+          <select
+            value={item.statusId}
+            disabled={!canEdit}
+            onChange={(e) =>
+              update.mutate(
+                { id: item.id, statusId: e.target.value },
+                { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the status', 'error') },
+              )
+            }
+            className="w-full cursor-pointer rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-[var(--color-line)] disabled:cursor-default"
+            style={{ color: status?.color }}
+            aria-label={`Status of ${item.key}`}
+          >
+            {project.statuses.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </td>
+        <td className="px-2 py-1.5">
+          <PriorityIcon priority={item.priority} />
+        </td>
+        <td className="px-2 py-1.5">
+          <PeopleStack
+            userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []}
+            names={primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : []}
+            members={memberMap}
+          />
+        </td>
+        <td className={cx('whitespace-nowrap px-2 py-1.5 text-xs', isOverdue(item.dueDate, done) ? 'text-red-500' : 'text-[var(--color-muted)]')}>
+          {item.dueDate ? formatDue(item.dueDate) : ''}
+        </td>
+        <td className="px-2 py-1.5 text-xs tabular-nums text-[var(--color-muted)]">{item.estimate ?? ''}</td>
+        <td className="whitespace-nowrap py-1.5 pl-2 pr-4 text-xs text-[var(--color-muted)]">
+          {formatRelative(project.kind === 'queue' ? item.createdAt : item.updatedAt)}
+        </td>
+      </tr>
+    );
+  }
+
+  const archiveEmpty = archive && !archive.loading && archive.items.length === 0;
+  const nothing = rows.length === 0 && (!archive || archiveEmpty);
 
   return (
     <div className="scroll-thin h-full overflow-auto">
@@ -102,93 +216,84 @@ export default function ProjectTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((item) => {
-            const status = statusOf(item);
-            const done = status?.category === 'done';
-            return (
-              <tr
-                key={item.id}
-                onClick={() => onOpenItem(item.id)}
-                className={cx(
-                  'cursor-pointer border-b border-[var(--color-line)]',
-                  item.id === activeItemId ? 'bg-[var(--color-accent-soft)]' : 'hover:bg-[var(--color-surface)]',
-                )}
-              >
-                <td className="whitespace-nowrap py-1.5 pl-4 pr-2 text-xs text-[var(--color-muted)]">
-                  <span className="inline-flex items-center gap-1.5">
-                    <TypeIcon type={itemTypeOf(project, item.typeId)} />
-                    {item.key}
-                    {!done && <BlockedBadge count={item.blockedBy} />}
-                  </span>
-                </td>
-                <td className={cx('max-w-0 truncate px-2 py-1.5', done && 'text-[var(--color-muted)] line-through')}>
-                  {item.title}
-                  {item.commentCount > 0 && (
-                    <span className="ml-2 text-xs text-[var(--color-muted)] no-underline">
-                      <Icon name="chat-left-text" className="text-[10px]" /> {item.commentCount}
-                    </span>
-                  )}
-                </td>
-                <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
-                  <select
-                    value={item.statusId}
-                    disabled={!canEdit}
-                    onChange={(e) =>
-                      update.mutate(
-                        { id: item.id, statusId: e.target.value },
-                        { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the status', 'error') },
-                      )
-                    }
-                    className="w-full cursor-pointer rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-[var(--color-line)] disabled:cursor-default"
-                    style={{ color: status?.color }}
-                    aria-label={`Status of ${item.key}`}
-                  >
-                    {project.statuses.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="px-2 py-1.5">
-                  <PriorityIcon priority={item.priority} />
-                </td>
-                <td className="px-2 py-1.5">
-                  <PeopleStack
-                    userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []}
-                    names={primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : []}
-                    members={memberMap}
-                  />
-                </td>
-                <td className={cx('whitespace-nowrap px-2 py-1.5 text-xs', isOverdue(item.dueDate, done) ? 'text-red-500' : 'text-[var(--color-muted)]')}>
-                  {item.dueDate ? formatDue(item.dueDate) : ''}
-                </td>
-                <td className="px-2 py-1.5 text-xs tabular-nums text-[var(--color-muted)]">{item.estimate ?? ''}</td>
-                <td className="whitespace-nowrap py-1.5 pl-2 pr-4 text-xs text-[var(--color-muted)]">
-                  {formatRelative(project.kind === 'queue' ? item.createdAt : item.updatedAt)}
+          {rows.map(row)}
+          {archive && !archiveEmpty && (
+            <>
+              <tr>
+                <td
+                  colSpan={8}
+                  className="bg-[var(--color-surface)] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]"
+                >
+                  <Icon name="archive" /> Archived{' '}
+                  {archive.total !== null && <span className="font-normal normal-case">{archive.total.toLocaleString()}</span>}
                 </td>
               </tr>
-            );
-          })}
+              {archive.items.map(row)}
+              <ArchiveFooter archive={archive} />
+            </>
+          )}
         </tbody>
       </table>
-      {rows.length === 0 && (
+      {nothing && (
         <p className="px-4 py-10 text-center text-sm text-[var(--color-muted)]">
-          {items.length === 0 ? 'No work items yet.' : 'Nothing matches.'}
+          {items.length === 0 && !archive ? 'No work items yet.' : 'Nothing matches.'}
         </p>
       )}
-      <div className="flex gap-4 px-4 py-3">
-        {backlogCount > 0 && (
-          <button onClick={() => setShowBacklog(!showBacklog)} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]">
-            {showBacklog ? 'Hide' : 'Show'} {backlogCount} in backlog
-          </button>
-        )}
-        {doneCount > 0 && (
-          <button onClick={() => setShowDone(!showDone)} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]">
-            {showDone ? 'Hide' : 'Show'} {doneCount} done
-          </button>
-        )}
-      </div>
+      {(backlogCount > 0 || doneCount > 0) && (
+        <div className="flex gap-4 px-4 py-3">
+          {backlogCount > 0 && (
+            <button onClick={() => setShowBacklog(!showBacklog)} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+              {showBacklog ? 'Hide' : 'Show'} {backlogCount} in backlog
+            </button>
+          )}
+          {doneCount > 0 && (
+            <button onClick={() => setShowDone(!showDone)} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+              {showDone ? 'Hide' : 'Show'} {doneCount} done
+            </button>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * The end of the archived rows: the next page is fetched as this comes into
+ * view, with a button for doing it by hand, and what went wrong if it failed.
+ */
+function ArchiveFooter({ archive }: { archive: ArchiveRows }) {
+  const ref = useRef<HTMLTableRowElement>(null);
+  const { hasMore, loadingMore, failed, onLoadMore } = archive;
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !hasMore || loadingMore || failed) return;
+    const observer = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && onLoadMore(), {
+      // A screenful early, so scrolling rarely has to wait.
+      rootMargin: '0px 0px 600px 0px',
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, failed, onLoadMore]);
+
+  if (!archive.loading && !hasMore && !failed) return null;
+  return (
+    <tr ref={ref}>
+      <td colSpan={8} className="px-4 py-3 text-center text-xs text-[var(--color-muted)]">
+        {archive.loading || loadingMore ? (
+          <span className="inline-flex items-center gap-1.5">
+            <Icon name="hourglass-split" /> Loading archived work…
+          </span>
+        ) : failed ? (
+          <button onClick={onLoadMore} className="hover:text-[var(--color-ink)]">
+            <Icon name="exclamation-triangle" /> Could not load more. Try again
+          </button>
+        ) : (
+          <button onClick={onLoadMore} className="hover:text-[var(--color-ink)]">
+            Load more archived work
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }

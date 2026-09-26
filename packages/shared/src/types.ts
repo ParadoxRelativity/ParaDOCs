@@ -176,14 +176,32 @@ export interface FolderNode extends Folder {
    */
   permission: Permission;
   children: FolderNode[];
-  documents: DocumentSummary[];
+  /**
+   * How many documents filed directly in it the signed-in person may see.
+   * The documents themselves are read a page at a time when it is opened,
+   * since a folder can hold more than the sidebar should load up front.
+   */
+  documentCount: number;
 }
 
-/** A folder in the spreadsheets tree, with the spreadsheets filed in it. */
-export interface SheetFolderNode extends Omit<FolderNode, 'children' | 'documents'> {
+/** A folder in the spreadsheets tree, with how many spreadsheets are filed in it. */
+export interface SheetFolderNode extends Omit<FolderNode, 'children' | 'documentCount'> {
   children: SheetFolderNode[];
-  spreadsheets: SpreadsheetSummary[];
+  spreadsheetCount: number;
 }
+
+/**
+ * One page of what is filed in a folder, or of the spreadsheets filed in
+ * none. `nextCursor` asks for the page after it; null on the last.
+ */
+export interface ContentsPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
+/** How many of a folder's contents a page holds unless asked otherwise, and the most it can. */
+export const CONTENTS_PAGE_SIZE = 100;
+export const MAX_CONTENTS_PAGE_SIZE = 500;
 
 export interface Tag {
   id: string;

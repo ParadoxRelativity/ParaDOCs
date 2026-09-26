@@ -87,12 +87,18 @@ function DaysLeft({ endDate }: { endDate: string | null }) {
   );
 }
 
-/** How much of a sprint's work is done, by count and by estimate where there is one. */
-function Progress({ project, items }: { project: Project; items: WorkItemSummary[] }) {
-  const done = items.filter((item) => isDone(project, item));
-  const total = estimateOf(items);
-  const finished = estimateOf(done);
-  const share = total > 0 ? finished / total : items.length > 0 ? done.length / items.length : 0;
+/**
+ * How much of a sprint's work is done, by count and by estimate where there is
+ * one. Work in it that has been archived is done, and counted from the
+ * project's totals since it is not loaded.
+ */
+function Progress({ project, sprint, items }: { project: Project; sprint: ProjectSprint; items: WorkItemSummary[] }) {
+  const archived = project.archive.sprints[sprint.id];
+  const done = items.filter((item) => isDone(project, item)).length + (archived?.items ?? 0);
+  const count = items.length + (archived?.items ?? 0);
+  const total = estimateOf(items) + (archived?.estimate ?? 0);
+  const finished = estimateOf(items.filter((item) => isDone(project, item))) + (archived?.estimate ?? 0);
+  const share = total > 0 ? finished / total : count > 0 ? done / count : 0;
   return (
     <span className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
       <span
@@ -106,8 +112,8 @@ function Progress({ project, items }: { project: Project; items: WorkItemSummary
         <span className="block h-full rounded-full bg-emerald-500" style={{ width: `${share * 100}%` }} />
       </span>
       <span className="tabular-nums">
-        {done.length} of {items.length} done
-        {total > 0 && ` · ${finished} of ${total} estimated`}
+        {done} of {count} done
+        {total > 0 && ` · ${Number(finished.toFixed(2))} of ${Number(total.toFixed(2))} estimated`}
       </span>
     </span>
   );
@@ -145,7 +151,7 @@ export function SprintBar({
         </span>
       )}
       <span className="flex-1" />
-      <Progress project={project} items={items} />
+      <Progress project={project} sprint={sprint} items={items} />
       <Button variant="subtle" className="text-xs" onClick={onOpenBacklog}>
         Plan sprints
       </Button>
@@ -442,8 +448,8 @@ function CompleteSprintDialog({
   const toast = useToast();
   const planned = project.sprints.filter((s) => s.state === 'planned');
   const [moveTo, setMoveTo] = useState(planned[0]?.id ?? NEW_SPRINT);
-  const done = items.filter((item) => isDone(project, item)).length;
-  const open = items.length - done;
+  const open = items.filter((item) => !isDone(project, item)).length;
+  const done = items.length - open + (project.archive.sprints[sprint.id]?.items ?? 0);
   const pending = sprints.create.isPending || sprints.complete.isPending;
 
   async function complete() {
@@ -463,7 +469,7 @@ function CompleteSprintDialog({
       title={`Complete ${sprint.name}?`}
       description={
         open === 0
-          ? `All ${items.length === 1 ? 'of its work is' : `${items.length} items are`} done.`
+          ? `All ${done === 1 ? 'of its work is' : `${done} items are`} done.`
           : `${done} done, ${open} not. Finished work stays in the sprint; choose where the unfinished work goes. It keeps its status.`
       }
       onClose={onClose}
@@ -745,14 +751,18 @@ export function SprintBacklog({
             <ul className="mt-2 divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
               {completed.map((sprint) => {
                 const own = bySprint.get(sprint.id) ?? [];
-                const done = own.filter((item) => isDone(project, item));
+                const archived = project.archive.sprints[sprint.id];
+                const doneCount = own.filter((item) => isDone(project, item)).length + (archived?.items ?? 0);
+                const doneEstimate = Number(
+                  (estimateOf(own.filter((item) => isDone(project, item))) + (archived?.estimate ?? 0)).toFixed(2),
+                );
                 return (
                   <li key={sprint.id} className="flex items-center gap-3 px-3 py-2 text-sm">
                     <Icon name="check2-circle" className="text-emerald-500" />
                     <span className="min-w-0 flex-1 truncate font-medium">{sprint.name}</span>
                     {sprintDates(sprint) && <span className="text-xs text-[var(--color-muted)]">{sprintDates(sprint)}</span>}
                     <span className="text-xs tabular-nums text-[var(--color-muted)]">
-                      {done.length} done{estimateOf(done) > 0 && ` · ${estimateOf(done)} estimated`}
+                      {doneCount} done{doneEstimate > 0 && ` · ${doneEstimate} estimated`}
                     </span>
                     {canEdit && (
                       <IconButton label="Delete sprint" onClick={() => setDeleting(sprint)}>
@@ -816,7 +826,7 @@ function SprintHeading({ project, sprint, items }: { project: Project; sprint: P
       )}
       {dates && <span className="text-xs text-[var(--color-muted)]">{dates}</span>}
       {sprint.state === 'active' ? (
-        <Progress project={project} items={items} />
+        <Progress project={project} sprint={sprint} items={items} />
       ) : (
         <span className="text-xs text-[var(--color-muted)]">
           {items.length === 1 ? '1 item' : `${items.length} items`}

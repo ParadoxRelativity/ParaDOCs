@@ -540,7 +540,7 @@ export default function SheetEditor({ sheet: record, canEdit, session, peers, on
         <div className="ml-auto flex items-center gap-2 text-[11px] text-[var(--color-muted)]">
           {/* Reading a spreadsheet is enough to take a copy of it, so export is
               offered to viewers too. */}
-          <Tool label={exporting ? 'Exporting…' : 'Export to Excel (.xlsx)'} icon="download" onClick={() => void exportFile()} />
+          <Tool label={exporting ? 'Exporting…' : 'Export to Excel (.xlsx)'} icon="box-arrow-up" onClick={() => void exportFile()} />
           {peers.length > 0 && <span>{peers.length + 1} editing</span>}
           {!canEdit && <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.5">Read only</span>}
         </div>

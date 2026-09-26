@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { claimCache } from './lib/queryPersistence';
 import {
   directName,
   directPeople,
@@ -88,7 +89,23 @@ export default function App() {
   // command listener that follows the desktop menu stays out of its way.
   const popout = useLocation().pathname.startsWith('/popout/');
 
-  if (me.isLoading) return <Spinner />;
+  // The sidebars can start from what was kept from last time, but only once
+  // it is known to be this person's; see lib/queryPersistence.ts.
+  const qc = useQueryClient();
+  const userId = me.data ? (me.data.user?.id ?? null) : undefined;
+  const [claimedFor, setClaimedFor] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (userId === undefined) return;
+    let live = true;
+    void claimCache(qc, userId).then(() => {
+      if (live) setClaimedFor(userId);
+    });
+    return () => {
+      live = false;
+    };
+  }, [qc, userId]);
+
+  if (me.isLoading || (userId !== undefined && claimedFor !== userId)) return <Spinner />;
   if (!me.data?.user) {
     return (
       <AuthScreen

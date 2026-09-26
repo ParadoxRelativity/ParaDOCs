@@ -6,6 +6,7 @@ import {
   type User,
   isEpicType,
   type WorkItemListing,
+  type WorkItemSummary,
   type WorkspaceMember,
   projectPermission,
 } from '@paradocs/shared';
@@ -25,7 +26,9 @@ import Icon, { type IconName } from '../Icon';
 import { Button, EmptyState, Spinner } from '../ui';
 import ProjectBacklog from './ProjectBacklog';
 import ProjectBoard from './ProjectBoard';
+import ProjectAllItems from './ProjectAllItems';
 import ProjectEpics from './ProjectEpics';
+import ProjectInsights from './ProjectInsights';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
 import ProjectSettings from './ProjectSettings';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
@@ -34,14 +37,16 @@ import ProjectWorkload from './ProjectWorkload';
 import WorkItemPanel, { type ProjectNavigation } from './WorkItemPanel';
 import { PriorityIcon, ProjectIcon, StatusPill, TypeIcon, formatDue, isOverdue, useMemberMap } from './projectUi';
 
-type View = 'epics' | 'backlog' | 'board' | 'list' | 'workload' | 'settings';
+type View = 'epics' | 'backlog' | 'board' | 'list' | 'all' | 'workload' | 'insights' | 'settings';
 
 const VIEWS: { id: View; label: string; icon: IconName }[] = [
   { id: 'epics', label: 'Epics', icon: 'lightning-charge' },
   { id: 'backlog', label: 'Backlog', icon: 'inbox' },
   { id: 'board', label: 'Board', icon: 'kanban' },
   { id: 'list', label: 'List', icon: 'list-ul' },
+  { id: 'all', label: 'All items', icon: 'archive' },
   { id: 'workload', label: 'Workload', icon: 'bar-chart-steps' },
+  { id: 'insights', label: 'Insights', icon: 'graph-up' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ];
 
@@ -162,15 +167,15 @@ function ProjectView({
   const canComment = data !== undefined && can(projectPermission(data.kind, 'comment'));
   const canManageAccess = workspace.role === 'owner' || workspace.role === 'admin';
 
-  const filtered = useMemo(() => {
+  const matches = useMemo(() => {
     const needle = text.trim().toLowerCase();
     const who = person === 'me' ? user.id : person;
-    return (items.data ?? []).filter(
-      (item) =>
-        (!needle || item.title.toLowerCase().includes(needle) || item.key.toLowerCase().includes(needle)) &&
-        (!who || Object.values(item.roles).some((holders) => holders.includes(who))),
-    );
-  }, [items.data, text, person, user.id]);
+    return (item: WorkItemSummary) =>
+      (!needle || item.title.toLowerCase().includes(needle) || item.key.toLowerCase().includes(needle)) &&
+      (!who || Object.values(item.roles).some((holders) => holders.includes(who)));
+  }, [text, person, user.id]);
+  // Archived work is not loaded with the rest; All items reads it a page at a time.
+  const filtered = useMemo(() => (items.data ?? []).filter(matches), [items.data, matches]);
 
   // A project's epics are followed in their own view, not worked on the board,
   // in the backlog or in workload; a queue has no such view, so shows them all.
@@ -205,8 +210,8 @@ function ProjectView({
   // A queue is worked as a list; a backlog tab only appears where there is one.
   const views = (
     data.kind === 'queue'
-      ? (['list', 'board', 'backlog', 'workload', 'settings'] as View[])
-      : (['epics', 'backlog', 'board', 'list', 'workload', 'settings'] as View[])
+      ? (['list', 'board', 'backlog', 'all', 'workload', 'insights', 'settings'] as View[])
+      : (['epics', 'backlog', 'board', 'list', 'all', 'workload', 'insights', 'settings'] as View[])
   )
     .filter((id) => id !== 'backlog' || hasBacklog)
     // Only a project with an epic-kind type has epics to follow.
@@ -248,7 +253,7 @@ function ProjectView({
             ))}
           </div>
           <span className="flex-1" />
-          {view !== 'settings' && (
+          {view !== 'settings' && view !== 'insights' && (
             <>
               <div className="relative">
                 <Icon name="funnel" className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[var(--color-muted)]" />
@@ -302,6 +307,19 @@ function ProjectView({
               canEdit={canConfigure}
               canManageAccess={canManageAccess}
               onDeleted={onProjectDeleted}
+            />
+          ) : view === 'insights' ? (
+            <ProjectInsights project={data} items={items.data ?? []} />
+          ) : view === 'all' ? (
+            <ProjectAllItems
+              project={data}
+              current={filtered}
+              text={text}
+              personId={(person === 'me' ? user.id : person) || null}
+              memberMap={memberMap}
+              canEdit={canEdit}
+              activeItemId={itemId}
+              onOpenItem={onOpenItem}
             />
           ) : view === 'epics' && epicType ? (
             <ProjectEpics

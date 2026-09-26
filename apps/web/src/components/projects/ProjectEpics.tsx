@@ -174,7 +174,7 @@ export default function ProjectEpics({
                         )}
                         {status && <StatusPill status={status} className="shrink-0" />}
                       </button>
-                      <EpicProgressBar project={project} items={children} className="mt-2" />
+                      <EpicProgressBar project={project} items={children} archived={project.archive.epics[epic.id]} className="mt-2" />
                     </div>
                   </div>
                   {open && (

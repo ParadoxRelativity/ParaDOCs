@@ -331,3 +331,50 @@ export function Spinner() {
     </div>
   );
 }
+
+/**
+ * The end of a list read a page at a time: asks for the next page as it comes
+ * into view, a screenful early so scrolling rarely waits, with a button for
+ * doing it by hand, and a retry when a page failed.
+ */
+export function LoadMore({
+  hasMore,
+  loading,
+  failed,
+  onLoadMore,
+  label = 'Load more',
+}: {
+  hasMore: boolean;
+  loading: boolean;
+  failed: boolean;
+  onLoadMore: () => void;
+  label?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !hasMore || loading || failed) return;
+    const observer = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && onLoadMore(), {
+      rootMargin: '0px 0px 600px 0px',
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasMore, loading, failed, onLoadMore]);
+
+  if (!hasMore && !loading && !failed) return null;
+  return (
+    <div ref={ref} className="py-3 text-center text-xs text-[var(--color-muted)]">
+      {loading ? (
+        'Loading…'
+      ) : failed ? (
+        <button onClick={onLoadMore} className="hover:text-[var(--color-ink)]">
+          Could not load more. Try again
+        </button>
+      ) : (
+        <button onClick={onLoadMore} className="hover:text-[var(--color-ink)]">
+          {label}
+        </button>
+      )}
+    </div>
+  );
+}

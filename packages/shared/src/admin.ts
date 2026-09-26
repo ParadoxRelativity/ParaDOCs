@@ -26,6 +26,12 @@ export interface ServerSettings {
    * a single sign-on provider that works.
    */
   passwordSignIn: boolean;
+  /**
+   * Whether queues can take in work from outside through the intake webhook,
+   * each with tokens of its own. Off, the webhook refuses everything and the
+   * tokens queues already have are kept but do nothing.
+   */
+  intakeWebhooks: boolean;
 }
 
 export const updateServerSettingsSchema = z
@@ -33,6 +39,7 @@ export const updateServerSettingsSchema = z
     allowRegistration: z.boolean().optional(),
     messageRetentionMaxDays: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable().optional(),
     passwordSignIn: z.boolean().optional(),
+    intakeWebhooks: z.boolean().optional(),
   })
   .refine((v) => Object.values(v).some((value) => value !== undefined), { message: 'Nothing to update' });
 

@@ -204,6 +204,31 @@ export interface BoardLayout {
 
 export const EMPTY_BOARD_LAYOUT: BoardLayout = { lanes: [] };
 
+/** Archived work, counted and its estimates summed. Archived work is always done. */
+export interface ArchivedTotal {
+  items: number;
+  estimate: number;
+}
+
+/**
+ * A project's archive in totals: all of it, and what is under each epic and in
+ * each sprint, so progress and velocity can count finished work that has been
+ * archived without loading it.
+ */
+export interface ArchiveTotals {
+  count: number;
+  /** Keyed by epic id. Epics with nothing archived under them are left out. */
+  epics: Record<string, ArchivedTotal>;
+  /** Keyed by sprint id. Sprints with nothing archived in them are left out. */
+  sprints: Record<string, ArchivedTotal>;
+}
+
+/** How long finished work sits untouched before it is archived, when a project is made. */
+export const DEFAULT_ARCHIVE_DAYS: Record<ProjectKind, number> = { project: 30, queue: 7 };
+
+/** The longest finished work can be kept out before it is archived, short of never. */
+export const MAX_ARCHIVE_DAYS = 3650;
+
 export type SprintState = 'planned' | 'active' | 'completed';
 
 /**
@@ -275,6 +300,13 @@ export interface Project extends ProjectSummary {
   boardLayout: BoardLayout;
   /** Whether the board is run in sprints. Always false for a queue. */
   sprintsEnabled: boolean;
+  /**
+   * How many days finished work sits untouched before it is archived: taken
+   * off the board and the list, and kept in All items. Null: never.
+   */
+  archiveAfterDays: number | null;
+  /** What has been archived, totalled, since archived items are not loaded with the rest. */
+  archive: ArchiveTotals;
   /** Running first, then planned in the order they were made, then completed, newest first. */
   sprints: ProjectSprint[];
   /** The type a new work item is unless someone picks otherwise. Never an epic-kind one. */
@@ -318,6 +350,12 @@ export interface WorkItemSummary {
   updatedAt: string;
   /** When it last moved into a done status. Null while it is open. */
   completedAt: string | null;
+  /**
+   * When it was archived: finished, then left untouched for its project's
+   * `archiveAfterDays`, or put away by hand. Null while it is current.
+   * Reopening it, commenting on it or restoring it brings it back.
+   */
+  archivedAt: string | null;
 }
 
 /** One work item, opened. */
@@ -348,7 +386,8 @@ export interface WorkItemComment {
 
 /** Something that happened to a work item, told in its history beside the comments. */
 export type WorkItemActivityData =
-  | { kind: 'created' }
+  /** `via`: the intake token it came in through, by the name it had, when it was sent in from outside. */
+  | { kind: 'created'; via?: string }
   | { kind: 'status'; from: string; to: string }
   | { kind: 'role'; role: string; added: string[]; removed: string[] }
   | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority }
@@ -360,7 +399,11 @@ export type WorkItemActivityData =
   /** A link made or removed, read from this item: "blocks ENG-4". Key and title as they were at the time. */
   | { kind: 'link'; label: string; key: string; title: string; added: boolean }
   /** A file attached or taken off, by the name it had. */
-  | { kind: 'attachment'; filename: string; added: boolean };
+  | { kind: 'attachment'; filename: string; added: boolean }
+  /** Put in the archive: by hand, or with no actor when it had sat untouched long enough. */
+  | { kind: 'archived' }
+  /** Taken back out of the archive: by hand, or by a comment on it. */
+  | { kind: 'restored' };
 
 export type WorkItemActivity = {
   id: string;
@@ -700,12 +743,16 @@ export interface EpicProgress {
   doneEstimate: number;
 }
 
+/** `archived` is what under the epic has been archived, which is all done and not among `children`. */
 export function epicProgress(
   project: Pick<Project, 'statuses'>,
   children: Pick<WorkItemSummary, 'statusId' | 'estimate'>[],
+  archived?: ArchivedTotal,
 ): EpicProgress {
   const doneIds = new Set(project.statuses.filter((s) => s.category === 'done').map((s) => s.id));
-  const progress: EpicProgress = { total: 0, done: 0, estimate: 0, doneEstimate: 0 };
+  const items = archived?.items ?? 0;
+  const estimate = archived?.estimate ?? 0;
+  const progress: EpicProgress = { total: items, done: items, estimate, doneEstimate: estimate };
   for (const child of children) {
     const finished = doneIds.has(child.statusId);
     progress.total += 1;
@@ -872,6 +919,8 @@ export const updateProjectSchema = z.object({
   boardLayout: boardLayoutSchema.optional(),
   sprintsEnabled: z.boolean().optional(),
   defaultTypeId: uuid.optional(),
+  /** Null: never archive finished work. */
+  archiveAfterDays: z.number().int().min(1).max(MAX_ARCHIVE_DAYS).nullish(),
 });
 
 export const createStatusSchema = z.object({
@@ -1038,7 +1087,52 @@ export const updateWorkItemSchema = z.object({
   sprintId: uuid.nullish(),
   /** Pass null to take it out of its epic. */
   epicId: uuid.nullish(),
+  /** Put it in the archive, which only finished work can go in, or take it out. */
+  archived: z.boolean().optional(),
 });
+
+/** The most current work a project's item list returns. The archive is paged instead. */
+export const MAX_LISTED_ITEMS = 5000;
+
+/** What a work item list can be ordered by. */
+export type WorkItemSort = 'key' | 'title' | 'status' | 'priority' | 'due' | 'estimate' | 'updated' | 'created';
+export const WORK_ITEM_SORTS: WorkItemSort[] = ['key', 'title', 'status', 'priority', 'due', 'estimate', 'updated', 'created'];
+
+/** How many archived items a page holds unless asked otherwise, and the most it can. */
+export const ARCHIVE_PAGE_SIZE = 100;
+export const MAX_ARCHIVE_PAGE_SIZE = 500;
+
+/**
+ * One page of a project's archive. `nextCursor` asks for the page after it,
+ * and is null on the last. `total` is how many archived items match, across
+ * every page.
+ */
+export interface ArchivePage {
+  items: WorkItemSummary[];
+  nextCursor: string | null;
+  total: number;
+}
+
+/**
+ * Which page of a project's archive to read, and how it is filtered and
+ * ordered. Filtering and ordering are done by the server, since no one reader
+ * has the whole archive to do it with. Ties are broken by item number, in the
+ * same direction, as the list does it.
+ */
+export const archivePageQuerySchema = z.object({
+  sort: z.enum(['key', 'title', 'status', 'priority', 'due', 'estimate', 'updated', 'created']).default('updated'),
+  descending: z.enum(['true', 'false']).default('true'),
+  /** Matched against title and key, as the filter box does. */
+  q: z.string().trim().max(200).optional(),
+  /** Only items this person holds any role on. */
+  person: uuid.optional(),
+  /** Only items finished since this moment. */
+  completedSince: z.string().datetime({ offset: true }).optional(),
+  /** From the page before; opaque. */
+  cursor: z.string().max(1000).optional(),
+  limit: z.coerce.number().int().min(1).max(MAX_ARCHIVE_PAGE_SIZE).default(ARCHIVE_PAGE_SIZE),
+});
+export type ArchivePageQuery = z.input<typeof archivePageQuerySchema>;
 
 /** Moving many items at once, such as from the backlog onto the board. */
 export const moveWorkItemsSchema = z.object({
@@ -1067,6 +1161,71 @@ export const createWorkItemLinkSchema = z.object({
 export const resolveWorkItemsSchema = z.object({
   ids: z.array(uuid).max(300),
 });
+
+// --- intake ------------------------------------------------------------------
+
+/**
+ * A long-lived key that lets something outside — a web form, an alert, another
+ * system — file work in one queue through the server's intake webhook,
+ * `POST /api/intake`. There is one webhook for the whole server; the token
+ * sent with each request is what says which queue it goes to. The webhook is
+ * off until a server administrator turns it on.
+ *
+ * The token itself is shown once, when it is made, and only its hash is kept.
+ */
+export interface IntakeToken {
+  id: string;
+  name: string;
+  /** The token's last few characters, to tell tokens apart by. */
+  hint: string;
+  /** The type what comes in is filed as. Null: the queue's default type. */
+  typeId: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+  useCount: number;
+}
+
+/** A queue's intake tokens, and whether the server takes in work at all. */
+export interface IntakeSettings {
+  /** Off: the server administrator has not turned the webhook on, and no token does anything. */
+  enabled: boolean;
+  tokens: IntakeToken[];
+}
+
+/** A token just made, with the secret itself. It is never shown again. */
+export interface CreatedIntakeToken extends IntakeToken {
+  token: string;
+}
+
+/** The address a sender posts to, relative to the server's own. */
+export const INTAKE_PATH = '/api/intake';
+
+export const createIntakeTokenSchema = z.object({
+  name: z.string().trim().min(1, 'Name it after what will use it').max(80),
+  typeId: uuid.nullish(),
+});
+
+export const updateIntakeTokenSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  typeId: uuid.nullable().optional(),
+});
+
+/**
+ * The fields the webhook understands. Anything else a sender includes — a web
+ * form's other questions — is kept as well, listed after the description.
+ */
+export const INTAKE_FIELDS = {
+  title: 'Required. Also taken as `subject` or `summary`.',
+  description: 'Also taken as `body`, `message` or `details`.',
+  priority: '`none`, `low`, `medium`, `high` or `urgent`.',
+  requester: "Who asked, put in the queue's free-form role such as Requester. Also taken as `name` or `email`.",
+  type: "The name of one of the queue's types. The token's type when left out.",
+  dueDate: 'YYYY-MM-DD.',
+} as const;
+
+export type CreateIntakeTokenInput = z.input<typeof createIntakeTokenSchema>;
+export type UpdateIntakeTokenInput = z.infer<typeof updateIntakeTokenSchema>;
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;

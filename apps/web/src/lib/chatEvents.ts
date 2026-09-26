@@ -244,6 +244,8 @@ export function useChatEvents({
           void qc.invalidateQueries({ queryKey: ['projects', event.workspaceId] });
           void qc.invalidateQueries({ queryKey: keys.project(event.projectId) });
           void qc.invalidateQueries({ queryKey: keys.workItems(event.projectId) });
+          void qc.invalidateQueries({ queryKey: keys.workItemResponses(event.projectId) });
+          void qc.invalidateQueries({ queryKey: ['archivedWorkItems', event.projectId] });
           void qc.invalidateQueries({ queryKey: ['workItemListing', event.workspaceId] });
           // Any item may be linked to one that changed, and shows its status.
           void qc.invalidateQueries({ queryKey: ['workItemLinks'] });
@@ -263,7 +265,6 @@ export function useChatEvents({
           // Ids only, as with projects: the sidebar and listings ask again.
           if (event.app === 'sheets') {
             void qc.invalidateQueries({ queryKey: keys.sheetTree(event.workspaceId) });
-            void qc.invalidateQueries({ queryKey: keys.spreadsheets(event.workspaceId) });
           } else {
             void qc.invalidateQueries({ queryKey: keys.tree(event.workspaceId) });
             void qc.invalidateQueries({ queryKey: ['allDocuments', event.workspaceId] });

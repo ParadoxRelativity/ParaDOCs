@@ -1,11 +1,13 @@
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { SheetFolderNode, SpreadsheetSummary } from '@paradocs/shared';
 import {
   useCreateFolder,
   useCreateSpreadsheet,
   useDeleteFolder,
   useDeleteSpreadsheet,
+  useFolderSpreadsheets,
   useSheetTree,
+  useUnfiledSpreadsheets,
   useUpdateFolder,
   useUpdateSpreadsheet,
 } from '../../api/hooks';
@@ -18,16 +20,37 @@ import DeleteFolderDialog, { SPREADSHEET_NOUN } from '../DeleteFolderDialog';
 import { ConfirmDialog, Modal } from '../Modal';
 import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
-import { Button, IconButton, InlineIconNameForm, Spinner } from '../ui';
+import { Button, IconButton, InlineIconNameForm, LoadMore, Spinner } from '../ui';
 import Icon from '../Icon';
 import SheetContextMenu, { type SheetMenuItem } from './SheetContextMenu';
 
 /** What a dragged spreadsheet carries, so only a spreadsheet can be dropped on a folder. */
 const DRAG_TYPE = 'application/x-paradocs-spreadsheet';
 
-/** Spreadsheets in this folder and every folder nested beneath it. */
-function sheetIdsDeep(folder: SheetFolderNode): string[] {
-  return [...folder.spreadsheets.map((s) => s.id), ...folder.children.flatMap(sheetIdsDeep)];
+/** How many spreadsheets are in this folder and every folder nested beneath it. */
+function sheetCountDeep(folder: SheetFolderNode): number {
+  return folder.spreadsheetCount + folder.children.reduce((total, child) => total + sheetCountDeep(child), 0);
+}
+
+/** A spreadsheet being moved, and the folder it is moving from. */
+type MovingSheet = Pick<SpreadsheetSummary, 'id' | 'folderId'>;
+
+/**
+ * The spreadsheet a drag carries, with the folder it came from: the sidebar
+ * loads folders' contents only as they are opened, so the drag itself says
+ * where the spreadsheet was rather than it being looked up.
+ */
+function draggedSheet(event: React.DragEvent): MovingSheet | null {
+  try {
+    const value: unknown = JSON.parse(event.dataTransfer.getData(DRAG_TYPE));
+    if (value && typeof value === 'object' && 'id' in value && typeof value.id === 'string') {
+      const folderId = 'folderId' in value && typeof value.folderId === 'string' ? value.folderId : null;
+      return { id: value.id, folderId };
+    }
+  } catch {
+    // Not one of ours.
+  }
+  return null;
 }
 
 /** Every folder, parents before children, with how deep each one sits. */
@@ -123,13 +146,11 @@ export function SheetList({
     setCreatingIn(undefined);
   }
 
-  function moveSheet(sheetId: string, folderId: string | null) {
-    const filed = flattenFolders(tree.data?.folders ?? []).flatMap(({ folder }) => folder.spreadsheets);
-    const sheet = [...filed, ...(tree.data?.unfiled ?? [])].find((s) => s.id === sheetId);
+  function moveSheet(sheet: MovingSheet, folderId: string | null) {
     // Dropped back where it already was.
-    if (!sheet || sheet.folderId === folderId) return;
+    if (sheet.folderId === folderId) return;
     move.mutate(
-      { id: sheetId, folderId },
+      { id: sheet.id, folderId },
       { onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the spreadsheet', 'error') },
     );
   }
@@ -151,8 +172,13 @@ export function SheetList({
   };
 
   const folders = tree.data?.folders ?? [];
-  const unfiled = tree.data?.unfiled ?? [];
-  const empty = folders.length === 0 && unfiled.length === 0;
+  // Those in no folder are read a page at a time too, most recently touched first.
+  const unfiledCount = tree.data?.unfiledCount ?? 0;
+  const unfiledPages = useUnfiledSpreadsheets(workspaceId, unfiledCount > 0);
+  const unfiled = unfiledCount > 0 ? (unfiledPages.data?.pages.flatMap((page) => page.items) ?? []) : [];
+  const { fetchNextPage: fetchMoreUnfiled } = unfiledPages;
+  const loadMoreUnfiled = useCallback(() => void fetchMoreUnfiled(), [fetchMoreUnfiled]);
+  const empty = folders.length === 0 && unfiledCount === 0;
 
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -167,7 +193,7 @@ export function SheetList({
               onClick={() => fileInput.current?.click()}
               disabled={importing}
             >
-              <Icon name="upload" />
+              <Icon name="box-arrow-in-down" />
             </IconButton>
             <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
               <Icon name="folder-plus" />
@@ -237,11 +263,11 @@ export function SheetList({
             onDragLeave={() => setUnfiledDrop(false)}
             onDrop={(event) => {
               setUnfiledDrop(false);
-              const id = event.dataTransfer.getData(DRAG_TYPE);
-              if (id) moveSheet(id, null);
+              const sheet = draggedSheet(event);
+              if (sheet) moveSheet(sheet, null);
             }}
           >
-            {folders.length > 0 && unfiled.length > 0 && (
+            {folders.length > 0 && unfiledCount > 0 && (
               <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                 Not in a folder
               </div>
@@ -249,6 +275,15 @@ export function SheetList({
             {unfiled.map((sheet) => (
               <SheetRow key={sheet.id} sheet={sheet} depth={0} {...shared} />
             ))}
+            {unfiledCount > 0 && (
+              <LoadMore
+                hasMore={unfiledPages.hasNextPage}
+                loading={unfiledPages.isLoading || unfiledPages.isFetchingNextPage}
+                failed={unfiledPages.isError}
+                onLoadMore={loadMoreUnfiled}
+                label="Show more"
+              />
+            )}
           </div>
         </>
       )}
@@ -270,7 +305,7 @@ export function SheetList({
           onCancel={() => setMoving(null)}
           onMove={(folderId) => {
             setMoving(null);
-            moveSheet(moving.id, folderId);
+            moveSheet(moving, folderId);
           }}
         />
       )}
@@ -287,7 +322,7 @@ interface RowProps {
   onDeleted: (id: string) => void;
   onManageAccess: (target: NamedAccessTarget) => void;
   onMove: (sheet: SpreadsheetSummary) => void;
-  onDropSheet: (sheetId: string, folderId: string | null) => void;
+  onDropSheet: (sheet: MovingSheet, folderId: string | null) => void;
   onNewSheet: (folderId: string) => void;
   creatingIn: string | null | undefined;
   /** Pass a parent id (or null for top level) to start naming; undefined cancels. */
@@ -307,7 +342,7 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
   const remove = useDeleteFolder(workspaceId, 'sheets');
   const toast = useToast();
 
-  const count = folder.spreadsheets.length + folder.children.length;
+  const count = folder.spreadsheetCount + folder.children.length;
   // A subfolder being named here forces the parent open so the field is visible.
   const creatingHere = creatingIn === folder.id;
   const expanded = open || creatingHere;
@@ -374,11 +409,11 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
         onDragLeave={() => setDropping(false)}
         onDrop={(event) => {
           setDropping(false);
-          const id = event.dataTransfer.getData(DRAG_TYPE);
-          if (!id) return;
+          const sheet = draggedSheet(event);
+          if (!sheet) return;
           event.stopPropagation();
           setOpen(true);
-          props.onDropSheet(id, folder.id);
+          props.onDropSheet(sheet, folder.id);
         }}
       >
         {renaming ? (
@@ -456,9 +491,7 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
           {folder.children.map((child) => (
             <SheetFolderRow key={child.id} folder={child} depth={depth + 1} {...props} />
           ))}
-          {folder.spreadsheets.map((sheet) => (
-            <SheetRow key={sheet.id} sheet={sheet} depth={depth + 1} {...props} />
-          ))}
+          {folder.spreadsheetCount > 0 && <FolderSpreadsheets folderId={folder.id} depth={depth} {...props} />}
           {count === 0 && !creatingHere && (
             <p className="py-1 text-[11px] text-[var(--color-muted)]" style={{ paddingLeft: (depth + 1) * 12 + 22 }}>
               Empty
@@ -472,19 +505,19 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
       {confirmingDelete && (
         <DeleteFolderDialog
           name={folder.name}
-          count={sheetIdsDeep(folder).length}
+          count={sheetCountDeep(folder)}
           noun={SPREADSHEET_NOUN}
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={(deleteContents) => {
             setConfirmingDelete(false);
-            const sheetIds = sheetIdsDeep(folder);
             remove.mutate(
               { id: folder.id, deleteContents },
               {
-                onSuccess: () => {
+                onSuccess: (result) => {
                   toast(deleteContents ? `Deleted "${folder.name}" and its spreadsheets` : `Deleted "${folder.name}"`);
-                  // Whatever was showing one of them has to move off it.
-                  if (deleteContents) for (const id of sheetIds) props.onDeleted(id);
+                  // Whatever was showing one of them has to move off it. The
+                  // server names them, since not all of them need be loaded here.
+                  for (const id of result?.deleted ?? []) props.onDeleted(id);
                 },
                 onError: (err) => toast(err instanceof Error ? err.message : 'Could not delete folder', 'error'),
               },
@@ -493,6 +526,39 @@ function SheetFolderRow({ folder, depth, ...props }: RowProps & { folder: SheetF
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The spreadsheets in an open folder, read a page at a time, since a folder
+ * can hold more than the sidebar should load at once.
+ */
+function FolderSpreadsheets({ folderId, depth, ...props }: RowProps & { folderId: string; depth: number }) {
+  const sheets = useFolderSpreadsheets(props.workspaceId, folderId, true);
+  const { fetchNextPage } = sheets;
+  const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
+  if (sheets.isLoading) {
+    return (
+      <p className="py-1 text-[11px] text-[var(--color-muted)]" style={{ paddingLeft: (depth + 1) * 12 + 22 }}>
+        Loading…
+      </p>
+    );
+  }
+  return (
+    <>
+      {(sheets.data?.pages.flatMap((page) => page.items) ?? []).map((sheet) => (
+        <SheetRow key={sheet.id} sheet={sheet} depth={depth + 1} {...props} />
+      ))}
+      <div style={{ paddingLeft: (depth + 1) * 12 }}>
+        <LoadMore
+          hasMore={sheets.hasNextPage}
+          loading={sheets.isFetchingNextPage}
+          failed={sheets.isError}
+          onLoadMore={loadMore}
+          label="Show more"
+        />
+      </div>
+    </>
   );
 }
 
@@ -528,7 +594,7 @@ function SheetRow({ sheet, depth, ...props }: RowProps & { sheet: SpreadsheetSum
       )}
       draggable={canChange}
       onDragStart={(event) => {
-        event.dataTransfer.setData(DRAG_TYPE, sheet.id);
+        event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ id: sheet.id, folderId: sheet.folderId }));
         event.dataTransfer.effectAllowed = 'move';
       }}
       onContextMenu={(event) => {

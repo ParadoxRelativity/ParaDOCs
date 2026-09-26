@@ -8,11 +8,33 @@ import { blocksToMarkdown } from '../lib/blocksToMarkdown.js';
 import { removeStoredFile, storeUpload, uploadLimits } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 import { treeChanged } from '../lib/treeEvents.js';
+import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 
 const attachSchema = z.object({
   title: z.string().max(300).optional(),
   folderId: z.string().uuid().nullish(),
 });
+
+const uploadsPageSchema = z.object({
+  unattached: z.enum(['true', 'false']).optional(),
+  cursor: z.string().max(500).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+interface WorkspaceUploadRow {
+  id: string;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+  documentId: string | null;
+  documentTitle: string | null;
+  url: string;
+  sortValue: string;
+}
+
+const encodeUploadCursor = (createdAt: string, id: string) => encodeCursor(createdAt, id);
+const decodeUploadCursor = (cursor: string) => decodeCursor(cursor, (v) => CURSOR_TEXT.timestamp.test(v), isUuid);
 
 /** The BlockNote block that best presents a file of this type. */
 function blockForFile(mimeType: string, url: string, filename: string) {
@@ -66,24 +88,41 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
    * that happens when a file was never attached, or when the document holding
    * it was deleted, which nulls the reference.
    */
-  app.get<{ Params: { id: string }; Querystring: { unattached?: string } }>(
+  /**
+   * A workspace's files, newest first, a page at a time: a workspace gathers
+   * one for every picture pasted into every document, so there can be far
+   * more than one list should carry. The cursor is where the last page ended,
+   * so files uploaded or deleted while someone scrolls do not shift the rest.
+   */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
     '/workspaces/:id/uploads',
     async (req) => {
       await assertWorkspaceAccess(req, req.params.id, 'uploads.manage');
-      const onlyUnattached = req.query.unattached === 'true';
+      const input = parse(uploadsPageSchema, req.query ?? {});
+      const onlyUnattached = input.unattached === 'true';
+      const limit = input.limit ?? 50;
+      const after = input.cursor ? decodeUploadCursor(input.cursor) : null;
 
-      const { rows } = await query(
+      const { rows: page } = await query<WorkspaceUploadRow>(
         `SELECT a.id, a.filename, a.mime_type AS "mimeType", a.byte_size AS "byteSize",
                 a.created_at AS "createdAt", a.document_id AS "documentId",
                 d.title AS "documentTitle",
-                '/uploads/' || a.storage_key AS url
+                '/uploads/' || a.storage_key AS url,
+                a.created_at::text AS "sortValue"
            FROM attachments a
            LEFT JOIN documents d ON d.id = a.document_id
           WHERE a.workspace_id = $1
             AND ($2::boolean IS NOT TRUE OR a.document_id IS NULL)
-          ORDER BY a.created_at DESC`,
-        [req.params.id, onlyUnattached],
+            AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::uuid))
+          ORDER BY a.created_at DESC, a.id DESC
+          LIMIT $5`,
+        [req.params.id, onlyUnattached, after?.[0] ?? null, after?.[1] ?? null, limit + 1],
       );
+      // One more than a page was asked for, to know whether there is another.
+      const more = page.length > limit;
+      const rows = page.slice(0, limit);
+      const last = rows[rows.length - 1];
+      const nextCursor = more && last ? encodeUploadCursor(last.sortValue, last.id) : null;
 
       const { rows: totals } = await query<{
         total: number;
@@ -101,7 +140,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
         [req.params.id],
       );
 
-      return { uploads: rows, totals: totals[0] };
+      return { uploads: rows.map(({ sortValue: _, ...upload }) => upload), totals: totals[0], nextCursor };
     },
   );
 

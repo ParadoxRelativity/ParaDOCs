@@ -420,6 +420,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   const toast = useToast();
   const [allowRegistration, setAllowRegistration] = useState(current.allowRegistration);
   const [passwordSignIn, setPasswordSignIn] = useState(current.passwordSignIn);
+  const [intakeWebhooks, setIntakeWebhooks] = useState(current.intakeWebhooks);
   const providers = useOidcProviders();
   const enabledProviders = providers.data?.providers.filter((p) => p.enabled) ?? [];
   const [limited, setLimited] = useState(current.messageRetentionMaxDays !== null);
@@ -429,6 +430,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   function reset() {
     setAllowRegistration(current.allowRegistration);
     setPasswordSignIn(current.passwordSignIn);
+    setIntakeWebhooks(current.intakeWebhooks);
     setLimited(current.messageRetentionMaxDays !== null);
     setDays(String(current.messageRetentionMaxDays ?? DEFAULT_RETENTION_DAYS));
   }
@@ -441,6 +443,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   const dirty =
     allowRegistration !== current.allowRegistration ||
     passwordSignIn !== current.passwordSignIn ||
+    intakeWebhooks !== current.intakeWebhooks ||
     retention !== current.messageRetentionMaxDays;
   const valid = !limited || daysValid;
   // Keeping messages for less time than before deletes history as soon as it is saved.
@@ -450,7 +453,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   function save() {
     setConfirming(false);
     update.mutate(
-      { allowRegistration, passwordSignIn, messageRetentionMaxDays: retention },
+      { allowRegistration, passwordSignIn, intakeWebhooks, messageRetentionMaxDays: retention },
       {
         onSuccess: () => toast('Server settings saved'),
         onError: (err) => toast(err.message, 'error'),
@@ -504,6 +507,13 @@ function SettingsForm({ current }: { current: ServerSettings }) {
               </p>
             )}
           </div>
+        </Section>
+
+        <Section
+          title="Intake webhook"
+          hint="Lets queues take in work from web forms and other systems, each through tokens made in the queue's settings. When off, the webhook refuses everything and existing tokens do nothing."
+        >
+          <Switch checked={intakeWebhooks} onChange={setIntakeWebhooks} label="Allow queues to take in work through the intake webhook" />
         </Section>
 
         <Section

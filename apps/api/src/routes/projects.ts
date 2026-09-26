@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  DEFAULT_ARCHIVE_DAYS,
   STANDARD_ITEM_TYPES,
   WORK_ITEM_LINK_LABELS,
   canMoveTo,
@@ -15,6 +16,9 @@ import {
   createWorkflowSchema,
   isEpicType,
   isSymmetricLink,
+  ARCHIVE_PAGE_SIZE,
+  archivePageQuerySchema,
+  MAX_LISTED_ITEMS,
   itemTypeOf,
   deleteItemTypeSchema,
   deleteStatusSchema,
@@ -46,6 +50,7 @@ import {
   type ProjectWorkflow,
   type SprintState,
   type StatusCategory,
+  type ArchivePage,
   type WorkItem,
   type WorkItemActivity,
   type WorkItemActivityData,
@@ -56,6 +61,8 @@ import {
   type WorkItemLinkDirection,
   type WorkItemLinkType,
   type WorkItemListing,
+  type WorkItemResponses,
+  type WorkItemSort,
   type WorkItemSummary,
   type WorkItemTimeline,
   projectPermission,
@@ -86,6 +93,8 @@ import {
   uploadUrlSql,
 } from '../lib/storage.js';
 import { notifyAboutWorkItem, projectChanged, syncWorkItemMentions } from '../lib/workItems.js';
+import { archiveDormantWorkItems } from '../lib/workItemArchive.js';
+import { CURSOR_TEXT, decodeCursor, encodeCursor, isInteger } from '../lib/cursor.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 import { grants } from '../lib/roles.js';
 
@@ -179,7 +188,22 @@ const ITEM_COLUMNS = `
      JOIN work_items b ON b.id = l.source_id
      JOIN project_statuses bs ON bs.id = b.status_id
     WHERE l.target_id = i.id AND l.type = 'blocks' AND bs.category <> 'done') AS "blockedBy",
-  i.created_at AS "createdAt", i.updated_at AS "updatedAt", i.completed_at AS "completedAt"`;
+  i.created_at AS "createdAt", i.updated_at AS "updatedAt", i.completed_at AS "completedAt",
+  i.archived_at AS "archivedAt"`;
+
+/**
+ * Archived work in the project aliased `p`, totalled by `column` — epic or
+ * sprint — as JSON keyed by its id.
+ */
+function archivedBy(column: 'epic_id' | 'sprint_id'): string {
+  return `COALESCE((
+    SELECT json_object_agg(g.id, json_build_object('items', g.items, 'estimate', g.estimate))
+      FROM (SELECT a.${column} AS id, count(*)::int AS items, COALESCE(sum(a.estimate), 0)::float8 AS estimate
+              FROM work_items a
+             WHERE a.project_id = p.id AND a.archived_at IS NOT NULL AND a.${column} IS NOT NULL
+             GROUP BY a.${column}) g
+  ), '{}'::json)`;
+}
 
 function authorJson(alias: string): string {
   return `CASE WHEN ${alias}.id IS NULL THEN NULL
@@ -215,6 +239,31 @@ const SPRINT_ORDER = `CASE sp.state WHEN 'active' THEN 0 WHEN 'planned' THEN 1 E
   CASE WHEN sp.state = 'completed' THEN NULL ELSE sp.created_at END,
   sp.completed_at DESC`;
 
+/**
+ * How the archive can be ordered: the expression each sort reads, aliased as
+ * a page query aliases its tables (`i` the item, `st` its status), with what
+ * type a cursor's value is cast back to and how to tell one is well formed.
+ * Empty due dates and estimates are given a value past every real one, so
+ * they sort last going up, as the list sorts them, and a cursor never holds
+ * a null.
+ */
+const ARCHIVE_ORDER: Record<WorkItemSort, { expr: string; type: string; check: (value: string) => boolean }> = {
+  key: { expr: 'i.number', type: 'int', check: (v) => CURSOR_TEXT.integer.test(v) },
+  title: { expr: 'i.title', type: 'text', check: () => true },
+  status: { expr: 'st.position', type: 'float8', check: (v) => CURSOR_TEXT.number.test(v) },
+  priority: {
+    expr: `CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`,
+    type: 'int',
+    check: (v) => /^\d$/.test(v),
+  },
+  due: { expr: `COALESCE(i.due_date, '9999-12-31'::date)`, type: 'date', check: (v) => CURSOR_TEXT.date.test(v) },
+  estimate: { expr: 'COALESCE(i.estimate, -1)', type: 'numeric', check: (v) => CURSOR_TEXT.number.test(v) },
+  updated: { expr: 'i.updated_at', type: 'timestamptz', check: (v) => CURSOR_TEXT.timestamp.test(v) },
+  created: { expr: 'i.created_at', type: 'timestamptz', check: (v) => CURSOR_TEXT.timestamp.test(v) },
+};
+
+const responsesQuerySchema = z.object({ createdSince: z.string().datetime({ offset: true }) });
+
 /** A workflow's moves as the client wants them: to-statuses keyed by from-status. */
 const TRANSITIONS_JSON = `COALESCE((
   SELECT json_object_agg(g.from_status, g.tos)
@@ -224,7 +273,7 @@ const TRANSITIONS_JSON = `COALESCE((
            GROUP BY t.from_status) g
 ), '{}'::json)`;
 
-async function fetchProject(id: string, userId: string): Promise<Project> {
+export async function fetchProject(id: string, userId: string): Promise<Project> {
   const { rows } = await query<Project>(
     `SELECT ${projectColumns('$2', roleIdSql('$2', 'p.workspace_id'))},
             COALESCE((SELECT json_agg(json_build_object('id', st.id, 'name', st.name, 'category', st.category,
@@ -243,6 +292,12 @@ async function fetchProject(id: string, userId: string): Promise<Project> {
                         FROM project_item_types t WHERE t.project_id = p.id), '[]'::json) AS "itemTypes",
             p.board_layout AS "boardLayout",
             p.kind = 'project' AND p.sprints_enabled AS "sprintsEnabled",
+            p.archive_after_days AS "archiveAfterDays",
+            json_build_object(
+              'count', (SELECT count(*)::int FROM work_items a WHERE a.project_id = p.id AND a.archived_at IS NOT NULL),
+              'epics', ${archivedBy('epic_id')},
+              'sprints', ${archivedBy('sprint_id')}
+            ) AS archive,
             COALESCE(p.default_type_id,
                      (SELECT t.id FROM project_item_types t WHERE t.project_id = p.id AND NOT t.epic
                        ORDER BY t.position, t.created_at LIMIT 1)) AS "defaultTypeId",
@@ -447,7 +502,7 @@ function assertRoleFits(
  * Gives a role its holders on a new item. Members go in first and names after,
  * a microsecond apart each, so every list reads back in the order it was given.
  */
-async function insertRoleHolders(
+export async function insertRoleHolders(
   db: Queryable,
   itemId: string,
   roleId: string,
@@ -474,7 +529,7 @@ async function insertRoleHolders(
   }
 }
 
-async function logActivity(db: Queryable, itemId: string, actorId: string, data: WorkItemActivityData): Promise<void> {
+export async function logActivity(db: Queryable, itemId: string, actorId: string | null, data: WorkItemActivityData): Promise<void> {
   await db.query('INSERT INTO work_item_activity (work_item_id, actor_id, data) VALUES ($1, $2, $3)', [
     itemId,
     actorId,
@@ -545,7 +600,7 @@ async function tell(
 }
 
 /** Where an item lands in a status: after everything already there. */
-async function endOfStatus(db: Queryable, statusId: string): Promise<number> {
+export async function endOfStatus(db: Queryable, statusId: string): Promise<number> {
   const { rows } = await db.query<{ next: number }>(
     'SELECT COALESCE(max(position), 0)::float8 + 1 AS next FROM work_items WHERE status_id = $1',
     [statusId],
@@ -651,6 +706,7 @@ async function moveOntoBoard(
       `UPDATE work_items
           SET status_id = $2, position = $3,
               completed_at = CASE WHEN $4 = 'done' THEN COALESCE(completed_at, now()) ELSE NULL END,
+              archived_at = CASE WHEN $4 = 'done' THEN archived_at ELSE NULL END,
               updated_at = now()
         WHERE id = $1`,
       [item.id, entry.id, await endOfStatus(db, entry.id), entry.category],
@@ -727,9 +783,18 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
     const id = await transaction(async (client) => {
       const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO projects (workspace_id, kind, key, name, description, icon, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [req.params.id, kind, input.key, input.name, input.description ?? '', input.icon ?? null, req.user!.id],
+        `INSERT INTO projects (workspace_id, kind, key, name, description, icon, created_by, archive_after_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [
+          req.params.id,
+          kind,
+          input.key,
+          input.name,
+          input.description ?? '',
+          input.icon ?? null,
+          req.user!.id,
+          DEFAULT_ARCHIVE_DAYS[kind],
+        ],
       );
       const projectId = rows[0].id;
       await client.query(
@@ -821,6 +886,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
               board_layout = COALESCE($8::jsonb, board_layout),
               sprints_enabled = COALESCE($9, sprints_enabled),
               default_type_id = COALESCE($10, default_type_id),
+              archive_after_days = CASE WHEN $11::boolean THEN $12::int ELSE archive_after_days END,
               updated_at = now()
         WHERE id = $1`,
       [
@@ -834,8 +900,12 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         input.boardLayout ? JSON.stringify(input.boardLayout) : null,
         input.sprintsEnabled ?? null,
         input.defaultTypeId ?? null,
+        input.archiveAfterDays !== undefined,
+        input.archiveAfterDays ?? null,
       ],
     );
+    // A shorter wait archives what has already sat long enough now, not at the next hourly sweep.
+    if (input.archiveAfterDays) await archiveDormantWorkItems(req.params.id);
     projectChanged(workspaceId, req.params.id);
     return fetchProject(req.params.id, req.user!.id);
   });
@@ -900,7 +970,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       if (input.category) {
         await client.query(
           `UPDATE work_items
-              SET completed_at = CASE WHEN $2 = 'done' THEN COALESCE(completed_at, now()) ELSE NULL END
+              SET completed_at = CASE WHEN $2 = 'done' THEN COALESCE(completed_at, now()) ELSE NULL END,
+                  archived_at = CASE WHEN $2 = 'done' THEN archived_at ELSE NULL END
             WHERE status_id = $1`,
           [req.params.id, input.category],
         );
@@ -937,6 +1008,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
               SET status_id = t.id,
                   position = i.position + (SELECT COALESCE(max(position), 0) FROM work_items WHERE status_id = t.id),
                   completed_at = CASE WHEN t.category = 'done' THEN COALESCE(i.completed_at, now()) ELSE NULL END,
+                  archived_at = CASE WHEN t.category = 'done' THEN i.archived_at ELSE NULL END,
                   updated_at = now()
              FROM project_statuses t
             WHERE t.id = $2 AND i.status_id = $1`,
@@ -1409,18 +1481,126 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
   // --- work items --------------------------------------------------------------
 
+  /**
+   * A project's current work: everything but the archive, which is what the
+   * board, the list and the rest show. The archive is read a page at a time
+   * from `/projects/:id/archive`.
+   */
   app.get<{ Params: { id: string } }>('/projects/:id/items', async (req) => {
     await assertProjectAccess(req, req.params.id);
     const { rows } = await query<WorkItemSummary>(
       `SELECT ${ITEM_COLUMNS}
          FROM work_items i JOIN projects p ON p.id = i.project_id
-        WHERE i.project_id = $1
+        WHERE i.project_id = $1 AND i.archived_at IS NULL
         ORDER BY i.position, i.number
-        LIMIT 5000`,
+        LIMIT ${MAX_LISTED_ITEMS}`,
       [req.params.id],
     );
     return rows;
   });
+
+  /**
+   * A page of a project's archive, filtered and ordered here since no reader
+   * holds all of it. Pages are keyed rather than counted: the cursor is where
+   * the last page ended, so items archived while someone scrolls neither
+   * repeat nor go missing from what they have not reached yet.
+   */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    '/projects/:id/archive',
+    async (req): Promise<ArchivePage> => {
+      await assertProjectAccess(req, req.params.id);
+      const input = parse(archivePageQuerySchema, req.query ?? {});
+      // `parse` types what it returns as what was sent, so the defaults are applied again here.
+      const order = ARCHIVE_ORDER[input.sort ?? 'updated'];
+      const descending = input.descending !== 'false';
+      const limit = input.limit ?? ARCHIVE_PAGE_SIZE;
+
+      const params: unknown[] = [req.params.id];
+      const where = ['i.project_id = $1', 'i.archived_at IS NOT NULL'];
+      if (input.q) {
+        // Taken literally, as the filter box takes it.
+        params.push(input.q.replace(/[\\%_]/g, (c) => `\\${c}`));
+        const q = `$${params.length}`;
+        where.push(`(i.title ILIKE '%' || ${q} || '%' OR (p.key || '-' || i.number) ILIKE '%' || ${q} || '%')`);
+      }
+      if (input.person) {
+        params.push(input.person);
+        where.push(`EXISTS (SELECT 1 FROM work_item_roles wr WHERE wr.work_item_id = i.id AND wr.user_id = $${params.length})`);
+      }
+      if (input.completedSince) {
+        params.push(input.completedSince);
+        where.push(`i.completed_at >= $${params.length}`);
+      }
+      const filtered = [...where];
+      const filterParams = [...params];
+
+      if (input.cursor) {
+        const [value, number] = decodeCursor(input.cursor, order.check, isInteger);
+        params.push(value, number);
+        where.push(`(${order.expr}, i.number) ${descending ? '<' : '>'} ($${params.length - 1}::${order.type}, $${params.length}::int)`);
+      }
+      const direction = descending ? 'DESC' : 'ASC';
+      params.push(limit + 1);
+
+      const [{ rows }, { rows: counted }] = await Promise.all([
+        query<WorkItemSummary & { sortValue: string }>(
+          `SELECT ${ITEM_COLUMNS}, (${order.expr})::text AS "sortValue"
+             FROM work_items i
+             JOIN projects p ON p.id = i.project_id
+             JOIN project_statuses st ON st.id = i.status_id
+            WHERE ${where.join(' AND ')}
+            ORDER BY ${order.expr} ${direction}, i.number ${direction}
+            LIMIT $${params.length}`,
+          params,
+        ),
+        query<{ total: number }>(
+          `SELECT count(*)::int AS total
+             FROM work_items i JOIN projects p ON p.id = i.project_id
+            WHERE ${filtered.join(' AND ')}`,
+          filterParams,
+        ),
+      ]);
+
+      // One more than a page was asked for, to know whether there is another.
+      const more = rows.length > limit;
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      return {
+        items: page.map(({ sortValue: _, ...item }) => item),
+        nextCursor: more && last ? encodeCursor(last.sortValue, last.number) : null,
+        total: counted[0].total,
+      };
+    },
+  );
+
+  /**
+   * When each item first had a response, for a queue's insights: the first
+   * comment from anyone but whoever filed it, the first move to another status,
+   * or its being finished, whichever came first. Filing an item is not a status
+   * move, so a status change always means someone picked it up.
+   *
+   * Only what insights can use: current work, which is where anything still
+   * awaiting a response is, and whatever was filed since `createdSince`.
+   */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    '/projects/:id/responses',
+    async (req): Promise<WorkItemResponses> => {
+      await assertProjectAccess(req, req.params.id);
+      const input = parse(responsesQuerySchema, req.query ?? {});
+      const { rows } = await query<{ id: string; respondedAt: string | null }>(
+        `SELECT i.id, LEAST(
+                  (SELECT min(c.created_at) FROM work_item_comments c
+                    WHERE c.work_item_id = i.id AND c.author_id IS DISTINCT FROM i.created_by),
+                  (SELECT min(a.created_at) FROM work_item_activity a
+                    WHERE a.work_item_id = i.id AND a.data->>'kind' = 'status'),
+                  i.completed_at) AS "respondedAt"
+           FROM work_items i
+          WHERE i.project_id = $1 AND (i.archived_at IS NULL OR i.created_at >= $2)`,
+        [req.params.id, input.createdSince],
+      );
+      return Object.fromEntries(rows.filter((r) => r.respondedAt).map((r) => [r.id, r.respondedAt!]));
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/projects/:id/items', async (req, reply) => {
     const { workspaceId } = await assertProjectAccess(req, req.params.id, 'items');
@@ -1541,6 +1721,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
             SET status_id = $2,
                 position = $3 + picked.n - 1,
                 completed_at = CASE WHEN $4 = 'done' THEN COALESCE(i.completed_at, now()) ELSE NULL END,
+                archived_at = CASE WHEN $4 = 'done' THEN i.archived_at ELSE NULL END,
                 updated_at = now()
            FROM unnest($1::uuid[]) WITH ORDINALITY AS picked(id, n)
           WHERE i.id = picked.id`,
@@ -1580,9 +1761,11 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       sprint_id: string | null;
       epic_id: string | null;
       epic_title: string | null;
+      archived: boolean;
     }>(
       `SELECT p.key || '-' || i.number AS key, i.title, i.description, i.type_id, i.priority, i.status_id,
-              st.name AS status_name, st.category AS status_category, i.sprint_id, i.epic_id, e.title AS epic_title
+              st.name AS status_name, st.category AS status_category, i.sprint_id, i.epic_id, e.title AS epic_title,
+              i.archived_at IS NOT NULL AS archived
          FROM work_items i
          JOIN projects p ON p.id = i.project_id
          JOIN project_statuses st ON st.id = i.status_id
@@ -1604,6 +1787,15 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       assertMoveAllowed(project, role, [{ key: current.key, typeId: type.id, from: current.status_id, to: status.id }]);
       target = status;
     }
+
+    // Only finished work is archived, so it has to be done once this change is made.
+    const archiving = input.archived === true && !current.archived;
+    const restoring = input.archived === false && current.archived;
+    if (archiving && (target?.category ?? current.status_category) !== 'done') {
+      throw badRequest('Only finished work can be archived');
+    }
+    // Moving it out of done takes it out of the archive, with no need to say so.
+    const reopening = current.archived && target !== null && target.category !== 'done';
 
     // An epic sits above sprints and other epics: becoming one leaves both.
     const wasEpic = isEpicType(project, current.type_id);
@@ -1641,6 +1833,11 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                   WHEN $12 = 'done' THEN COALESCE(completed_at, now())
                   ELSE NULL
                 END,
+                archived_at = CASE
+                  WHEN $13::boolean THEN now()
+                  WHEN $14::boolean OR ($12::text IS NOT NULL AND $12 <> 'done') THEN NULL
+                  ELSE archived_at
+                END,
                 updated_at = now()
           WHERE id = $1`,
         [
@@ -1656,10 +1853,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           input.estimate !== undefined,
           input.estimate ?? null,
           target?.category ?? null,
+          archiving,
+          restoring,
         ],
       );
       const actor = req.user!.id;
       if (target) await logActivity(client, req.params.id, actor, { kind: 'status', from: current.status_name, to: target.name });
+      if (archiving) await logActivity(client, req.params.id, actor, { kind: 'archived' });
+      if (restoring && !reopening) await logActivity(client, req.params.id, actor, { kind: 'restored' });
       if (input.priority && input.priority !== current.priority) {
         await logActivity(client, req.params.id, actor, { kind: 'priority', from: current.priority, to: input.priority });
       }
@@ -2016,16 +2217,29 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string } }>('/work-items/:id/comments', async (req, reply) => {
     const { workspaceId, projectId } = await assertWorkItemAccess(req, req.params.id, 'comment');
     const input = parse(workItemCommentSchema, req.body ?? {});
-    const { rows } = await query<{ id: string }>(
-      'INSERT INTO work_item_comments (work_item_id, author_id, body) VALUES ($1, $2, $3) RETURNING id',
-      [req.params.id, req.user!.id, input.body],
-    );
-    await query('UPDATE work_items SET updated_at = now() WHERE id = $1', [req.params.id]);
+    const id = await transaction(async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        'INSERT INTO work_item_comments (work_item_id, author_id, body) VALUES ($1, $2, $3) RETURNING id',
+        [req.params.id, req.user!.id, input.body],
+      );
+      // Someone still talking about finished work wants it back in view: a
+      // requester following up on a resolved request, say.
+      const { rows: restored } = await client.query(
+        `UPDATE work_items i SET updated_at = now(), archived_at = NULL
+           FROM (SELECT archived_at FROM work_items WHERE id = $1) was
+          WHERE i.id = $1 AND was.archived_at IS NOT NULL
+          RETURNING i.id`,
+        [req.params.id],
+      );
+      if (restored.length > 0) await logActivity(client, req.params.id, req.user!.id, { kind: 'restored' });
+      else await client.query('UPDATE work_items SET updated_at = now() WHERE id = $1', [req.params.id]);
+      return rows[0].id;
+    });
     await recordItemMentions(req, req.params.id, workspaceId);
     await tell(req, req.params.id, textMembers([input.body]), 'mention');
     projectChanged(workspaceId, projectId, req.params.id);
     reply.status(201);
-    return { id: rows[0].id };
+    return { id };
   });
 
   async function commentRow(id: string) {

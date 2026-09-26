@@ -44,7 +44,7 @@ import { MessageBody } from '../chat/MessageBody';
 import Icon, { DocumentIcon } from '../Icon';
 import { ConfirmDialog } from '../Modal';
 import { useToast } from '../Toast';
-import { EmptyState, IconButton, Spinner } from '../ui';
+import { Button, EmptyState, IconButton, Spinner } from '../ui';
 import ReferenceEditor from './ReferenceEditor';
 import WorkItemAttachments from './WorkItemAttachments';
 import {
@@ -224,6 +224,14 @@ function ItemDetail({
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--color-line)] px-3">
         <TypeIcon type={itemTypeOf(project, item.typeId)} />
         <span className="ml-1 text-sm font-medium text-[var(--color-muted)]">{item.key}</span>
+        {item.archivedAt && (
+          <span
+            title={`Archived ${formatDateTime(item.archivedAt)}, so it is kept off the board and the list. Reopening it, commenting on it or restoring it brings it back.`}
+            className="ml-1 inline-flex items-center gap-1 rounded bg-[var(--color-surface)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)]"
+          >
+            <Icon name="archive" /> Archived
+          </span>
+        )}
         {item.blockedBy > 0 && !done && (
           <span
             className="ml-1 flex items-center gap-1 rounded bg-red-500/10 px-1.5 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400"
@@ -233,6 +241,16 @@ function ItemDetail({
           </span>
         )}
         <span className="flex-1" />
+        {canEdit && item.archivedAt && (
+          <Button variant="subtle" className="text-xs" onClick={() => patch({ archived: false })}>
+            <Icon name="box-arrow-up" /> Restore
+          </Button>
+        )}
+        {canEdit && done && !item.archivedAt && (
+          <IconButton label="Archive" onClick={() => patch({ archived: true })}>
+            <Icon name="archive" />
+          </IconButton>
+        )}
         <IconButton label="Copy link" onClick={copyLink}>
           <Icon name="link-45deg" />
         </IconButton>
@@ -709,16 +727,18 @@ function EpicChildren({
 }) {
   const children = items.filter((other) => other.epicId === epicId);
   const statuses = new Map(project.statuses.map((s) => [s.id, s]));
+  // Archived work is not loaded, but still counts towards how far along the epic is.
+  const archived = project.archive.epics[epicId];
   return (
     <>
-      <Heading count={children.length}>Work in this epic</Heading>
-      {children.length === 0 ? (
+      <Heading count={children.length + (archived?.items ?? 0)}>Work in this epic</Heading>
+      {children.length === 0 && !archived ? (
         <p className="text-sm text-[var(--color-muted)]">
           Nothing yet. Choose this epic on a story, task or bug to organise it here.
         </p>
       ) : (
         <>
-          <EpicProgressBar project={project} items={children} className="mb-2" />
+          <EpicProgressBar project={project} items={children} archived={archived} className="mb-2" />
           <ul className="-mx-2">
             {children.map((child) => {
               const status = statuses.get(child.statusId);
@@ -744,6 +764,11 @@ function EpicChildren({
               );
             })}
           </ul>
+          {archived && (
+            <p className="mt-1 text-xs text-[var(--color-muted)]">
+              <Icon name="archive" /> {archived.items} finished {archived.items === 1 ? 'item is' : 'items are'} archived, in All items.
+            </p>
+          )}
         </>
       )}
     </>
@@ -1091,8 +1116,20 @@ function History({ item, memberMap }: { item: WorkItem; memberMap: Map<string, W
             {activity.map((entry) => (
               <li key={entry.id} className="flex items-start gap-2">
                 <span className="min-w-0 flex-1">
-                  <span className="font-medium text-[var(--color-ink)]">{entry.actor?.name ?? 'Someone'}</span>{' '}
-                  {describeActivity(entry, name)}
+                  {entry.kind === 'archived' && !entry.actor ? (
+                    // The sweep, not a person: nobody to name.
+                    'Archived after sitting untouched'
+                  ) : entry.kind === 'created' && entry.via ? (
+                    // Sent in from outside, through one of the queue's intake tokens.
+                    <>
+                      Sent in through <span className="font-medium text-[var(--color-ink)]">{entry.via}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium text-[var(--color-ink)]">{entry.actor?.name ?? 'Someone'}</span>{' '}
+                      {describeActivity(entry, name)}
+                    </>
+                  )}
                 </span>
                 <span className="shrink-0" title={formatDateTime(entry.createdAt)}>
                   {formatRelative(entry.createdAt)}
@@ -1123,6 +1160,10 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
         : `removed the link: this ${activity.label} ${activity.key} ${activity.title}`;
     case 'attachment':
       return activity.added ? `attached ${activity.filename}` : `removed the file ${activity.filename}`;
+    case 'archived':
+      return 'archived this';
+    case 'restored':
+      return 'brought this back from the archive';
     case 'epic':
       if (!activity.to) return `took this out of the epic ${activity.from ?? ''}`.trimEnd();
       return activity.from ? `moved this from the epic ${activity.from} to ${activity.to}` : `put this under the epic ${activity.to}`;

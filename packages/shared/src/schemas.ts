@@ -1,6 +1,29 @@
 import { z } from 'zod';
 import { WORKSPACE_PERMISSIONS } from './permissions.js';
 
+/** The most of each kind a picker's search returns. */
+export const MAX_LINK_TARGETS = 50;
+
+/** A document a picker offers: enough to show it and point at it. */
+export interface DocumentLinkTarget {
+  id: string;
+  title: string;
+  icon: string | null;
+  mode: 'page' | 'canvas';
+}
+
+/** A spreadsheet a picker offers. */
+export interface SpreadsheetLinkTarget {
+  id: string;
+  title: string;
+  icon: string | null;
+}
+
+export interface LinkTargets {
+  documents: DocumentLinkTarget[];
+  spreadsheets: SpreadsheetLinkTarget[];
+}
+
 const uuid = z.string().uuid();
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be a #rrggbb hex color');
 /** YYYY-MM-DD, the wire format for calendar filters and due dates. */
@@ -143,6 +166,20 @@ export const searchQuerySchema = z.object({
   includeArchived: z.coerce.boolean().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
   offset: z.coerce.number().int().min(0).default(0),
+});
+
+/**
+ * What a picker asks for as someone types a name: documents and spreadsheets
+ * whose titles match, those starting with it first, then the most recently
+ * touched. With nothing typed, the most recently touched. Pickers ask the
+ * server rather than filtering a list they hold, since a workspace can have
+ * more of either than any list it would send.
+ */
+export const linkTargetsQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  /** Comma-separated: `documents`, `spreadsheets`, or both. */
+  kinds: z.string().max(40).default('documents,spreadsheets'),
+  limit: z.coerce.number().int().min(1).max(MAX_LINK_TARGETS).default(20),
 });
 
 export const createCommentSchema = z.object({

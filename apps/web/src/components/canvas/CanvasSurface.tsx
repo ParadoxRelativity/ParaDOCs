@@ -280,6 +280,9 @@ export default function CanvasSurface(props: Props) {
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
   // A double-click whose first press placed something is not also asking for a note.
   const placedAt = useRef(0);
+  // A right-button drag that panned the board. Windows and Linux browsers open
+  // their context menu on release, which would pop up at the end of every such pan.
+  const rightPanned = useRef(false);
   // Fingers on the board, so a second one turns the gesture into a pinch.
   const touches = useRef(new Map<number, { x: number; y: number }>());
   // When a key was last pressed, so finishing an edit from the keyboard puts
@@ -581,6 +584,7 @@ export default function CanvasSurface(props: Props) {
       }
 
       if (g.kind === 'pan') {
+        if (e.buttons & 2 && Math.hypot(e.clientX - g.startX, e.clientY - g.startY) > 3) rightPanned.current = true;
         setViewport({
           ...view,
           x: g.originX + (e.clientX - g.startX),
@@ -1035,6 +1039,7 @@ export default function CanvasSurface(props: Props) {
 
   function startBackgroundGesture(e: React.PointerEvent) {
     setEditingId(null);
+    rightPanned.current = false;
     if (gesture.current?.kind === 'pinch') return;
     if (gesture.current) abandonGesture();
     const view = live.current;
@@ -1149,6 +1154,11 @@ export default function CanvasSurface(props: Props) {
         props.onFiles(files, toCanvasPoint(live.current, e.clientX, e.clientY, rect));
       }}
       onPointerDown={startBackgroundGesture}
+      onContextMenu={(e) => {
+        if (!rightPanned.current) return;
+        rightPanned.current = false;
+        e.preventDefault();
+      }}
       onDoubleClick={(e) => {
         if (!editable) return;
         const rect = surface.current?.getBoundingClientRect();

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import type {
   Channel,
   DocumentMode,
@@ -23,6 +23,7 @@ import {
   useUpdateFolder,
   useTags,
   useTeams,
+  useFolderDocuments,
   useTree,
   type WorkspaceSummary,
 } from '../api/hooks';
@@ -34,7 +35,7 @@ import {
   useDesktopWorkspaces,
   type DesktopConnection,
 } from '../lib/desktop';
-import { Button, IconButton, InlineIconNameForm, InlineInput, TagChip } from './ui';
+import { Button, IconButton, InlineIconNameForm, InlineInput, LoadMore, TagChip } from './ui';
 import Icon, { DocumentIcon, type IconName } from './Icon';
 import Avatar from './Avatar';
 import { ConfirmDialog, Modal } from './Modal';
@@ -388,7 +389,7 @@ export default function LeftSidebar(props: Props) {
             <SidebarAction icon="file-earmark-plus" label="New document" onClick={() => addDocument(null)} />
             <SidebarAction icon="easel" label="New canvas" onClick={() => addDocument(null, 'canvas')} />
             <SidebarAction
-              icon="file-earmark-arrow-up"
+              icon="file-earmark-arrow-down"
               label={documentImport.importing ? 'Importing…' : 'Import document'}
               onClick={documentImport.choose}
             />
@@ -658,9 +659,9 @@ function SidebarAction({
   );
 }
 
-/** Documents in this folder and every folder nested beneath it. */
-function documentIdsDeep(folder: FolderNode): string[] {
-  return [...folder.documents.map((d) => d.id), ...folder.children.flatMap(documentIdsDeep)];
+/** How many documents are in this folder and every folder nested beneath it. */
+function documentCountDeep(folder: FolderNode): number {
+  return folder.documentCount + folder.children.reduce((total, child) => total + documentCountDeep(child), 0);
 }
 
 function FolderRow({
@@ -702,7 +703,7 @@ function FolderRow({
   const remove = useDeleteFolder(workspaceId);
   const toast = useToast();
 
-  const count = folder.documents.length + folder.children.length;
+  const count = folder.documentCount + folder.children.length;
   // A subfolder being named here forces the parent open so the field is visible.
   const creatingHere = creatingIn === folder.id;
   const expanded = open || creatingHere;
@@ -850,20 +851,19 @@ function FolderRow({
               onCommitCreate={onCommitCreate}
             />
           ))}
-          {folder.documents.map((doc) => (
-            <DocumentRow
-              key={doc.id}
-              doc={doc}
-              depth={depth + 1}
-              active={doc.id === activeDocumentId}
+          {folder.documentCount > 0 && (
+            <FolderDocuments
+              folderId={folder.id}
+              depth={depth}
               workspaceId={workspaceId}
-              canDelete={doc.permission === 'edit' && can('docs.delete')}
+              activeDocumentId={activeDocumentId}
+              can={can}
               canManageAccess={canManageAccess}
               onManageAccess={onManageAccess}
-              onSelect={onSelectDocument}
-              onDeleted={onDocumentDeleted}
+              onSelectDocument={onSelectDocument}
+              onDocumentDeleted={onDocumentDeleted}
             />
-          ))}
+          )}
           {count === 0 && !creatingHere && (
             <p
               className="py-1 text-[11px] text-[var(--color-muted)]"
@@ -880,19 +880,19 @@ function FolderRow({
       {confirmingDelete && (
         <DeleteFolderDialog
           name={folder.name}
-          count={documentIdsDeep(folder).length}
+          count={documentCountDeep(folder)}
           noun={DOCUMENT_NOUN}
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={(deleteDocuments) => {
             setConfirmingDelete(false);
-            const documentIds = documentIdsDeep(folder);
             remove.mutate(
               { id: folder.id, deleteContents: deleteDocuments },
               {
-                onSuccess: () => {
+                onSuccess: (result) => {
                   toast(deleteDocuments ? `Deleted "${folder.name}" and its documents` : `Deleted "${folder.name}"`);
-                  // Whatever was showing one of them has to move off it.
-                  if (deleteDocuments) for (const id of documentIds) onDocumentDeleted(id);
+                  // Whatever was showing one of them has to move off it. The
+                  // server names them, since not all of them need be loaded here.
+                  for (const id of result?.deleted ?? []) onDocumentDeleted(id);
                 },
                 onError: (err) => toast(err instanceof Error ? err.message : 'Could not delete folder', 'error'),
               },
@@ -901,6 +901,73 @@ function FolderRow({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The documents in an open folder, read a page at a time: a folder can hold
+ * more than the sidebar should load at once, so the rest arrive as the list
+ * is scrolled to its end.
+ */
+function FolderDocuments({
+  folderId,
+  depth,
+  workspaceId,
+  activeDocumentId,
+  can,
+  canManageAccess,
+  onManageAccess,
+  onSelectDocument,
+  onDocumentDeleted,
+}: {
+  folderId: string;
+  depth: number;
+  workspaceId: string;
+  activeDocumentId: string | null;
+  can: Can;
+  canManageAccess: boolean;
+  onManageAccess: (target: NamedAccessTarget) => void;
+  onSelectDocument: (id: string) => void;
+  onDocumentDeleted: (id: string) => void;
+}) {
+  const documents = useFolderDocuments(workspaceId, folderId, true);
+  const { fetchNextPage } = documents;
+  const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
+  const rows = documents.data?.pages.flatMap((page) => page.items) ?? [];
+
+  if (documents.isLoading) {
+    return (
+      <p className="py-1 text-[11px] text-[var(--color-muted)]" style={{ paddingLeft: (depth + 1) * 12 + 22 }}>
+        Loading…
+      </p>
+    );
+  }
+  return (
+    <>
+      {rows.map((doc) => (
+        <DocumentRow
+          key={doc.id}
+          doc={doc}
+          depth={depth + 1}
+          active={doc.id === activeDocumentId}
+          workspaceId={workspaceId}
+          canDelete={doc.permission === 'edit' && can('docs.delete')}
+          canManageAccess={canManageAccess}
+          onManageAccess={onManageAccess}
+          onSelect={onSelectDocument}
+          onDeleted={onDocumentDeleted}
+        />
+      ))}
+      <div style={{ paddingLeft: (depth + 1) * 12 }}>
+        <LoadMore
+          hasMore={documents.hasNextPage}
+          loading={documents.isFetchingNextPage}
+          failed={documents.isError}
+          onLoadMore={loadMore}
+          label="Show more"
+        />
+      </div>
+    </>
   );
 }
 

@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useAttachUpload, useDeleteUpload, useUploads, type WorkspaceUpload } from '../api/hooks';
 import { useFolderOptions } from './DocumentMeta';
 import { cx, formatBytes, formatRelative } from '../lib/util';
 import { ConfirmDialog, Modal } from './Modal';
 import { useToast } from './Toast';
-import { Button, Spinner } from './ui';
+import { Button, LoadMore, Spinner } from './ui';
 import Icon, { type IconName } from './Icon';
 
 interface Props {
@@ -35,8 +35,12 @@ export default function UploadsPanel({ workspaceId, onOpenDocument }: Props) {
   const deleteUpload = useDeleteUpload(workspaceId);
   const toast = useToast();
 
-  const totals = uploads.data?.totals;
-  const rows = uploads.data?.uploads ?? [];
+  // Every page carries the totals; the newest are the most up to date.
+  const pages = uploads.data?.pages ?? [];
+  const totals = pages[pages.length - 1]?.totals;
+  const rows = pages.flatMap((page) => page.uploads);
+  const { fetchNextPage } = uploads;
+  const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
 
   return (
     <div className="space-y-3">
@@ -134,6 +138,13 @@ export default function UploadsPanel({ workspaceId, onOpenDocument }: Props) {
           ))}
         </ul>
       )}
+      <LoadMore
+        hasMore={uploads.hasNextPage}
+        loading={uploads.isFetchingNextPage}
+        failed={uploads.isError && rows.length > 0}
+        onLoadMore={loadMore}
+        label="Load more files"
+      />
 
       {attaching && (
         <AttachDialog

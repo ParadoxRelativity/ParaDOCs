@@ -1,5 +1,11 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { MAX_ARCHIVE_PAGE_SIZE } from '@paradocs/shared';
 import type {
+  ContentsPage,
+  ArchivePage,
+  LinkTargets,
+  ArchivePageQuery,
+  WorkItemResponses,
   AccessSettings,
   ActivityDay,
   BoardLayout,
@@ -44,6 +50,11 @@ import type {
   UpdateItemTypeInput,
   CreateWorkItemInput,
   CreateWorkItemLinkInput,
+  CreateIntakeTokenInput,
+  CreatedIntakeToken,
+  IntakeSettings,
+  IntakeToken,
+  UpdateIntakeTokenInput,
   WorkItemAttachment,
   WorkItemLink,
   Project,
@@ -68,6 +79,7 @@ import { formatBytes } from '../lib/util';
 import { measure } from '../lib/chatFiles';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
+import { forgetCache } from '../lib/queryPersistence';
 import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken } from '../lib/server';
 
 export interface WorkspaceSummary extends Workspace {
@@ -83,15 +95,19 @@ export interface WorkspaceSummary extends Workspace {
   visibleApps: WorkspaceApp[];
 }
 
-/** The sidebar tree. Unfiled documents are not included; see useAllDocuments. */
+/**
+ * The sidebar tree: folders, and how many documents each holds. The documents
+ * are read per folder when it is opened; see useFolderDocuments. Unfiled
+ * documents are not included; see useAllDocuments.
+ */
 export interface Tree {
   folders: FolderNode[];
 }
 
-/** The Sheets app's tree, which does include the spreadsheets in no folder. */
+/** The Sheets app's tree: folders with their counts, and how many spreadsheets are in none. */
 export interface SheetTree {
   folders: SheetFolderNode[];
-  unfiled: SpreadsheetSummary[];
+  unfiledCount: number;
 }
 
 export type DocumentSort = 'updated' | 'created' | 'title';
@@ -121,12 +137,15 @@ export const keys = {
   presenceSettings: ['presenceSettings'] as const,
   notifications: ['notifications'] as const,
   uploadConfig: ['uploadConfig'] as const,
-  spreadsheets: (ws: string) => ['spreadsheets', ws] as const,
   spreadsheet: (id: string) => ['spreadsheet', id] as const,
   teams: (ws: string) => ['teams', ws] as const,
   projects: (ws: string, archived = false) => ['projects', ws, archived] as const,
   project: (id: string) => ['project', id] as const,
+  intake: (projectId: string) => ['intake', projectId] as const,
   workItems: (projectId: string) => ['workItems', projectId] as const,
+  workItemResponses: (projectId: string) => ['workItemResponses', projectId] as const,
+  archivedWorkItems: (projectId: string, completedSince?: string) =>
+    ['archivedWorkItems', projectId, completedSince ?? null] as const,
   workItem: (id: string) => ['workItem', id] as const,
   workItemTimeline: (id: string) => ['workItemTimeline', id] as const,
   workItemBacklinks: (id: string) => ['workItemBacklinks', id] as const,
@@ -234,6 +253,8 @@ export function useLogout() {
     mutationFn: () => api.post('/auth/logout'),
     onSuccess: () => {
       setSessionToken(null);
+      // What was kept on disk for the next launch goes too.
+      void forgetCache(qc);
       qc.clear();
     },
   });
@@ -319,6 +340,48 @@ export function useSheetTree(workspaceId: string | undefined) {
   });
 }
 
+/**
+ * A folder's documents, by title, a page at a time, read only while it is
+ * open. Kept under the tree's key, so whatever asks for the tree again asks
+ * for every open folder's contents again with it.
+ */
+export function useFolderDocuments(workspaceId: string, folderId: string, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: [...keys.tree(workspaceId), 'folder', folderId] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<ContentsPage<DocumentSummary>>(`/folders/${folderId}/documents${qs({ cursor: pageParam ?? undefined })}`),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+  });
+}
+
+/** The same for a Sheets folder's spreadsheets, under the Sheets tree's key. */
+export function useFolderSpreadsheets(workspaceId: string, folderId: string, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: [...keys.sheetTree(workspaceId), 'folder', folderId] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<ContentsPage<SpreadsheetSummary>>(`/folders/${folderId}/spreadsheets${qs({ cursor: pageParam ?? undefined })}`),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+  });
+}
+
+/** The spreadsheets in no folder, most recently touched first, a page at a time. */
+export function useUnfiledSpreadsheets(workspaceId: string | undefined, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: [...keys.sheetTree(workspaceId ?? ''), 'unfiled'] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<ContentsPage<SpreadsheetSummary>>(
+        `/workspaces/${workspaceId}/spreadsheets${qs({ unfiled: true, cursor: pageParam ?? undefined })}`,
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled: Boolean(workspaceId) && enabled,
+  });
+}
+
 /** The tree a folder belongs to, which is what changes when it does. */
 function folderTreeKey(workspaceId: string, app: FolderApp) {
   return app === 'sheets' ? keys.sheetTree(workspaceId) : keys.tree(workspaceId);
@@ -347,14 +410,12 @@ export function useDeleteFolder(workspaceId: string, app: FolderApp = 'docs') {
   const qc = useQueryClient();
   return useMutation({
     /** What is inside is kept, unfiled, unless `deleteContents` says to delete it too. */
+    // With its contents deleted, says which were, so anything showing one can move off it.
     mutationFn: ({ id, deleteContents }: { id: string; deleteContents: boolean }) =>
-      api.delete(`/folders/${id}${deleteContents ? '?contents=delete' : ''}`),
+      api.delete<{ deleted: string[] } | undefined>(`/folders/${id}${deleteContents ? '?contents=delete' : ''}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: folderTreeKey(workspaceId, app) });
-      if (app === 'sheets') {
-        qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
-        return;
-      }
+      if (app === 'sheets') return;
       // Documents either became unfiled or are gone, which the flat listing and
       // the workspace's document count both show.
       qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
@@ -697,11 +758,27 @@ export function useDeleteDocument(workspaceId: string) {
 // Their own application, with their own records: nothing here touches the
 // document hooks above, and nothing there knows these exist.
 
-export function useSpreadsheets(workspaceId: string | undefined) {
+/**
+ * Documents and spreadsheets whose titles match what someone is typing, for
+ * pickers, searched on the server so nothing is out of reach however many the
+ * workspace holds. What was found for the last query stays showing while the
+ * next is asked, so the list does not blink between keystrokes.
+ */
+export function useLinkTargets(
+  workspaceId: string | undefined,
+  q: string,
+  options: { kinds?: ('documents' | 'spreadsheets')[]; limit?: number; enabled?: boolean } = {},
+) {
+  const kinds = (options.kinds ?? ['documents', 'spreadsheets']).join(',');
+  const limit = options.limit ?? 20;
   return useQuery({
-    queryKey: keys.spreadsheets(workspaceId ?? ''),
-    queryFn: () => api.get<SpreadsheetSummary[]>(`/workspaces/${workspaceId}/spreadsheets`),
-    enabled: Boolean(workspaceId),
+    queryKey: ['linkTargets', workspaceId ?? '', q, kinds, limit] as const,
+    queryFn: () =>
+      api.get<LinkTargets>(
+        `/workspaces/${workspaceId}/link-targets?${new URLSearchParams({ ...(q ? { q } : {}), kinds, limit: String(limit) })}`,
+      ),
+    enabled: Boolean(workspaceId) && (options.enabled ?? true),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -720,7 +797,6 @@ export function useCreateSpreadsheet(workspaceId: string) {
       api.post<SpreadsheetSummary>(`/workspaces/${workspaceId}/spreadsheets`, input),
     onSuccess: (sheet) => {
       qc.setQueryData(keys.spreadsheet(sheet.id), sheet);
-      void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
       void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
       // The same "open on the name, selected" welcome a new document gets.
       rememberNewDocument(sheet.id);
@@ -744,7 +820,6 @@ export function useUpdateSpreadsheet(workspaceId: string) {
     }) => api.patch<SpreadsheetSummary>(`/spreadsheets/${id}`, patch),
     onSuccess: (sheet) => {
       qc.setQueryData(keys.spreadsheet(sheet.id), sheet);
-      void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
       void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
     },
   });
@@ -755,7 +830,6 @@ export function useDeleteSpreadsheet(workspaceId: string) {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/spreadsheets/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: keys.spreadsheets(workspaceId) });
       return qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
     },
   });
@@ -812,6 +886,7 @@ export function useUpdateProject(workspaceId: string, projectId: string) {
       boardLayout?: BoardLayout;
       sprintsEnabled?: boolean;
       defaultTypeId?: string;
+      archiveAfterDays?: number | null;
     }) => api.patch<Project>(`/projects/${projectId}`, patch),
     onSuccess: (project) => {
       qc.setQueryData(keys.project(project.id), project);
@@ -831,6 +906,36 @@ export function useDeleteProject(workspaceId: string) {
       void qc.invalidateQueries({ queryKey: ['projects', workspaceId] });
     },
   });
+}
+
+/** A queue's intake tokens, and whether the server's intake webhook is on at all. */
+export function useIntake(projectId: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.intake(projectId),
+    queryFn: () => api.get<IntakeSettings>(`/projects/${projectId}/intake`),
+    enabled,
+  });
+}
+
+/** Making, changing and revoking a queue's intake tokens. */
+export function useIntakeTokens(projectId: string) {
+  const qc = useQueryClient();
+  const settle = () => void qc.invalidateQueries({ queryKey: keys.intake(projectId) });
+  return {
+    create: useMutation({
+      mutationFn: (input: CreateIntakeTokenInput) => api.post<CreatedIntakeToken>(`/projects/${projectId}/intake-tokens`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: UpdateIntakeTokenInput & { id: string }) =>
+        api.patch<IntakeToken>(`/intake-tokens/${id}`, patch),
+      onSuccess: settle,
+    }),
+    revoke: useMutation({
+      mutationFn: (id: string) => api.delete(`/intake-tokens/${id}`),
+      onSuccess: settle,
+    }),
+  };
 }
 
 /** Adding, changing and removing a project's statuses, roles and workflows. */
@@ -980,6 +1085,71 @@ export function useWorkItems(projectId: string | undefined) {
   });
 }
 
+/** The address of one page of a project's archive. */
+function archiveUrl(projectId: string, query: ArchivePageQuery): string {
+  const params = new URLSearchParams();
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') params.set(name, String(value));
+  }
+  return `/projects/${projectId}/archive?${params}`;
+}
+
+/**
+ * A project's archive a page at a time, filtered and ordered by the server,
+ * for All items. Further pages are fetched as the reader asks for them.
+ */
+export function useArchivePages(projectId: string, query: Omit<ArchivePageQuery, 'cursor'>, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ['archivedWorkItems', projectId, 'pages', query] as const,
+    queryFn: ({ pageParam }) => api.get<ArchivePage>(archiveUrl(projectId, { ...query, cursor: pageParam ?? undefined })),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+  });
+}
+
+/**
+ * Every archived item finished since a moment, fetched page after page, for
+ * insights, which needs all of them to say anything about them. How much that
+ * is depends on the range asked for, not on how large the archive has grown.
+ */
+export function useArchivedWorkItems(projectId: string, options: { enabled: boolean; completedSince?: string }) {
+  return useQuery({
+    queryKey: keys.archivedWorkItems(projectId, options.completedSince),
+    queryFn: async () => {
+      const items: WorkItemSummary[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await api.get<ArchivePage>(
+          archiveUrl(projectId, {
+            completedSince: options.completedSince,
+            limit: MAX_ARCHIVE_PAGE_SIZE,
+            sort: 'key',
+            cursor,
+          }),
+        );
+        items.push(...page.items);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      return items;
+    },
+    enabled: options.enabled,
+  });
+}
+
+/**
+ * When each of a queue's items first had a response, for its insights: those
+ * still current, and those filed since `createdSince`.
+ */
+export function useWorkItemResponses(projectId: string | undefined, createdSince: string) {
+  return useQuery({
+    queryKey: [...keys.workItemResponses(projectId ?? ''), createdSince] as const,
+    queryFn: () =>
+      api.get<WorkItemResponses>(`/projects/${projectId}/responses?createdSince=${encodeURIComponent(createdSince)}`),
+    enabled: Boolean(projectId),
+  });
+}
+
 export function useWorkItem(id: string | undefined) {
   return useQuery({
     queryKey: keys.workItem(id ?? ''),
@@ -1005,6 +1175,9 @@ export function useWorkItemListing(
 function settleItem(qc: QueryClient, projectId: string, item?: WorkItem) {
   if (item) qc.setQueryData(keys.workItem(item.id), item);
   void qc.invalidateQueries({ queryKey: keys.workItems(projectId) });
+  // An item can go into the archive or come out of it, which the project's totals count.
+  void qc.invalidateQueries({ queryKey: ['archivedWorkItems', projectId] });
+  void qc.invalidateQueries({ queryKey: keys.project(projectId) });
   void qc.invalidateQueries({ queryKey: ['workItemListing'] });
   void qc.invalidateQueries({ queryKey: ['projects'] });
   if (item) {
@@ -1339,13 +1512,20 @@ export interface UploadTotals {
   unattached_bytes: number;
 }
 
+/**
+ * A workspace's files, newest first, a page at a time; the next page is
+ * fetched when the panel asks for it. Every page carries the totals, so the
+ * counts stay current as files are deleted.
+ */
 export function useUploads(workspaceId: string | undefined, unattachedOnly: boolean, enabled: boolean) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['uploads', workspaceId, unattachedOnly],
-    queryFn: () =>
-      api.get<{ uploads: WorkspaceUpload[]; totals: UploadTotals }>(
-        `/workspaces/${workspaceId}/uploads${qs({ unattached: unattachedOnly })}`,
+    queryFn: ({ pageParam }) =>
+      api.get<{ uploads: WorkspaceUpload[]; totals: UploadTotals; nextCursor: string | null }>(
+        `/workspaces/${workspaceId}/uploads${qs({ unattached: unattachedOnly, cursor: pageParam ?? undefined })}`,
       ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
     enabled: Boolean(workspaceId) && enabled,
   });
 }
