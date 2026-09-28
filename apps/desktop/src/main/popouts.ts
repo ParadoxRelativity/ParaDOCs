@@ -105,6 +105,12 @@ export function focusedPopout(): BrowserWindow | undefined {
   return undefined;
 }
 
+/** Whether a channel's pop-out is the window in front. */
+export function isPopoutFocused(connectionId: string, channelId: string): boolean {
+  const entry = popouts.get(keyOf(connectionId, channelId));
+  return Boolean(entry && !entry.window.isDestroyed() && entry.window.isFocused());
+}
+
 export function popoutFor(connectionId: string, channelId: string): PoppedOut | undefined {
   return popouts.get(keyOf(connectionId, channelId));
 }

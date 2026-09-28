@@ -2,6 +2,7 @@ import { app, dialog } from 'electron';
 import { addConnection, lastOpened, listConnections, type Connection } from './connections.js';
 import { registerIpc } from './ipc.js';
 import { buildMenu } from './menu.js';
+import { startNotifier } from './notifier.js';
 import { receiveSignInAddress, registerSignInScheme, signInAddressIn } from './signIn.js';
 import { initUpdates } from './updater.js';
 import { focusAppWindow, hasOpenWindow, openConnection, shutdownAll } from './windows.js';
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
   buildMenu();
   initUpdates();
   await openStartup();
+  startNotifier();
 
   app.on('activate', () => {
     if (!hasOpenWindow()) void openStartup();

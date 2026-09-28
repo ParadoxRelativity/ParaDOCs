@@ -4,9 +4,10 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
  * The desktop bridge for the web client. It is narrow on purpose: a page can
  * list and switch connections, add or remove a server, open one of its own
  * channels in a window of its own, read notifications from the other
- * connections, keep app-wide preferences, and see and apply updates. It has no
- * file system, no Node and no raw IPC, and the main process checks every call
- * again and answers only a connection page's main frame.
+ * connections, have its own announced by the operating system, keep app-wide
+ * preferences, and see and apply updates. It has no file system, no Node and
+ * no raw IPC, and the main process checks every call again and answers only a
+ * connection page's main frame.
  */
 
 function subscribe(channel: string, handler: (...args: unknown[]) => void): () => void {
@@ -56,6 +57,8 @@ contextBridge.exposeInMainWorld('paradocsDesktop', {
   },
   notifications: {
     list: () => ipcRenderer.invoke('desktop:notifications:list'),
+    changed: (state: { quiet: boolean; openChannelId: string | null }) =>
+      ipcRenderer.invoke('desktop:notifications:changed', state),
     markRead: (connectionId: string, channelIds?: string[]) =>
       ipcRenderer.invoke('desktop:notifications:markRead', connectionId, channelIds),
     markMentionsRead: (connectionId: string, documentIds?: string[]) =>

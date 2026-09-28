@@ -44,15 +44,19 @@ import {
 } from './updater.js';
 import { forgetWorkspaces, notificationsFor, postTo, workspacesFor, type Outcome } from './connectionApi.js';
 import { getPreferences, setPreference } from './preferences.js';
+import { forgetNotifications, pageChanged } from './notifier.js';
 
 const UUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const UUID = new RegExp(`^${UUID_SOURCE}$`, 'i');
 /**
- * Where a page may ask a connection to land: a workspace, a channel, document
- * or spreadsheet in one, or an invitation. Nothing else, so a page cannot steer
- * another connection's page anywhere of its choosing.
+ * Where a page may ask a connection to land: a workspace, a channel, document,
+ * spreadsheet, project or work item in one, or an invitation. Nothing else, so
+ * a page cannot steer another connection's page anywhere of its choosing.
  */
-const APP_PATH = new RegExp(`^/(w/${UUID_SOURCE}(/(c|d|s)/${UUID_SOURCE})?|invite/[A-Za-z0-9_-]{8,128})$`, 'i');
+const APP_PATH = new RegExp(
+  `^/(w/${UUID_SOURCE}(/(c|d|s)/${UUID_SOURCE}|/p/${UUID_SOURCE}(/${UUID_SOURCE})?)?|invite/[A-Za-z0-9_-]{8,128})$`,
+  'i',
+);
 
 function failure(err: unknown): Outcome {
   return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -251,6 +255,7 @@ export function registerIpc(): void {
       }
       await unloadConnection(connection.id);
       removeConnection(connection.id);
+      forgetNotifications(connection.id);
       forgetWorkspaces(connection.id);
       // Removing a server signs the app out of it. A local workspace keeps its
       // documents on disk either way: taking it off the list must never be a
@@ -379,6 +384,14 @@ export function registerIpc(): void {
         })),
     ),
   );
+
+  // A page's own bar changed, or what it has open did. The notifier asks its
+  // server itself rather than taking the page's word for what is there.
+  handle('desktop:notifications:changed', async (caller, state): Promise<void> => {
+    const page = state && typeof state === 'object' ? (state as Record<string, unknown>) : {};
+    const channelId = typeof page.openChannelId === 'string' && UUID.test(page.openChannelId) ? page.openChannelId : null;
+    await pageChanged(caller.id, { quiet: page.quiet === true, openChannelId: channelId });
+  });
 
   handle('desktop:notifications:markRead', (_caller, id, channelIds): Promise<Outcome> | Outcome => {
     const connection = connectionFrom(id);
