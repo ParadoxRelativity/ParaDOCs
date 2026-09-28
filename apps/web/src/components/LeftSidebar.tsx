@@ -160,7 +160,9 @@ export default function LeftSidebar(props: Props) {
   const toast = useToast();
   const documentImport = useDocumentImport(workspaceId, props.onSelectDocument);
 
-  // A press anywhere outside the workspace menu, or Escape, puts it away.
+  // A press anywhere outside the workspace menu, Escape, or the window losing
+  // focus puts it away. In the desktop app a click on another connection's page
+  // never reaches this one, so the lost focus is all there is to go on.
   useEffect(() => {
     if (!switcherOpen) return;
     const onPointer = (event: MouseEvent) => {
@@ -169,11 +171,14 @@ export default function LeftSidebar(props: Props) {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setSwitcherOpen(false);
     };
+    const onBlur = () => setSwitcherOpen(false);
     document.addEventListener('mousedown', onPointer);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
     return () => {
       document.removeEventListener('mousedown', onPointer);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onBlur);
     };
   }, [switcherOpen]);
 
