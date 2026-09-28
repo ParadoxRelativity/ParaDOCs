@@ -768,6 +768,26 @@ export default function CanvasSurface(props: Props) {
     };
   }, []);
 
+  // The menu after a right-button pan opens wherever the button came up: over
+  // the toolbars, the minimap or off the board, not only on this surface. So it
+  // is refused on the window, and the next press of any kind clears the flag.
+  useEffect(() => {
+    function onContextMenu(e: MouseEvent) {
+      if (!rightPanned.current) return;
+      rightPanned.current = false;
+      e.preventDefault();
+    }
+    function onDown() {
+      rightPanned.current = false;
+    }
+    window.addEventListener('contextmenu', onContextMenu, { capture: true });
+    window.addEventListener('pointerdown', onDown, { capture: true });
+    return () => {
+      window.removeEventListener('contextmenu', onContextMenu, { capture: true });
+      window.removeEventListener('pointerdown', onDown, { capture: true });
+    };
+  }, []);
+
   /**
    * A second finger on the board turns whatever the first one started into a
    * pinch, so zooming works wherever the fingers land, elements included.
@@ -1039,7 +1059,6 @@ export default function CanvasSurface(props: Props) {
 
   function startBackgroundGesture(e: React.PointerEvent) {
     setEditingId(null);
-    rightPanned.current = false;
     if (gesture.current?.kind === 'pinch') return;
     if (gesture.current) abandonGesture();
     const view = live.current;
@@ -1154,11 +1173,6 @@ export default function CanvasSurface(props: Props) {
         props.onFiles(files, toCanvasPoint(live.current, e.clientX, e.clientY, rect));
       }}
       onPointerDown={startBackgroundGesture}
-      onContextMenu={(e) => {
-        if (!rightPanned.current) return;
-        rightPanned.current = false;
-        e.preventDefault();
-      }}
       onDoubleClick={(e) => {
         if (!editable) return;
         const rect = surface.current?.getBoundingClientRect();
