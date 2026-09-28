@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   Channel,
   DocumentMode,
@@ -148,6 +148,7 @@ export default function LeftSidebar(props: Props) {
   const createDocument = useCreateDocument(workspaceId);
   const createWorkspace = useCreateWorkspace();
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcher = useRef<HTMLDivElement>(null);
   /**
    * Where a new folder is being named: `null` for the top level, a folder id for
    * a subfolder, `undefined` when nothing is being created.
@@ -158,6 +159,23 @@ export default function LeftSidebar(props: Props) {
   const [managingTags, setManagingTags] = useState(false);
   const toast = useToast();
   const documentImport = useDocumentImport(workspaceId, props.onSelectDocument);
+
+  // A press anywhere outside the workspace menu, or Escape, puts it away.
+  useEffect(() => {
+    if (!switcherOpen) return;
+    const onPointer = (event: MouseEvent) => {
+      if (!switcher.current?.contains(event.target as Node)) setSwitcherOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSwitcherOpen(false);
+    };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [switcherOpen]);
 
   const current = workspaces.find((w) => w.id === workspaceId);
   // In the desktop app the workspace menu spans every connection, not just this server.
@@ -190,9 +208,10 @@ export default function LeftSidebar(props: Props) {
   return (
     <div className="flex h-full flex-col bg-[var(--color-surface)]">
       {/* Workspace switcher */}
-      <div className="relative border-b border-[var(--color-line)] p-2">
+      <div ref={switcher} className="relative border-b border-[var(--color-line)] p-2">
         <button
           onClick={() => setSwitcherOpen((v) => !v)}
+          aria-expanded={switcherOpen}
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-line)]/50"
         >
           <WorkspaceIcon name={current?.name ?? 'Workspace'} icon={current?.icon} avatarUrl={current?.avatarUrl} />
