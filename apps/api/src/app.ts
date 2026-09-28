@@ -93,10 +93,12 @@ export async function buildApp() {
   });
 
   // The version lets an open browser tab notice the server has been upgraded
-  // underneath it.
+  // underneath it. The public address is what links meant for someone else
+  // are built on: a client's own origin can be a loopback proxy or a LAN
+  // address nobody else can reach.
   app.get('/api/health', async (_req, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return { ok: true, version: serverVersion };
+    return { ok: true, version: serverVersion, publicUrl: config.publicUrl || null };
   });
 
   // In production the API also serves the built SPA, so self-hosting is one
