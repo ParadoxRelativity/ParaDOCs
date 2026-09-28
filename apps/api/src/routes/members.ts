@@ -7,7 +7,7 @@ import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess, workspaceMembership } from '../plugins/session.js';
 import { assertMayGrant, loadRole, type RoleRow } from '../lib/workspaceRoles.js';
 import { managesAccess, permissionList } from '../lib/roles.js';
-import { publishToWorkspace } from '../chat/hub.js';
+import { publishToUser, publishToWorkspace } from '../chat/hub.js';
 import { accessChanged } from '../lib/accessEvents.js';
 
 /** Everyone with the workspace open refreshes who is in it. */
@@ -314,6 +314,8 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     });
 
     membersChanged(invite.workspace_id);
+    // The invitation leaves the bell on their other devices too.
+    publishToUser(req.user.id, { type: 'notifications.changed' });
     return { workspaceId: invite.workspace_id, role: invite.role_name, alreadyMember: false };
   });
 };

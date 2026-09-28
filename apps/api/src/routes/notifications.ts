@@ -12,6 +12,7 @@ import {
   type WorkItemNotification,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
+import { publishToUser } from '../chat/hub.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
 import { channelLevelSql, documentLevelSql, projectLevelSql } from '../lib/access.js';
@@ -336,7 +337,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
   /** Clears work item notifications — the ones given, or all of them. Opening the item is what normally calls this. */
   app.post('/notifications/work-items/read', async (req, reply) => {
     const input = parse(readWorkItemsSchema, req.body ?? {});
-    await query(
+    const { rowCount } = await query(
       `UPDATE work_item_notifications
           SET read_at = now()
         WHERE user_id = $1
@@ -344,6 +345,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           AND ($2::uuid[] IS NULL OR work_item_id = ANY($2::uuid[]))`,
       [req.user!.id, input.itemIds ?? null],
     );
+    if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
   });
 
@@ -359,6 +361,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
        ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`,
       [req.user!.id, input.channelIds ?? null],
     );
+    publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
   });
 
@@ -369,7 +372,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post('/notifications/mentions/read', async (req, reply) => {
     const input = parse(readMentionsSchema, req.body ?? {});
-    await query(
+    const { rowCount } = await query(
       `UPDATE document_mentions
           SET read_at = now()
         WHERE user_id = $1
@@ -377,6 +380,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           AND ($2::uuid[] IS NULL OR document_id = ANY($2::uuid[]))`,
       [req.user!.id, input.documentIds ?? null],
     );
+    if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
   });
 
@@ -392,6 +396,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       [req.params.id, req.user!.id],
     );
     if (!rowCount) throw notFound('Invitation not found');
+    publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
   });
 };

@@ -286,6 +286,13 @@ export function useChatEvents({
         case 'call.ended':
           callHandler.current(event);
           return;
+        case 'notifications.changed':
+          // Read on another window or device. The counts are the server's, so
+          // they are asked for again, along with the channel badges.
+          void qc.invalidateQueries({ queryKey: keys.notifications });
+          void qc.invalidateQueries({ queryKey: ['channels'] });
+          void qc.invalidateQueries({ queryKey: ['directs'] });
+          return;
         default:
           applyMessage(event);
       }
@@ -309,7 +316,10 @@ export function useChatEvents({
   // is in which voice channel, the direct conversation list and the file trees
   // are cheap to ask for again.
   useEffect(() => {
-    if (status !== 'connected' || !workspaceId) return;
+    if (status !== 'connected') return;
+    // Including anything read elsewhere while this one was asleep.
+    void qc.invalidateQueries({ queryKey: keys.notifications });
+    if (!workspaceId) return;
     void qc.invalidateQueries({ queryKey: keys.presence(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.voiceParticipants(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
