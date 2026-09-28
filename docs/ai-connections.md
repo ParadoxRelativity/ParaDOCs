@@ -110,6 +110,14 @@ into a coding session. The board stays current as the work is done.
 Tools take names as a person would say them: workspaces by name, projects by key,
 work items by key (`ENG-12`), and statuses and types by name.
 
+Keys are unique within a workspace, not across them. If you are in two
+workspaces that both have an `ENG` project, a tool given `ENG-12` asks which
+workspace you mean rather than guessing. Every tool and both prompts take an
+optional `workspace` for this, e.g. `/mcp__paradocs__work_on_item ENG-12 Acme`.
+A connection limited to one workspace never has to ask. A project key takes
+precedence over another project's name, so `ENG` finds the project keyed ENG
+even if another project is named "Eng".
+
 If someone has a document open while an assistant writes to it, the change
 appears in their editor straight away and is saved like any other edit.
 

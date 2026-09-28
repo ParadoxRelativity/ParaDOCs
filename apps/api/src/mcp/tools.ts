@@ -187,24 +187,33 @@ async function workspacesFor(ctx: ToolContext, arg: string | undefined, app: str
   return (await workspaces(ctx)).filter((w) => w.apps.includes(app));
 }
 
-/** Somewhere a key or name matched in more than one workspace. */
-function ambiguous<T extends { workspace_id: string }>(rows: T[], what: string, arg: string): never {
-  throw new ToolError(`More than one ${what} is "${arg}" (in ${rows.length} workspaces). Name the workspace too.`);
+/** Somewhere a key or name matched in more than one workspace: say which, so the assistant can name one. */
+async function ambiguous(rows: { workspace_id: string }[], what: string, arg: string): Promise<never> {
+  const { rows: named } = await query<{ name: string }>(
+    'SELECT name FROM workspaces WHERE id = ANY($1::uuid[]) ORDER BY lower(name)',
+    [[...new Set(rows.map((r) => r.workspace_id))]],
+  );
+  throw new ToolError(
+    `More than one ${what} is "${arg}", in the workspaces ${named.map((w) => `"${w.name}"`).join(' and ')}. Pass workspace to say which.`,
+  );
 }
 
 async function projectArg(ctx: ToolContext, arg: string, workspace?: string): Promise<Project> {
   let id = arg.trim();
   if (!UUID.test(id)) {
     const scope = workspace ? (await workspaceArg(ctx, workspace)).id : ctx.ai.workspaceId;
-    const { rows } = await query<{ id: string; workspace_id: string }>(
-      `SELECT p.id, p.workspace_id FROM projects p
+    const { rows: found } = await query<{ id: string; workspace_id: string; by_key: boolean }>(
+      `SELECT p.id, p.workspace_id, upper(p.key) = upper($2) AS by_key FROM projects p
          JOIN workspace_members m ON m.workspace_id = p.workspace_id AND m.user_id = $1
         WHERE (upper(p.key) = upper($2) OR lower(p.name) = lower($2))
           AND ($3::uuid IS NULL OR p.workspace_id = $3) AND p.archived_at IS NULL`,
       [ctx.userId, id, scope],
     );
+    // A key is what people mean by ENG; a project that happens to be named "eng" does not compete with it.
+    const byKey = found.filter((r) => r.by_key);
+    const rows = byKey.length > 0 ? byKey : found;
     if (rows.length === 0) throw new ToolError(`No project or queue "${arg}". list_projects shows them.`);
-    if (rows.length > 1) ambiguous(rows, 'project', arg);
+    if (rows.length > 1) await ambiguous(rows, 'project', arg);
     id = rows[0].id;
   }
   await workspaceOf(ctx, 'projects', id, 'Project');
@@ -231,7 +240,7 @@ async function itemIdArg(ctx: ToolContext, arg: string, workspace?: string): Pro
     [ctx.userId, key[1], Number(key[2]), scope],
   );
   if (rows.length === 0) throw new ToolError(`No work item ${text.toUpperCase()}`);
-  if (rows.length > 1) ambiguous(rows, 'work item', text);
+  if (rows.length > 1) await ambiguous(rows, 'work item', text);
   return rows[0].id;
 }
 
@@ -799,7 +808,10 @@ export const TOOLS: Tool[] = [
     async run(ctx, args) {
       if (!str(args, 'query') && !bool(args, 'mine')) throw new ToolError('Give a query, or set mine');
       const out: string[] = [];
-      for (const w of await workspacesFor(ctx, str(args, 'workspace'), 'projects')) {
+      const list = await workspacesFor(ctx, str(args, 'workspace'), 'projects');
+      for (const w of list) {
+        // The same key can be in two workspaces; said where each is, they can be told apart.
+        const where = list.length > 1 ? ` (${w.name})` : '';
         const items = await call<WorkItemListing[]>(
           ctx,
           'GET',
@@ -810,7 +822,7 @@ export const TOOLS: Tool[] = [
             (i) =>
               `- ${i.key}: ${i.title} [${i.status.name}] (${i.itemType.name}${i.priority !== 'none' ? `; ${i.priority}` : ''}${
                 i.myRoles.length ? `; you: ${i.myRoles.join(', ')}` : ''
-              }) in ${i.project.name}`,
+              }) in ${i.project.name}${where}`,
           ),
         );
       }
@@ -1032,20 +1044,26 @@ export const PROMPTS = [
     name: 'work_on_item',
     title: 'Work on a ParaDOCs item',
     description: 'Pull a work item off a ParaDOCs board and work on it here, keeping the board up to date.',
-    arguments: [{ name: 'item', description: 'The key, such as ENG-12', required: true }],
+    arguments: [
+      { name: 'item', description: 'The key, such as ENG-12', required: true },
+      { name: 'workspace', description: 'Workspace name, when the key is used in more than one', required: false },
+    ],
   },
   {
     name: 'next_up',
     title: "What's next on a board",
     description: "Look over a project's open work and suggest what to pick up next.",
-    arguments: [{ name: 'project', description: 'Project key, such as ENG', required: true }],
+    arguments: [
+      { name: 'project', description: 'Project key, such as ENG', required: true },
+      { name: 'workspace', description: 'Workspace name, when the key is used in more than one', required: false },
+    ],
   },
 ];
 
 export async function getPrompt(ctx: ToolContext, name: string, args: Record<string, string>) {
   if (name === 'work_on_item') {
     if (!args.item) throw new ToolError('item is required');
-    const id = await itemIdArg(ctx, args.item);
+    const id = await itemIdArg(ctx, args.item, args.workspace || undefined);
     const item = await describeItem(ctx, id);
     const steps = ctx.ai.canWrite
       ? [
@@ -1063,7 +1081,11 @@ export async function getPrompt(ctx: ToolContext, name: string, args: Record<str
   }
   if (name === 'next_up') {
     if (!args.project) throw new ToolError('project is required');
-    const board = await runTool(ctx, 'list_work_items', { project: args.project, limit: 60 });
+    const board = await runTool(ctx, 'list_work_items', {
+      project: args.project,
+      limit: 60,
+      ...(args.workspace ? { workspace: args.workspace } : {}),
+    });
     return {
       description: `What's next in ${args.project.toUpperCase()}`,
       messages: [
