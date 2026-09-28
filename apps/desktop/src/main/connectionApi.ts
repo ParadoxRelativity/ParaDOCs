@@ -6,6 +6,7 @@ import type {
   MentionNotification,
   MessageNotification,
   Notifications,
+  WorkItemNotification,
 } from '@paradocs/shared';
 import { partitionFor, type Connection } from './connections.js';
 import { paths } from './paths.js';
@@ -292,6 +293,23 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
       }),
     );
 
+    const workItems: WorkItemNotification[] = await Promise.all(
+      records(body.workItems, 100).map(async (item) => {
+        const by = item.by ? record(item.by) : null;
+        return {
+          workItemId: text(item.workItemId),
+          projectId: text(item.projectId),
+          key: text(item.key).slice(0, 40),
+          title: text(item.title, 'Untitled').slice(0, 200),
+          reason: item.reason === 'role' ? ('role' as const) : ('mention' as const),
+          role: nullable(item.role),
+          workspace: await workspace(item.workspace),
+          by: by ? { id: text(by.id), name: text(by.name, 'Someone'), avatarUrl: await picture(fetcher, by.avatarUrl) } : null,
+          createdAt: text(item.createdAt),
+        };
+      }),
+    );
+
     // The link is opened in the user's browser, so it has to be a web page.
     const update = body.serverUpdate ? record(body.serverUpdate) : null;
     const release = update ? record(update.release) : null;
@@ -308,7 +326,7 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
           }
         : null;
 
-    return { status: 'ok', notifications: { invites, messages, mentions, serverUpdate } };
+    return { status: 'ok', notifications: { invites, messages, mentions, workItems, serverUpdate } };
   } catch {
     return { status: 'unavailable' };
   }

@@ -55,6 +55,7 @@ import NotificationsMenu from './components/NotificationsMenu';
 import SearchPalette from './components/SearchPalette';
 import { ChatView } from './components/chat/ChatView';
 import { useChatEvents } from './lib/chatEvents';
+import { useOsNotifications } from './lib/osNotifications';
 import { VoiceRoom } from './components/chat/VoiceRoom';
 import { CallStage } from './components/chat/CallStage';
 import { MemberList } from './components/chat/MemberList';
@@ -404,6 +405,8 @@ function Workspace({
       directCalls.handleEvent(event);
     },
   });
+
+  useOsNotifications({ quiet, openChannelId: chat ? (channelId ?? null) : null });
 
   const openDirect = useOpenDirect(workspaceId);
 

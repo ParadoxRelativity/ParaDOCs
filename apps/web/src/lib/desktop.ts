@@ -141,6 +141,11 @@ export interface DesktopBridge {
   notifications: {
     /** Every connection except this page's own. */
     list(): Promise<NotificationsListing[]>;
+    /**
+     * This page's own bar has changed, or what it has open has. The app asks
+     * the server again and announces anything new through the operating system.
+     */
+    changed(state: { quiet: boolean; openChannelId: string | null }): Promise<void>;
     markRead(connectionId: string, channelIds?: string[]): Promise<Outcome>;
     /** Clears tags in the given documents, or in all of them. */
     markMentionsRead(connectionId: string, documentIds?: string[]): Promise<Outcome>;

@@ -20,11 +20,15 @@ import {
 import { api } from '../api/client';
 import { keys, refetchAfterAccessChange, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
+import { desktop } from './desktop';
 import { setTyping } from './typing';
 
 export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
 
 function permissionState(): NotificationPermissionState {
+  // The desktop app announces through the operating system itself, which is
+  // where notifications for it are turned on and off (see osNotifications.ts).
+  if (desktop) return 'granted';
   if (typeof Notification === 'undefined') return 'unsupported';
   return Notification.permission as NotificationPermissionState;
 }
@@ -355,7 +359,7 @@ function notify({
   tag: string;
   onClick: () => void;
 }): void {
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  if (desktop || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
     const notification = new Notification(title, { body, tag });
     notification.onclick = () => {
