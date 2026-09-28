@@ -732,7 +732,8 @@ function Workspace({
               setActiveTagIds([id]);
               setSearchOpen(true);
             }}
-            onSignOut={() => logout.mutate()}
+            // Signing in again starts afresh, not on a page that may be someone else's.
+            onSignOut={() => logout.mutate(undefined, { onSuccess: () => navigate('/', { replace: true }) })}
             onOpenSettings={setSettingsSection}
             onConnectServer={desktop ? () => setConnectOpen(true) : undefined}
             section={section}

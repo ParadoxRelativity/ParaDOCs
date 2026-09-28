@@ -257,11 +257,15 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.post('/auth/logout'),
-    onSuccess: () => {
+    onSuccess: async () => {
       setSessionToken(null);
       // What was kept on disk for the next launch goes too.
-      void forgetCache(qc);
-      qc.clear();
+      await forgetCache(qc);
+      // Everything but who is signed in, which is asked again instead: cleared,
+      // nothing would ask, and the app would stay on a signed-in page whose
+      // every request now fails. Answered signed out, it shows the sign-in screen.
+      qc.removeQueries({ predicate: (query) => query.queryKey[0] !== keys.me[0] });
+      await qc.refetchQueries({ queryKey: keys.me });
     },
   });
 }
