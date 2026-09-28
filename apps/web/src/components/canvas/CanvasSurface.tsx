@@ -102,6 +102,9 @@ const EDITABLE = new Set<CanvasElement['type']>(['note', 'text', 'shape', 'node'
 /** How close, in screen pixels, an edge must come to another before it snaps to it. */
 const SNAP_DISTANCE = 6;
 
+/** macOS browsers open the context menu on press rather than on release. */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+
 /** Pictures keep their proportions when resized unless Shift is held; everything else, only while it is. */
 const KEEP_RATIO = new Set<CanvasElement['type']>(['image', 'video']);
 
@@ -768,6 +771,32 @@ export default function CanvasSurface(props: Props) {
     };
   }, []);
 
+  // The menu after a right-button pan opens wherever the button came up: over
+  // the toolbars, the minimap or off the board, not only on this surface. So it
+  // is refused on the window, and the next press of any kind clears the flag.
+  // On a Mac the menu comes with the press, before any drag could be seen, so a
+  // press on empty board never gets one there; elements and text keep theirs.
+  useEffect(() => {
+    function onContextMenu(e: MouseEvent) {
+      if (IS_MAC && gesture.current?.kind === 'pan') {
+        e.preventDefault();
+        return;
+      }
+      if (!rightPanned.current) return;
+      rightPanned.current = false;
+      e.preventDefault();
+    }
+    function onDown() {
+      rightPanned.current = false;
+    }
+    window.addEventListener('contextmenu', onContextMenu, { capture: true });
+    window.addEventListener('pointerdown', onDown, { capture: true });
+    return () => {
+      window.removeEventListener('contextmenu', onContextMenu, { capture: true });
+      window.removeEventListener('pointerdown', onDown, { capture: true });
+    };
+  }, []);
+
   /**
    * A second finger on the board turns whatever the first one started into a
    * pinch, so zooming works wherever the fingers land, elements included.
@@ -1039,7 +1068,6 @@ export default function CanvasSurface(props: Props) {
 
   function startBackgroundGesture(e: React.PointerEvent) {
     setEditingId(null);
-    rightPanned.current = false;
     if (gesture.current?.kind === 'pinch') return;
     if (gesture.current) abandonGesture();
     const view = live.current;
@@ -1154,11 +1182,6 @@ export default function CanvasSurface(props: Props) {
         props.onFiles(files, toCanvasPoint(live.current, e.clientX, e.clientY, rect));
       }}
       onPointerDown={startBackgroundGesture}
-      onContextMenu={(e) => {
-        if (!rightPanned.current) return;
-        rightPanned.current = false;
-        e.preventDefault();
-      }}
       onDoubleClick={(e) => {
         if (!editable) return;
         const rect = surface.current?.getBoundingClientRect();
