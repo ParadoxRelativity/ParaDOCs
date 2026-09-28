@@ -356,7 +356,16 @@ export interface TypingEvent {
   typing: boolean;
 }
 
-export type ChatEvent = ChatMessageEvent | CallEvent | WorkspaceEvent | TypingEvent;
+/**
+ * Something waiting for you was read or dismissed — a channel, a tag, a work
+ * item, an invitation — so every other window you have open, on any device,
+ * asks for its counts again instead of showing them until you next navigate.
+ */
+export interface NotificationsEvent {
+  type: 'notifications.changed';
+}
+
+export type ChatEvent = ChatMessageEvent | CallEvent | WorkspaceEvent | TypingEvent | NotificationsEvent;
 
 /** How often a client repeats that someone is still typing. */
 export const TYPING_INTERVAL_MS = 3_000;

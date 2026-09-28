@@ -29,7 +29,7 @@ import {
   uploadLimits,
   uploadUrlSql,
 } from '../lib/storage.js';
-import { publishToWorkspace } from '../chat/hub.js';
+import { publishToUser, publishToWorkspace } from '../chat/hub.js';
 import { syncWorkItemMentions } from '../lib/workItems.js';
 
 const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind,
@@ -574,4 +574,6 @@ async function markRead(channelId: string, userId: string): Promise<void> {
       [channelId, userId],
     );
   });
+  // Unread counts on your other windows and devices stop counting it too.
+  publishToUser(userId, { type: 'notifications.changed' });
 }
