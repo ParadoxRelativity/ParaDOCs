@@ -1,18 +1,12 @@
 import { useState } from 'react';
 import { MCP_PATH, type AiConnection, type CreatedAiKey } from '@paradocs/shared';
-import { useAiConnectionActions, useAiConnections, useWorkspaces } from '../api/hooks';
-import { serverUrl } from '../lib/server';
+import { useAiConnectionActions, useAiConnections, usePublicOrigin, useWorkspaces } from '../api/hooks';
 import { cx, formatRelative } from '../lib/util';
 import Icon from './Icon';
 import { ConfirmDialog, Modal } from './Modal';
 import { FIELD, FIELD_BASE, Section } from './SettingsParts';
 import { useToast } from './Toast';
 import { Button, IconButton } from './ui';
-
-/** The MCP server's full address, as an assistant outside would reach it. */
-function mcpUrl(): string {
-  return new URL(serverUrl(MCP_PATH), window.location.href).href;
-}
 
 async function copy(text: string, what: string, toast: ReturnType<typeof useToast>) {
   try {
@@ -55,7 +49,8 @@ export default function AiConnectionsSettings() {
   const [revoking, setRevoking] = useState<AiConnection | null>(null);
   const enabled = connections.data?.enabled ?? false;
   const list = connections.data?.connections ?? [];
-  const url = mcpUrl();
+  // The MCP server's full address, as an assistant outside would reach it.
+  const url = `${usePublicOrigin()}${MCP_PATH}`;
 
   function makeKey(e: React.FormEvent) {
     e.preventDefault();

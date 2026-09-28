@@ -26,6 +26,7 @@ import {
 } from '@paradocs/shared';
 import {
   useDeleteWorkItem,
+  usePublicOrigin,
   useSetWorkItemRole,
   useUpdateWorkItem,
   useWorkItem,
@@ -38,7 +39,6 @@ import {
   useWorkItems,
 } from '../../api/hooks';
 import { cx, formatDateTime, formatRelative } from '../../lib/util';
-import { shareOrigin } from '../../lib/server';
 import Avatar from '../Avatar';
 import { MessageBody } from '../chat/MessageBody';
 import Icon, { DocumentIcon } from '../Icon';
@@ -167,6 +167,7 @@ function ItemDetail({
   const update = useUpdateWorkItem(project.id);
   const remove = useDeleteWorkItem(project.id);
   const siblings = useWorkItems(project.id);
+  const publicOrigin = usePublicOrigin();
   const toast = useToast();
   const [title, setTitle] = useState(item.title);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -212,7 +213,7 @@ function ItemDetail({
   }
 
   function copyLink() {
-    const url = `${shareOrigin()}/w/${workspaceId}/p/${project.id}/${item.id}`;
+    const url = `${publicOrigin}/w/${workspaceId}/p/${project.id}/${item.id}`;
     void navigator.clipboard?.writeText(url).then(
       () => toast(`Link to ${item.key} copied`),
       () => toast('Could not copy the link', 'error'),

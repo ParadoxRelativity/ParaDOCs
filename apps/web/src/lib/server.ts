@@ -205,7 +205,8 @@ function mapStrings(value: unknown, fn: (s: string) => string): unknown {
 /**
  * The origin to put in a link meant for someone else: an invitation, or a
  * link to a work item. The mobile app's own origin only means anything inside
- * the app, so there it is the server's.
+ * the app, so there it is the server's. Components use `usePublicOrigin`,
+ * which prefers the server's PUBLIC_URL and falls back to this.
  */
 export function shareOrigin(): string {
   return origin ?? window.location.origin;

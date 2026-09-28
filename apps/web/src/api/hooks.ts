@@ -85,7 +85,7 @@ import { measure } from '../lib/chatFiles';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
 import { forgetCache } from '../lib/queryPersistence';
-import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken } from '../lib/server';
+import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken, shareOrigin } from '../lib/server';
 
 export interface WorkspaceSummary extends Workspace {
   documentCount: number;
@@ -1941,6 +1941,22 @@ export function useServerVersion(enabled: boolean) {
     refetchInterval: 10 * 60_000,
     refetchOnWindowFocus: true,
   });
+}
+
+/**
+ * The origin to build a link on that someone else will follow: an invitation,
+ * a link to a work item, the MCP or intake address. The server's PUBLIC_URL
+ * when it has one, since this page's own origin can be the desktop app's
+ * loopback proxy or an address only this machine reaches; the page's origin
+ * until the server has answered, or when PUBLIC_URL is unset.
+ */
+export function usePublicOrigin(): string {
+  const { data } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: () => api.get<{ publicUrl?: string | null }>('/health'),
+    staleTime: Infinity,
+  });
+  return data?.publicUrl || shareOrigin();
 }
 
 /** Marks the given channels read, or every channel when given none. */

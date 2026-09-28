@@ -5,6 +5,7 @@ import {
   useInvites,
   useMembers,
   useRemoveMember,
+  usePublicOrigin,
   useRevokeInvite,
   useSetMemberTeams,
   useTeams,
@@ -13,7 +14,6 @@ import {
 } from '../api/hooks';
 import { teamChanger, type Can, type MayChangeTeam } from '../lib/permissions';
 import { cx, formatRelative } from '../lib/util';
-import { shareOrigin } from '../lib/server';
 import { useToast } from './Toast';
 import { Button, Spinner } from './ui';
 import Avatar from './Avatar';
@@ -52,6 +52,7 @@ export default function MembersPanel({ workspaceId, myRole, can }: Props) {
   const createInvite = useCreateInvite(workspaceId);
   const revokeInvite = useRevokeInvite(workspaceId);
   const toast = useToast();
+  const publicOrigin = usePublicOrigin();
 
   const [email, setEmail] = useState('');
   // Unset until chosen, which means the workspace's default role.
@@ -85,7 +86,7 @@ export default function MembersPanel({ workspaceId, myRole, can }: Props) {
     : everyone;
 
   function inviteLink(token: string) {
-    return `${shareOrigin()}/invite/${token}`;
+    return `${publicOrigin}/invite/${token}`;
   }
 
   async function copy(token: string) {

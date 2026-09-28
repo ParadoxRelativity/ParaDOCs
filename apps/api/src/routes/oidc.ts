@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { query, transaction } from '../db/pool.js';
 import type { DbClient } from '../db/driver.js';
 import { createAccount } from '../lib/accounts.js';
+import { publicOrigin } from '../lib/aiTokens.js';
 import { forbidden, parse, unauthorized } from '../lib/http.js';
 import { clientFor, findProvider, oidcStatus, redirectUriFor, type OidcProvider } from '../lib/oidcProviders.js';
 import { ssoLimits } from '../lib/rateLimit.js';
@@ -64,10 +65,6 @@ interface Attempt {
 }
 
 const S256 = /^[A-Za-z0-9_-]{43}$/;
-
-function requestOrigin(req: FastifyRequest): string {
-  return `${req.protocol}://${req.host}`;
-}
 
 function attemptCookieOptions() {
   return {
@@ -332,7 +329,7 @@ export const oidcRoutes: FastifyPluginAsync = async (app) => {
           state: oidc.randomState(),
           nonce: oidc.randomNonce(),
           verifier: oidc.randomPKCECodeVerifier(),
-          redirectUri: redirectUriFor(provider, requestOrigin(req)),
+          redirectUri: redirectUriFor(provider, publicOrigin(req)),
           handoff,
           expiresAt: Date.now() + ATTEMPT_TTL_SECONDS * 1000,
         };
@@ -395,7 +392,7 @@ export const oidcRoutes: FastifyPluginAsync = async (app) => {
            VALUES ($1, $2, $3, now() + ($4 || ' seconds')::interval)`,
           [hash(code), account.id, attempt.handoff, String(HANDOFF_TTL_SECONDS)],
         );
-        return confirmHandoff(reply, { code, email: rows[0].email, server: config.publicUrl || requestOrigin(req) });
+        return confirmHandoff(reply, { code, email: rows[0].email, server: publicOrigin(req) });
       }
 
       const session = await createSession(account.id);

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { INTAKE_FIELDS, INTAKE_PATH, type CreatedIntakeToken, type IntakeToken, type Project } from '@paradocs/shared';
-import { useIntake, useIntakeTokens } from '../../api/hooks';
-import { serverUrl } from '../../lib/server';
+import { useIntake, useIntakeTokens, usePublicOrigin } from '../../api/hooks';
 import { cx, formatRelative } from '../../lib/util';
 import Icon from '../Icon';
 import { ConfirmDialog, Modal } from '../Modal';
@@ -10,8 +9,8 @@ import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
 
 /** The webhook's full address, as a sender outside would post to it. */
-function webhookUrl(): string {
-  return new URL(serverUrl(INTAKE_PATH), window.location.href).href;
+function useWebhookUrl(): string {
+  return `${usePublicOrigin()}${INTAKE_PATH}`;
 }
 
 async function copy(text: string, what: string, toast: ReturnType<typeof useToast>) {
@@ -33,6 +32,7 @@ async function copy(text: string, what: string, toast: ReturnType<typeof useToas
 export default function IntakeSection({ project }: { project: Project }) {
   const intake = useIntake(project.id);
   const tokens = useIntakeTokens(project.id);
+  const webhookUrl = useWebhookUrl();
   const toast = useToast();
   const [newName, setNewName] = useState('');
   const [created, setCreated] = useState<CreatedIntakeToken | null>(null);
@@ -71,8 +71,8 @@ export default function IntakeSection({ project }: { project: Project }) {
       ) : (
         <div className="mb-2 flex items-center gap-2 text-xs">
           <span className="shrink-0 text-[var(--color-muted)]">Webhook</span>
-          <code className="min-w-0 flex-1 truncate rounded bg-[var(--color-surface)] px-2 py-1">POST {webhookUrl()}</code>
-          <IconButton label="Copy webhook address" onClick={() => void copy(webhookUrl(), 'Webhook address', toast)}>
+          <code className="min-w-0 flex-1 truncate rounded bg-[var(--color-surface)] px-2 py-1">POST {webhookUrl}</code>
+          <IconButton label="Copy webhook address" onClick={() => void copy(webhookUrl, 'Webhook address', toast)}>
             <Icon name="clipboard" />
           </IconButton>
         </div>
@@ -152,7 +152,7 @@ export default function IntakeSection({ project }: { project: Project }) {
 /** The new token, shown the one time it can be, with how to send work in with it. */
 function CreatedDialog({ token, onClose }: { token: CreatedIntakeToken; onClose: () => void }) {
   const toast = useToast();
-  const url = webhookUrl();
+  const url = useWebhookUrl();
   const curl = [
     `curl -X POST ${url} \\`,
     `  -H 'Authorization: Bearer ${token.token}' \\`,

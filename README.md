@@ -946,7 +946,7 @@ All settings come from `.env` at the repo root, read by both the API and Vite.
 | `LIVEKIT_URL`        | —                       | Outside Docker: a LiveKit server browsers can reach          |
 | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | generated in Docker | Fixed LiveKit keys; set both or neither          |
 | `LIVEKIT_NODE_IP`    | —                       | Docker: the public address for call media, where STUN gets it wrong |
-| `PUBLIC_URL`         | —                       | The address people reach ParaDOCs at; needed for single sign-on redirect URIs |
+| `PUBLIC_URL`         | —                       | The address people reach ParaDOCs at; used for single sign-on redirect URIs and every link the app hands out (invites, work item links, MCP and intake addresses) |
 | `OIDC_*`             | —                       | One single sign-on provider from the environment, on with `OIDC_ENABLED=true` (see above and `.env.example`) |
 
 `docker-compose.yml` also reads `POSTGRES_PASSWORD`, `COMPOSE_PROFILES`, `PORT`,
