@@ -177,11 +177,14 @@ export default function NotificationsMenu() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
+    const onBlur = () => setOpen(false);
     document.addEventListener('mousedown', onPointer);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
     return () => {
       document.removeEventListener('mousedown', onPointer);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onBlur);
     };
   }, [open]);
 
