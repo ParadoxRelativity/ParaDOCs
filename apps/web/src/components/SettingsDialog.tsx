@@ -16,11 +16,13 @@ import type { Theme } from '../lib/theme';
 import { useCallLayout, type CallLayout } from '../lib/callLayout';
 import { useOpenBehaviour, type OpenBehaviour } from '../lib/openBehaviour';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
+import AiConnectionsSettings from './AiConnectionsSettings';
 
 export const SETTINGS_SECTIONS = [
   'account',
   'appearance',
   'voice',
+  'ai',
   'servers',
   'updates',
 ] as const;
@@ -41,8 +43,8 @@ interface Props {
 }
 
 /**
- * Your own settings: the account, how the app looks and sounds, and on the
- * desktop the servers and updates. What belongs to a workspace — its name,
+ * Your own settings: the account, how the app looks and sounds, the AI
+ * assistants you have connected, and on the desktop the servers and updates. What belongs to a workspace — its name,
  * apps, members and uploads — is in that workspace's Access app instead.
  */
 export default function SettingsDialog(props: Props) {
@@ -54,6 +56,7 @@ export default function SettingsDialog(props: Props) {
     { id: 'account', label: 'Account', icon: 'person' },
     { id: 'appearance', label: 'Appearance', icon: 'palette' },
     ...(voiceEnabled ? [{ id: 'voice' as const, label: 'Voice & video', icon: 'headset' as const }] : []),
+    { id: 'ai', label: 'AI connections', icon: 'robot' },
     // The workspace's own settings are in the Access app, not here.
     // The desktop app's own settings, which mean nothing in a browser.
     ...(desktop
@@ -104,6 +107,7 @@ export default function SettingsDialog(props: Props) {
             />
           )}
           {section === 'voice' && <VoiceSettings />}
+          {section === 'ai' && <AiConnectionsSettings />}
           {desktop && section === 'servers' && <ServersSection />}
           {desktop && section === 'updates' && <UpdatesSection />}
         </div>

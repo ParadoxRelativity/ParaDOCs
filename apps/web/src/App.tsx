@@ -44,6 +44,7 @@ import DocumentEditor from './components/DocumentEditor';
 import ErrorBoundary from './components/ErrorBoundary';
 import AllDocuments from './components/AllDocuments';
 import AcceptInvite from './components/AcceptInvite';
+import ConnectAi, { rememberConnectRequest, takeConnectRequest } from './components/ConnectAi';
 import SettingsDialog, { isSettingsSection, type SettingsSection, type Theme } from './components/SettingsDialog';
 import ConnectServerDialog from './components/ConnectServerDialog';
 import { desktop, usePoppedOut } from './lib/desktop';
@@ -107,6 +108,8 @@ export default function App() {
 
   if (me.isLoading || (userId !== undefined && claimedFor !== userId)) return <Spinner />;
   if (!me.data?.user) {
+    // An assistant waiting to be approved, kept through a sign-in that leaves the page.
+    rememberConnectRequest();
     return (
       <AuthScreen
         allowRegistration={me.data?.allowRegistration ?? false}
@@ -126,6 +129,7 @@ export default function App() {
         <Routes>
           <Route path="/popout/:workspaceId/:channelId" element={<PopoutWindow user={me.data.user} />} />
           <Route path="/invite/:token" element={<AcceptInvite />} />
+          <Route path="/connect-ai" element={<ConnectAi user={me.data.user} />} />
           <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
           <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
           <Route path="/w/:workspaceId/c/:channelId" element={<Workspace user={me.data.user} chat />} />
@@ -225,6 +229,9 @@ function DesktopNavigation() {
  */
 function FirstWorkspaceRedirect() {
   const workspaces = useWorkspaces();
+  // Single sign-on lands here; an assistant may have been waiting on the consent page.
+  const [connecting] = useState(takeConnectRequest);
+  if (connecting) return <Navigate to={connecting} replace />;
   if (workspaces.isLoading) return <Spinner />;
   const last = activeTab();
   if (last && workspaces.data?.some((w) => w.id === last.workspaceId)) {

@@ -645,6 +645,13 @@ Queues can also take in work from web forms and other systems through an intake
 webhook. It is off until turned on under Server settings; see
 [docs/intake-webhook.md](docs/intake-webhook.md).
 
+AI assistants — Claude, ChatGPT, Cursor and others — can work in ParaDOCs
+through its MCP server at `/api/mcp`: search and read documents, spreadsheets and
+chat, and pull work items off a board, move them and comment on them. They
+connect with a personal key or by signing in, act as the person who connected
+them, and can be held to one workspace and to reading. It is off until turned
+on under Server settings; see [docs/ai-connections.md](docs/ai-connections.md).
+
 Signing in uses the authorization code flow with PKCE, state and nonce. The
 account it signs in to is, in order: the one already linked to that provider
 subject; an existing account with the same email, **only** when the provider

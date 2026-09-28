@@ -440,7 +440,10 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
             WHERE id = $1`,
           [id, input.name ?? null, input.email ?? null, input.isServerAdmin ?? null, input.disabled ?? null],
         );
-        if (input.disabled === true) await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+        if (input.disabled === true) {
+          await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+          await client.query('DELETE FROM ai_connections WHERE user_id = $1', [id]);
+        }
         if (input.disabled === true || input.isServerAdmin === false) {
           await client.query('DELETE FROM admin_sessions WHERE user_id = $1', [id]);
         }
@@ -462,6 +465,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         const updated = await client.query('UPDATE users SET password_hash = $2 WHERE id = $1', [id, hash]);
         if (!updated.rowCount) throw notFound('Account not found');
         await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+        await client.query('DELETE FROM ai_connections WHERE user_id = $1', [id]);
         await client.query('DELETE FROM admin_sessions WHERE user_id = $1 AND token <> $2', [id, keep]);
       });
       signedOut(id);
@@ -474,6 +478,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       const id = accountId(req.params.id);
       await loadUser(id);
       await query('DELETE FROM sessions WHERE user_id = $1', [id]);
+      // Assistants they connected are signed out with them.
+      await query('DELETE FROM ai_connections WHERE user_id = $1', [id]);
       signedOut(id);
       reply.status(204);
     });

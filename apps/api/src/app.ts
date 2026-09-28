@@ -34,6 +34,9 @@ import { presenceRoutes } from './routes/presence.js';
 import { accessRoutes } from './routes/access.js';
 import { projectRoutes } from './routes/projects.js';
 import { intakeRoutes } from './routes/intake.js';
+import { aiConnectionRoutes } from './routes/aiConnections.js';
+import { oauthDiscoveryRoutes, oauthRoutes } from './routes/oauth.js';
+import { mcpRoutes } from './mcp/routes.js';
 import { scheduleWorkItemArchiving } from './lib/workItemArchive.js';
 
 export async function buildApp() {
@@ -142,9 +145,15 @@ export async function buildApp() {
     inviteRoutes,
     notificationRoutes,
     oidcRoutes,
+    aiConnectionRoutes,
+    oauthRoutes,
+    mcpRoutes,
   ]) {
     await app.register(routes, { prefix: '/api' });
   }
+
+  // How an AI client finds out to sign in: documents it looks for at the root.
+  await app.register(oauthDiscoveryRoutes);
 
   // Voice signalling under /rtc, relayed to LiveKit when this server has it.
   await app.register(voiceProxyRoutes);

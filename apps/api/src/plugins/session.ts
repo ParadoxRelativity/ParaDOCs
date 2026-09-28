@@ -5,6 +5,7 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { forbidden, notFound, unauthorized } from '../lib/http.js';
 import { newSessionToken } from '../lib/auth.js';
+import { assertAiRoute, isAiToken, resolveAiToken, type AiCaller } from '../lib/aiTokens.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import type { WorkspaceApp, WorkspacePermission } from '@paradocs/shared';
 import { documentAccess, type ResourceAccess } from '../lib/access.js';
@@ -26,6 +27,8 @@ export type { Membership } from '../lib/roles.js';
 declare module 'fastify' {
   interface FastifyRequest {
     user: SessionUser | null;
+    /** Set when an AI assistant is calling through one of its person's AI connections. */
+    ai: AiCaller | null;
   }
   interface FastifyInstance {
     /** preHandler that rejects unauthenticated requests. */
@@ -35,10 +38,21 @@ declare module 'fastify' {
 
 const plugin: FastifyPluginAsync = async (app) => {
   app.decorateRequest('user', null);
+  app.decorateRequest('ai', null);
 
   app.addHook('onRequest', async (req) => {
     const token = sessionToken(req);
     if (!token) return;
+    // An AI connection's key or token signs in as its person, but only where
+    // an assistant is allowed to go; see assertAiRoute.
+    if (isAiToken(token)) {
+      const found = await resolveAiToken(token);
+      if (!found) return;
+      assertAiRoute(req, found.ai);
+      req.user = found.user;
+      req.ai = found.ai;
+      return;
+    }
     req.user = await resolveSession(token);
   });
 

@@ -421,6 +421,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   const [allowRegistration, setAllowRegistration] = useState(current.allowRegistration);
   const [passwordSignIn, setPasswordSignIn] = useState(current.passwordSignIn);
   const [intakeWebhooks, setIntakeWebhooks] = useState(current.intakeWebhooks);
+  const [aiConnections, setAiConnections] = useState(current.aiConnections);
   const providers = useOidcProviders();
   const enabledProviders = providers.data?.providers.filter((p) => p.enabled) ?? [];
   const [limited, setLimited] = useState(current.messageRetentionMaxDays !== null);
@@ -431,6 +432,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
     setAllowRegistration(current.allowRegistration);
     setPasswordSignIn(current.passwordSignIn);
     setIntakeWebhooks(current.intakeWebhooks);
+    setAiConnections(current.aiConnections);
     setLimited(current.messageRetentionMaxDays !== null);
     setDays(String(current.messageRetentionMaxDays ?? DEFAULT_RETENTION_DAYS));
   }
@@ -444,6 +446,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
     allowRegistration !== current.allowRegistration ||
     passwordSignIn !== current.passwordSignIn ||
     intakeWebhooks !== current.intakeWebhooks ||
+    aiConnections !== current.aiConnections ||
     retention !== current.messageRetentionMaxDays;
   const valid = !limited || daysValid;
   // Keeping messages for less time than before deletes history as soon as it is saved.
@@ -453,7 +456,7 @@ function SettingsForm({ current }: { current: ServerSettings }) {
   function save() {
     setConfirming(false);
     update.mutate(
-      { allowRegistration, passwordSignIn, intakeWebhooks, messageRetentionMaxDays: retention },
+      { allowRegistration, passwordSignIn, intakeWebhooks, aiConnections, messageRetentionMaxDays: retention },
       {
         onSuccess: () => toast('Server settings saved'),
         onError: (err) => toast(err.message, 'error'),
@@ -514,6 +517,13 @@ function SettingsForm({ current }: { current: ServerSettings }) {
           hint="Lets queues take in work from web forms and other systems, each through tokens made in the queue's settings. When off, the webhook refuses everything and existing tokens do nothing."
         >
           <Switch checked={intakeWebhooks} onChange={setIntakeWebhooks} label="Allow queues to take in work through the intake webhook" />
+        </Section>
+
+        <Section
+          title="AI connections"
+          hint="Lets people connect AI assistants such as Claude and ChatGPT through the MCP server at /api/mcp, with a key or by signing in. An assistant acts as its person and can do no more than they can. When off, the MCP server refuses everything and existing connections do nothing."
+        >
+          <Switch checked={aiConnections} onChange={setAiConnections} label="Allow AI assistants to connect" />
         </Section>
 
         <Section

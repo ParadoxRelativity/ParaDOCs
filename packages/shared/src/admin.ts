@@ -32,6 +32,12 @@ export interface ServerSettings {
    * tokens queues already have are kept but do nothing.
    */
   intakeWebhooks: boolean;
+  /**
+   * Whether people can connect AI assistants — Claude, ChatGPT and the like —
+   * through the MCP server, with a key or by signing in. Off, the MCP server
+   * and its sign-in refuse everything, and existing connections do nothing.
+   */
+  aiConnections: boolean;
 }
 
 export const updateServerSettingsSchema = z
@@ -40,6 +46,7 @@ export const updateServerSettingsSchema = z
     messageRetentionMaxDays: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable().optional(),
     passwordSignIn: z.boolean().optional(),
     intakeWebhooks: z.boolean().optional(),
+    aiConnections: z.boolean().optional(),
   })
   .refine((v) => Object.values(v).some((value) => value !== undefined), { message: 'Nothing to update' });
 

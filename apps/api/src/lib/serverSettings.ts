@@ -18,6 +18,7 @@ function defaults(): ServerSettings {
     messageRetentionMaxDays: null,
     passwordSignIn: true,
     intakeWebhooks: false,
+    aiConnections: false,
   };
 }
 

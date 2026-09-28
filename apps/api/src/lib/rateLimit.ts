@@ -137,3 +137,31 @@ export const intakeLimits = {
     intakeByToken.hit(tokenId);
   },
 };
+
+/** Requests to the MCP server through one AI connection. */
+const mcpByConnection = new RateLimiter(240, MINUTE);
+
+/**
+ * The MCP server. An assistant working through a task calls tools in quick
+ * bursts, so the limit is generous; it is there to stop a runaway loop, not to
+ * pace ordinary work.
+ */
+export const mcpLimits = {
+  check(connectionId: string): void {
+    const wait = mcpByConnection.retryAfter(connectionId);
+    if (wait) throw tooMany(wait, 'Too many requests through this AI connection. Wait a minute and try again.');
+    mcpByConnection.hit(connectionId);
+  },
+};
+
+/** Client registrations and token requests from one address. */
+const oauthByAddress = new RateLimiter(60, MINUTE);
+
+/** Signing an assistant in: registering a client, and exchanging or renewing its tokens. */
+export const oauthLimits = {
+  check(address: string): void {
+    const wait = oauthByAddress.retryAfter(address);
+    if (wait) throw tooMany(wait, 'Too many requests. Wait a minute and try again.');
+    oauthByAddress.hit(address);
+  },
+};

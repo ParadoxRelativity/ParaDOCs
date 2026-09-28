@@ -45,6 +45,8 @@ export default defineConfig(({ mode }) => {
         // Same-origin in dev so the session cookie behaves exactly as in production.
         '/api': { target: apiUrl, changeOrigin: true },
         '/uploads': { target: apiUrl, changeOrigin: true },
+        // Where AI clients discover how to sign in to the MCP server.
+        '/.well-known': { target: apiUrl, changeOrigin: true },
         // Collaboration and chat websockets. Same origin so the session cookie
         // is sent with the handshake.
         '/collab': { target: apiUrl, ws: true, changeOrigin: true },

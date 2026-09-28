@@ -1,5 +1,4 @@
 import { Hocuspocus } from '@hocuspocus/server';
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { WebSocketServer } from 'ws';
 import * as Y from 'yjs';
 import type { IncomingMessage } from 'node:http';
@@ -25,21 +24,15 @@ import {
 import { query } from '../db/pool.js';
 import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions } from '../lib/documentMentions.js';
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
-import { setLiveDocumentLookup } from '../lib/liveDocuments.js';
+import { setLiveDocumentEditor, setLiveDocumentLookup } from '../lib/liveDocuments.js';
 import { syncWorkItemMentions } from '../lib/workItems.js';
-import { documentSchema } from './documentSchema.js';
+import { serverEditor } from './serverEditor.js';
 import { documentAccessForUser, resolveSession, selectProtocol, upgradeToken, type SessionUser } from '../plugins/session.js';
 import { UUID } from '../lib/access.js';
 import { onAccessChanged } from '../lib/accessEvents.js';
 import { onSignedOut } from '../lib/accountEvents.js';
 
 export const COLLAB_PATH = '/collab';
-
-/**
- * Runs BlockNote's schema server side so the Y.Doc can be converted back into
- * blocks and markdown. Creating it is expensive, so there is exactly one.
- */
-const serverEditor = ServerBlockNoteEditor.create({ schema: documentSchema });
 
 interface CollabContext {
   user: SessionUser;
@@ -254,6 +247,19 @@ export function createCollabServer(log: FastifyBaseLogger) {
   // Values referenced from elsewhere should come from the grid being edited,
   // not from the save a couple of seconds behind it.
   setLiveDocumentLookup((name) => hocuspocus.documents.get(name));
+
+  // Changes made from outside the editor, such as by an assistant through the
+  // MCP server. A direct connection is how Hocuspocus takes a change from the
+  // server itself and still stores it, crediting whoever made it.
+  setLiveDocumentEditor(async (name, userId, change) => {
+    const context = { user: { id: userId } } as CollabContext;
+    const connection = await hocuspocus.openDirectConnection(name, context);
+    try {
+      await connection.transact((document) => document.transact(() => change(document)));
+    } finally {
+      await connection.disconnect();
+    }
+  });
 
   // Access checked when someone opened a document says nothing about access
   // now. When it changes in a workspace, that workspace's open documents drop

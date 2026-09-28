@@ -50,6 +50,11 @@ import type {
   UpdateItemTypeInput,
   CreateWorkItemInput,
   CreateWorkItemLinkInput,
+  AiConnections,
+  CreateAiKeyInput,
+  CreatedAiKey,
+  OAuthDecision,
+  OAuthRequestInfo,
   CreateIntakeTokenInput,
   CreatedIntakeToken,
   IntakeSettings,
@@ -142,6 +147,7 @@ export const keys = {
   projects: (ws: string, archived = false) => ['projects', ws, archived] as const,
   project: (id: string) => ['project', id] as const,
   intake: (projectId: string) => ['intake', projectId] as const,
+  aiConnections: ['aiConnections'] as const,
   workItems: (projectId: string) => ['workItems', projectId] as const,
   workItemResponses: (projectId: string) => ['workItemResponses', projectId] as const,
   archivedWorkItems: (projectId: string, completedSince?: string) =>
@@ -936,6 +942,48 @@ export function useIntakeTokens(projectId: string) {
       onSuccess: settle,
     }),
   };
+}
+
+/** Your AI connections: keys you made, and assistants you signed in. */
+export function useAiConnections() {
+  return useQuery({
+    queryKey: keys.aiConnections,
+    queryFn: () => api.get<AiConnections>('/ai-connections'),
+  });
+}
+
+/** Making keys and revoking connections. */
+export function useAiConnectionActions() {
+  const qc = useQueryClient();
+  const settle = () => void qc.invalidateQueries({ queryKey: keys.aiConnections });
+  return {
+    createKey: useMutation({
+      mutationFn: (input: CreateAiKeyInput) => api.post<CreatedAiKey>('/ai-keys', input),
+      onSuccess: settle,
+    }),
+    revoke: useMutation({
+      mutationFn: (id: string) => api.delete(`/ai-connections/${id}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
+/** Who is asking to connect, for the consent page. */
+export function useOAuthClient(clientId: string, redirectUri: string) {
+  return useQuery({
+    queryKey: ['oauthClient', clientId, redirectUri],
+    queryFn: () => api.get<OAuthRequestInfo>(`/oauth/client${qs({ client_id: clientId, redirect_uri: redirectUri })}`),
+    retry: false,
+  });
+}
+
+/** The answer on the consent page, which says where to send the person next. */
+export function useOAuthDecision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (decision: OAuthDecision) => api.post<{ redirectTo: string }>('/oauth/authorize', decision),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.aiConnections }),
+  });
 }
 
 /** Adding, changing and removing a project's statuses, roles and workflows. */

@@ -7,6 +7,7 @@ import { createChatServer } from './chat/server.js';
 import { attachVoiceProxy } from './lib/voiceProxy.js';
 import { sweepExpiredMessages } from './lib/retention.js';
 import { scheduleServerUpdateChecks } from './lib/releases.js';
+import { sweepOAuth } from './routes/oauth.js';
 
 const app = await buildApp();
 
@@ -65,6 +66,7 @@ const sweep = setInterval(() => {
   query('DELETE FROM admin_sessions WHERE expires_at < now()').catch((err) =>
     app.log.warn({ err }, 'admin session sweep failed'),
   );
+  sweepOAuth().catch((err) => app.log.warn({ err }, 'AI sign-in sweep failed'));
   void sweepRetention();
 }, 60 * 60 * 1000);
 sweep.unref();
