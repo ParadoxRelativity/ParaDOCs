@@ -24,6 +24,7 @@ import {
   useTags,
   useTeams,
   useFolderDocuments,
+  useNotifications,
   useTree,
   type WorkspaceSummary,
 } from '../api/hooks';
@@ -32,9 +33,11 @@ import {
   desktop,
   requireDesktop,
   useDesktopConnections,
+  useDesktopNotifications,
   useDesktopWorkspaces,
   type DesktopConnection,
 } from '../lib/desktop';
+import { countByWorkspace, type WorkspaceNotificationCount } from '../lib/workspaceNotifications';
 import { Button, IconButton, InlineIconNameForm, InlineInput, LoadMore, TagChip } from './ui';
 import Icon, { DocumentIcon, type IconName } from './Icon';
 import Avatar from './Avatar';
@@ -183,6 +186,7 @@ export default function LeftSidebar(props: Props) {
   }, [switcherOpen]);
 
   const current = workspaces.find((w) => w.id === workspaceId);
+  const notificationCounts = countByWorkspace(useNotifications().data);
   // In the desktop app the workspace menu spans every connection, not just this server.
   const connections = useDesktopConnections();
   const here = connections.find((c) => c.active);
@@ -251,7 +255,7 @@ export default function LeftSidebar(props: Props) {
               >
                 <WorkspaceIcon name={w.name} icon={w.icon} avatarUrl={w.avatarUrl} size="sm" />
                 <span className="min-w-0 flex-1 truncate">{w.name}</span>
-                <span className="text-xs text-[var(--color-muted)]">{w.documentCount}</span>
+                <NotificationCount value={notificationCounts.get(w.id)} />
               </button>
             ))}
             <button
@@ -1114,12 +1118,30 @@ function ConnectionLabel({ connection }: { connection: DesktopConnection }) {
   );
 }
 
+/** How much is waiting in a workspace, in the workspace menu. Nothing when there is none. */
+function NotificationCount({ value }: { value: WorkspaceNotificationCount | undefined }) {
+  if (!value) return null;
+  return (
+    <span
+      className={cx(
+        'min-w-4 shrink-0 rounded-full px-1 text-center text-[10px] font-semibold leading-4 text-white',
+        value.urgent ? 'bg-amber-500' : 'bg-[var(--color-accent)]',
+      )}
+    >
+      {value.count > 99 ? '99+' : value.count}
+      <span className="sr-only"> new</span>
+    </span>
+  );
+}
+
 /**
  * Another connection's workspaces, in the workspace menu. Picking one switches
  * the window to that connection and lands on the workspace.
  */
 function OtherConnection({ connection, onChosen }: { connection: DesktopConnection; onChosen: () => void }) {
   const listing = useDesktopWorkspaces(connection.id, true);
+  const notifications = useDesktopNotifications().data?.find((l) => l.connection.id === connection.id);
+  const notificationCounts = countByWorkspace(notifications?.status === 'ok' ? notifications.notifications : undefined);
   const toast = useToast();
 
   async function open(workspaceId?: string) {
@@ -1143,6 +1165,7 @@ function OtherConnection({ connection, onChosen }: { connection: DesktopConnecti
         <button key={w.id} onClick={() => void open(w.id)} className={row}>
           <WorkspaceIcon name={w.name} icon={w.icon} avatarUrl={w.picture} size="sm" />
           <span className="min-w-0 flex-1 truncate">{w.name}</span>
+          <NotificationCount value={notificationCounts.get(w.id)} />
         </button>
       ))}
       {data?.status === 'signed-out' && (
