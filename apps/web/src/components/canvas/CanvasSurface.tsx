@@ -102,6 +102,9 @@ const EDITABLE = new Set<CanvasElement['type']>(['note', 'text', 'shape', 'node'
 /** How close, in screen pixels, an edge must come to another before it snaps to it. */
 const SNAP_DISTANCE = 6;
 
+/** macOS browsers open the context menu on press rather than on release. */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+
 /** Pictures keep their proportions when resized unless Shift is held; everything else, only while it is. */
 const KEEP_RATIO = new Set<CanvasElement['type']>(['image', 'video']);
 
@@ -771,8 +774,14 @@ export default function CanvasSurface(props: Props) {
   // The menu after a right-button pan opens wherever the button came up: over
   // the toolbars, the minimap or off the board, not only on this surface. So it
   // is refused on the window, and the next press of any kind clears the flag.
+  // On a Mac the menu comes with the press, before any drag could be seen, so a
+  // press on empty board never gets one there; elements and text keep theirs.
   useEffect(() => {
     function onContextMenu(e: MouseEvent) {
+      if (IS_MAC && gesture.current?.kind === 'pan') {
+        e.preventDefault();
+        return;
+      }
       if (!rightPanned.current) return;
       rightPanned.current = false;
       e.preventDefault();
