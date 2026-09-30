@@ -3,7 +3,8 @@ import { RING_TIMEOUT_MS, type CallCaller, type CallEvent } from '@paradocs/shar
 import { api } from '../api/client';
 import { useToast } from '../components/Toast';
 import type { Call } from './call';
-import { startRingtone } from './ringtone';
+import { startRingback, startRingtone } from './ringtone';
+import { playSound } from './sounds';
 
 export interface IncomingCall {
   workspaceId: string;
@@ -72,6 +73,8 @@ export function useDirectCalls({
   acceptedRef.current = onAccepted;
   const selfRef = useRef(selfId);
   selfRef.current = selfId;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   // Who has declined the ring going out, against how many were rung.
   const declinedRef = useRef(new Set<string>());
   const othersRef = useRef(1);
@@ -104,31 +107,49 @@ export function useDirectCalls({
       setRingingOut(null);
       return;
     }
-    // Someone else is in the room: answered.
+    // Someone else is in the room: answered. Said once, rather than also as
+    // someone joining.
     if (remoteCount > 0) {
       setRingingOut(null);
+      playSound('call_connected', { instead: ['participant_joined'] });
       return;
     }
+    const stopRingback = startRingback();
     const timer = setTimeout(() => {
       void ring(ringingOut, 'cancel');
       setRingingOut(null);
       const current = callRef.current;
-      if (current.channelId === ringingOut && current.participants.length <= 1) current.leave();
+      if (current.channelId === ringingOut && current.participants.length <= 1) current.leaveWith('call_missed');
       toastRef.current('No answer');
     }, RING_TIMEOUT_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      stopRingback();
+    };
   }, [ringingOut, call.channelId, remoteCount]);
+
+  /** An incoming call ended without being answered or declined. */
+  const missed = useCallback((channelId: string) => {
+    if (incomingRef.current?.channelId !== channelId) return;
+    // The caller's cancel and this window's own timeout land together.
+    incomingRef.current = null;
+    setIncoming(null);
+    if (!mutedRef.current) playSound('call_missed');
+  }, []);
 
   useEffect(() => {
     if (!incoming) return;
-    const stop = muted ? () => {} : startRingtone();
+    // A ringtone would drown out a call already under way; a short knock does not.
+    const inCall = callRef.current.status === 'joined';
+    if (!muted && inCall) playSound('call_waiting');
+    const stop = muted || inCall ? () => {} : startRingtone();
     // The caller gives up at the same point, so an unanswered card does not linger.
-    const timer = setTimeout(() => setIncoming(null), RING_TIMEOUT_MS);
+    const timer = setTimeout(() => missed(incoming.channelId), RING_TIMEOUT_MS);
     return () => {
       stop();
       clearTimeout(timer);
     };
-  }, [incoming, muted]);
+  }, [incoming, muted, missed]);
 
   const handleEvent = useCallback((event: CallEvent) => {
     if (event.type === 'call.ringing') {
@@ -146,11 +167,9 @@ export function useDirectCalls({
     // Settled for this person: the caller gave up, or they answered or declined
     // in another of their windows. In a group, someone else answering is not
     // an answer for them.
-    if (
-      incomingRef.current?.channelId === event.channelId &&
-      (event.reason === 'cancelled' || event.userId === selfRef.current)
-    ) {
-      setIncoming(null);
+    if (incomingRef.current?.channelId === event.channelId) {
+      if (event.userId === selfRef.current) setIncoming(null);
+      else if (event.reason === 'cancelled') missed(event.channelId);
     }
 
     if (event.reason === 'declined' && ringingOutRef.current === event.channelId && event.userId !== selfRef.current) {
@@ -158,10 +177,11 @@ export function useDirectCalls({
       if (declinedRef.current.size < othersRef.current) return;
       setRingingOut(null);
       const current = callRef.current;
-      if (current.channelId === event.channelId && current.participants.length <= 1) current.leave();
+      if (current.channelId === event.channelId && current.participants.length <= 1) current.leaveWith('call_declined');
+      else playSound('call_declined');
       toastRef.current(othersRef.current > 1 ? 'Everyone declined' : 'Call declined');
     }
-  }, []);
+  }, [missed]);
 
   const accept = useCallback((video: boolean) => {
     const answering = incomingRef.current;

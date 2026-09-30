@@ -101,7 +101,7 @@ export default function PopoutWindow({ user }: { user: User }) {
   useEffect(() => {
     if (joined.current || search.get('call') !== '1' || !channel) return;
     joined.current = true;
-    call.join(channelId);
+    call.join(channelId, { quiet: true });
     // `call` is rebuilt every render; joining depends only on the channel being known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, channelId, search]);
@@ -117,7 +117,7 @@ export default function PopoutWindow({ user }: { user: User }) {
         if (command.channelId !== id) return;
         if (command.type === 'take-call') {
           joined.current = true;
-          if (command.join && current.channelId !== id) current.join(id);
+          if (command.join && current.channelId !== id) current.join(id, { quiet: true });
         } else if (command.type === 'hand-back') {
           void desktop?.popouts.handBack(id, current.channelId === id).catch(() => {});
         }

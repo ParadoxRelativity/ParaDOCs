@@ -83,7 +83,9 @@ function copyDir(from, to) {
 }
 
 function copyAssets() {
-  const pages = { picker: ['index.html', 'picker.css'] };
+  // The hidden page that plays notification sounds reads them from the bundled
+  // web client below.
+  const pages = { picker: ['index.html', 'picker.css'], sounds: ['player.html', 'player.js'] };
   for (const [page, files] of Object.entries(pages)) {
     fs.mkdirSync(path.join(dist, page), { recursive: true });
     for (const file of files) {

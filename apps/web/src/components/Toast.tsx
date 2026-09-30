@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { playSound } from '../lib/sounds';
 import { cx } from '../lib/util';
 import Icon from './Icon';
 
@@ -23,6 +24,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback<PushToast>((message, tone = 'success') => {
     const id = nextId.current++;
     setToasts((current) => [...current, { id, message, tone }]);
+    // A confirmation is quiet; a failure is heard, unless something more
+    // particular, such as a message that did not send, already said so.
+    if (tone === 'error') playSound('error');
     // Errors linger, since they usually need reading.
     const timer = setTimeout(() => {
       setToasts((current) => current.filter((t) => t.id !== id));

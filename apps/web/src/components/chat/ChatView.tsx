@@ -21,6 +21,7 @@ import {
   type MessagePage,
 } from '../../api/hooks';
 import { mergeReferences } from '../../lib/chatEvents';
+import { playSound } from '../../lib/sounds';
 import { cx, formatRelative } from '../../lib/util';
 import { EmptyState, IconButton, Spinner } from '../ui';
 import { useToast } from '../Toast';
@@ -315,7 +316,13 @@ export function ChatView({
         disabled={!canPost}
         onTyping={onTyping ? (typing) => onTyping(channel.id, typing) : undefined}
         onSend={async (input) => {
-          await send.mutateAsync(input);
+          try {
+            await send.mutateAsync(input);
+          } catch (err) {
+            playSound('message_failed');
+            throw err;
+          }
+          playSound('message_sent');
         }}
       />
 

@@ -390,7 +390,12 @@ export function registerIpc(): void {
   handle('desktop:notifications:changed', async (caller, state): Promise<void> => {
     const page = state && typeof state === 'object' ? (state as Record<string, unknown>) : {};
     const channelId = typeof page.openChannelId === 'string' && UUID.test(page.openChannelId) ? page.openChannelId : null;
-    await pageChanged(caller.id, { quiet: page.quiet === true, openChannelId: channelId });
+    const workspaceId = typeof page.workspaceId === 'string' && UUID.test(page.workspaceId) ? page.workspaceId : null;
+    await pageChanged(caller.id, {
+      quiet: page.quiet === true,
+      openChannelId: channelId,
+      workspaceId,
+    });
   });
 
   handle('desktop:notifications:markRead', (_caller, id, channelIds): Promise<Outcome> | Outcome => {

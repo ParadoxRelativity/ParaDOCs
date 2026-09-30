@@ -10,14 +10,26 @@ import { desktop } from './desktop';
  * round, and what it has open, so a conversation already on screen stays
  * quiet.
  *
+ * Those notifications are silent: this page plays the app's own sounds for
+ * what it hears, and the app plays them for the rest. Saying which workspace
+ * is open is how the app knows which mentions this page has heard.
+ *
  * Only the main window's page says anything. A popped-out channel is one of
  * its conversations, and the app knows when it is the window in front.
  */
-export function useOsNotifications({ quiet, openChannelId }: { quiet: boolean; openChannelId: string | null }): void {
+export function useOsNotifications({
+  quiet,
+  openChannelId,
+  workspaceId,
+}: {
+  quiet: boolean;
+  openChannelId: string | null;
+  workspaceId: string | null;
+}): void {
   const { data } = useNotifications();
 
   useEffect(() => {
     if (!desktop || !data) return;
-    void desktop.notifications.changed({ quiet, openChannelId }).catch(() => {});
-  }, [data, quiet, openChannelId]);
+    void desktop.notifications.changed({ quiet, openChannelId, workspaceId }).catch(() => {});
+  }, [data, quiet, openChannelId, workspaceId]);
 }

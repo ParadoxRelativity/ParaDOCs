@@ -57,7 +57,7 @@ contextBridge.exposeInMainWorld('paradocsDesktop', {
   },
   notifications: {
     list: () => ipcRenderer.invoke('desktop:notifications:list'),
-    changed: (state: { quiet: boolean; openChannelId: string | null }) =>
+    changed: (state: { quiet: boolean; openChannelId: string | null; workspaceId: string | null }) =>
       ipcRenderer.invoke('desktop:notifications:changed', state),
     markRead: (connectionId: string, channelIds?: string[]) =>
       ipcRenderer.invoke('desktop:notifications:markRead', connectionId, channelIds),

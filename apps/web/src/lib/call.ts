@@ -15,6 +15,7 @@ import type { CallCredentials } from '../api/hooks';
 import { useToast } from '../components/Toast';
 import { InputGainProcessor } from './inputGain';
 import { explainJoinFailure, sameOriginSignallingUrl } from './signalling';
+import { playSound, type SoundName } from './sounds';
 import {
   canChooseSpeaker,
   connectedDeviceId,
@@ -29,6 +30,8 @@ export interface JoinOptions {
   video?: boolean;
   /** Runs once the room is joined, such as ringing the person being called. */
   onJoined?: () => void;
+  /** A call moving between windows rather than a fresh join, so it makes no sound. */
+  quiet?: boolean;
 }
 
 export interface Call {
@@ -41,6 +44,8 @@ export interface Call {
   screen: boolean;
   join: (channelId: string, options?: JoinOptions) => void;
   leave: () => void;
+  /** Leaves with another sound than the usual one, such as a declined call's, or none for a handover. */
+  leaveWith: (sound: SoundName | null) => void;
   toggle: (kind: 'mic' | 'camera' | 'screen') => void;
 }
 
@@ -256,15 +261,34 @@ export function useCall(): Call {
           const credentials = await api.post<CallCredentials>(`/channels/${nextChannelId}/call`);
           const room = new Room(await roomOptions());
           roomRef.current = room;
+          let reconnecting = false;
 
           room
             .on(RoomEvent.ParticipantConnected, () => {
+              playSound('participant_joined');
               refresh();
               refreshOccupancy();
             })
             .on(RoomEvent.ParticipantDisconnected, () => {
+              playSound('participant_left');
               refresh();
               refreshOccupancy();
+            })
+            // Someone else starting or stopping a share. Your own is the button's sound.
+            .on(RoomEvent.TrackPublished, (publication) => {
+              if (publication.source === Track.Source.ScreenShare) playSound('screenshare_remote_started');
+            })
+            .on(RoomEvent.TrackUnpublished, (publication) => {
+              if (publication.source === Track.Source.ScreenShare) playSound('screenshare_remote_stopped');
+            })
+            // LiveKit reconnects by itself; these only say it is happening.
+            .on(RoomEvent.Reconnecting, () => {
+              reconnecting = true;
+              playSound('connection_lost');
+            })
+            .on(RoomEvent.Reconnected, () => {
+              reconnecting = false;
+              playSound('connection_restored');
             })
             .on(RoomEvent.TrackSubscribed, (track) => {
               playRemoteAudio(track, audioElements.current);
@@ -287,7 +311,12 @@ export function useCall(): Call {
             // it then would clear the call that is actually running and leave
             // the app showing nobody in a room it is still connected to.
             .on(RoomEvent.Disconnected, () => {
-              if (roomRef.current === room) reset();
+              if (roomRef.current !== room) return;
+              // Leaving on purpose clears the ref first, so this is the call
+              // dropping: the network gave up, or the server ended it. Giving
+              // up on a reconnection has already been heard.
+              if (!reconnecting) playSound('connection_lost');
+              reset();
             });
 
           // No address from the server means it relays signalling on the
@@ -297,6 +326,7 @@ export function useCall(): Call {
             throw explainJoinFailure(err, signalling);
           });
           setStatus('joined');
+          if (!options.quiet) playSound('self_join_call');
 
           if (credentials.canSpeak === false) {
             // A lock lets this person listen here but not speak. The token
@@ -350,12 +380,15 @@ export function useCall(): Call {
           if (kind === 'mic') {
             await local.setMicrophoneEnabled(!mic);
             setMic(!mic);
+            playSound(mic ? 'mic_mute' : 'mic_unmute');
           } else if (kind === 'camera') {
             await local.setCameraEnabled(!camera);
             setCamera(!camera);
+            playSound(camera ? 'camera_off' : 'camera_on');
           } else {
             await local.setScreenShareEnabled(!screen, { audio: true });
             setScreen(!screen);
+            playSound(screen ? 'screenshare_stop' : 'screenshare_start');
           }
           refresh();
         } catch (err) {
@@ -377,7 +410,15 @@ export function useCall(): Call {
     [mic, camera, screen, refresh, toast],
   );
 
-  const leave = useCallback(() => void disconnect(), [disconnect]);
+  const leaveWith = useCallback(
+    (sound: SoundName | null) => {
+      if (sound && roomRef.current) playSound(sound);
+      void disconnect();
+    },
+    [disconnect],
+  );
+  // Also a click handler, so whatever it is called with is ignored.
+  const leave = useCallback(() => leaveWith('self_leave_call'), [leaveWith]);
 
-  return { channelId, status, participants, mic, camera, screen, join, leave, toggle };
+  return { channelId, status, participants, mic, camera, screen, join, leave, leaveWith, toggle };
 }

@@ -56,6 +56,7 @@ import NotificationsMenu from './components/NotificationsMenu';
 import SearchPalette from './components/SearchPalette';
 import { ChatView } from './components/chat/ChatView';
 import { useChatEvents } from './lib/chatEvents';
+import { useNotificationSound } from './lib/notificationSound';
 import { useOsNotifications } from './lib/osNotifications';
 import { VoiceRoom } from './components/chat/VoiceRoom';
 import { CallStage } from './components/chat/CallStage';
@@ -394,6 +395,7 @@ function Workspace({
     activeChannelId: chat ? (channelId ?? null) : null,
     idle,
     quiet,
+    elsewhere: poppedOutIds,
     onNotifyClick: (targetWorkspaceId, id) => {
       // Clicking a mention should land on the conversation wherever it is
       // being read, which may be a window of its own rather than this one.
@@ -407,7 +409,8 @@ function Workspace({
     },
   });
 
-  useOsNotifications({ quiet, openChannelId: chat ? (channelId ?? null) : null });
+  useOsNotifications({ quiet, openChannelId: chat ? (channelId ?? null) : null, workspaceId: workspaceId || null });
+  useNotificationSound({ quiet });
 
   const openDirect = useOpenDirect(workspaceId);
 
@@ -508,7 +511,7 @@ function Workspace({
           const current = latest.current;
           current.navigate(`/w/${command.workspaceId}/c/${command.channelId}`);
           setMobilePane('content');
-          if (command.join) current.call.join(command.channelId);
+          if (command.join) current.call.join(command.channelId, { quiet: true });
         }
       }),
     [],
@@ -583,7 +586,7 @@ function Workspace({
    */
   function popOut(target: Channel, withCall: boolean) {
     if (!desktop) return;
-    if (withCall) call.leave();
+    if (withCall) call.leaveWith(null);
 
     /**
      * Rejoins what the leave above gave up, and only if the call is still
@@ -593,7 +596,7 @@ function Workspace({
      */
     const restoreCall = () => {
       const current = latest.current.call;
-      if (withCall && current.channelId === null && current.status === 'idle') current.join(target.id);
+      if (withCall && current.channelId === null && current.status === 'idle') current.join(target.id, { quiet: true });
     };
 
     const failed = (message: string) => {

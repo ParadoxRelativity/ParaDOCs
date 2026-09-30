@@ -42,6 +42,8 @@ const MIME: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.map': 'application/json; charset=utf-8',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
 };
 
 /**
