@@ -205,29 +205,24 @@ export function useChatEvents({
 
       if (!fromSomeoneElse) return;
       // Everything in a direct conversation is said to you; in a channel, only
-      // a mention is.
+      // a mention is. Anything else in a channel is still worth knowing about,
+      // just less urgently.
       const addressedToYou = direct || mentions(event.message.body, selfId);
-      const visible = document.visibilityState === 'visible';
+      // Already looking at it: a quiet sound, and no notification.
+      const watching = here && document.visibilityState === 'visible';
       if (sounding) {
-        // Read as it arrives gets the quietest sound; the same conversation
-        // behind another window gets a fuller one, and anything said to you
-        // anywhere else the fullest.
-        if (here && visible && document.hasFocus()) playSound('message_received');
-        else if (addressedToYou) playSound('mention_or_dm');
-        else if (here) playSound('message_received_background');
+        if (watching) playSound('message_sent');
+        else playSound(addressedToYou ? 'mention_or_dm' : 'message_received');
       }
 
-      if (muted.current || !announcing.current || !addressedToYou) return;
-      // Already looking at it is not worth interrupting.
-      const watching = here && visible;
-      if (watching) return;
+      if (muted.current || !announcing.current || watching) return;
 
       const authorName = author?.name ?? 'Someone';
       // Being named is the more personal of the two, so it wins when a message does both.
       const addressed =
         mentionsHere(event.message.body) && !mentionsByName(event.message.body, selfId)
-          ? 'notified everyone'
-          : 'mentioned you';
+          ? ' notified everyone'
+          : ' mentioned you';
       // A group conversation is named, so it is clear which of several it was said in.
       const group = direct
         ? qc.getQueryData<Channel[]>(keys.directs(event.workspaceId))?.find((c) => c.id === channelId)
@@ -237,13 +232,14 @@ export function useChatEvents({
           ? group && isGroupDirect(group)
             ? `${authorName} in ${directName(group)}`
             : authorName
-          : `${authorName} ${addressed} in #${names.current.get(channelId) ?? 'chat'}`,
+          : `${authorName}${addressedToYou ? addressed : ''} in #${names.current.get(channelId) ?? 'chat'}`,
         body:
           messagePreview(event.message.body, event.references) ||
           attachmentSummary(event.message.attachments?.length ?? 0),
         // One notification per conversation, replaced as messages arrive,
-        // rather than a stack of them.
-        tag: direct ? `paradocs-direct-${channelId}` : 'paradocs-mention',
+        // rather than a stack of them. A mention gets one of its own, so a
+        // chatty channel cannot replace it before it is seen.
+        tag: direct ? `paradocs-direct-${channelId}` : addressedToYou ? 'paradocs-mention' : `paradocs-channel-${channelId}`,
         onClick: () => openChannel.current(event.workspaceId, channelId),
       });
     },
