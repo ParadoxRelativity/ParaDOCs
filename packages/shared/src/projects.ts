@@ -493,10 +493,15 @@ export interface WorkItemNotification {
   projectId: string;
   key: string;
   title: string;
-  /** Given a role on it, or named in its description or a comment. */
-  reason: 'role' | 'mention';
+  /**
+   * Given a role on it, named in its description or a comment, or — holding
+   * any role on it — a new comment or status. Older servers send only the first two.
+   */
+  reason: 'role' | 'mention' | 'comment' | 'status';
   /** For a role, which one. */
   role: string | null;
+  /** For a status change, the status it moved to. Absent from older servers. */
+  status?: string | null;
   workspace: NotificationWorkspace;
   by: { id: string; name: string; avatarUrl: string | null } | null;
   createdAt: string;

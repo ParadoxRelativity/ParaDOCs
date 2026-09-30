@@ -21,7 +21,8 @@ import { api } from '../api/client';
 import { keys, refetchAfterAccessChange, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
 import { desktop } from './desktop';
-import { playSound, soundsEnabled } from './sounds';
+import { notify } from './browserNotifications';
+import { playSound } from './sounds';
 import { setTyping } from './typing';
 
 export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
@@ -376,30 +377,4 @@ export function useChatEvents({
   }, []);
 
   return { status, permission, requestPermission, sendTyping };
-}
-
-function notify({
-  title,
-  body,
-  tag,
-  onClick,
-}: {
-  title: string;
-  body: string;
-  tag: string;
-  onClick: () => void;
-}): void {
-  if (desktop || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-  try {
-    // The app plays its own sound for it; the system's would be a second one.
-    const notification = new Notification(title, { body, tag, silent: soundsEnabled() });
-    notification.onclick = () => {
-      window.focus();
-      onClick();
-      notification.close();
-    };
-  } catch {
-    // Some browsers refuse construction outside a service worker; a missing
-    // notification must never break message delivery.
-  }
 }

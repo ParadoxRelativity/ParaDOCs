@@ -56,7 +56,7 @@ import NotificationsMenu from './components/NotificationsMenu';
 import SearchPalette from './components/SearchPalette';
 import { ChatView } from './components/chat/ChatView';
 import { useChatEvents } from './lib/chatEvents';
-import { useNotificationSound } from './lib/notificationSound';
+import { useBellAnnouncements } from './lib/bellAnnouncements';
 import { useOsNotifications } from './lib/osNotifications';
 import { VoiceRoom } from './components/chat/VoiceRoom';
 import { CallStage } from './components/chat/CallStage';
@@ -410,7 +410,7 @@ function Workspace({
   });
 
   useOsNotifications({ quiet, openChannelId: chat ? (channelId ?? null) : null, workspaceId: workspaceId || null });
-  useNotificationSound({ quiet });
+  useBellAnnouncements({ quiet, onOpen: show });
 
   const openDirect = useOpenDirect(workspaceId);
 

@@ -46,7 +46,7 @@ interface WorkItemRow extends WorkspaceColumns {
   project_id: string;
   key: string;
   title: string;
-  reason: 'role' | 'mention';
+  reason: WorkItemNotification['reason'];
   detail: string | null;
   created_at: string;
   author_id: string | null;
@@ -322,7 +322,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           key: row.key,
           title: row.title,
           reason: row.reason,
-          role: row.detail,
+          role: row.reason === 'role' ? row.detail : null,
+          status: row.reason === 'status' ? row.detail : null,
           workspace: workspaceOf(row),
           by: row.author_id
             ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }

@@ -67,7 +67,7 @@ is used only if that player cannot load. See `apps/desktop/src/main/notifier.ts`
 | `mention_or_dm` | A direct message, or a mention of you, that you are not looking at, along with a notification |
 | `message_failed` | Your message could not be sent |
 | `reaction_added` | Someone reacts to one of your messages, in a conversation loaded this session |
-| `notification_generic` | Something new reaches the bell: a work item, a document tag, an invitation |
+| `notification_generic` | Something new reaches the bell, along with a notification: a role on a work item, a comment or status change on an item you hold any role on, being named in one, a document tag, an invitation |
 | `error` | An error toast. It gives way to a more specific sound played at the same moment |
 | `call_incoming` (loop) | Someone is calling you |
 | `call_waiting` | Someone is calling you while you are already in a call (replaces the ringtone) |

@@ -242,7 +242,13 @@ function announcements(notifications: Notifications): Announcement[] {
       title:
         item.reason === 'role'
           ? `${by} made you ${item.role ? item.role.toLowerCase() : 'a participant'} on ${item.key}`
-          : `${by} mentioned you in ${item.key}`,
+          : item.reason === 'comment'
+            ? `${by} commented on ${item.key}`
+            : item.reason === 'status'
+              ? item.status
+                ? `${by} moved ${item.key} to ${item.status}`
+                : `${by} changed the status of ${item.key}`
+              : `${by} mentioned you in ${item.key}`,
       body: item.title,
       picture: item.by?.avatarUrl ?? null,
       path: `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`,
