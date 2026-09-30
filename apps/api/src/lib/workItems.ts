@@ -45,6 +45,28 @@ export async function syncWorkItemMentions(
   );
 }
 
+export type WorkItemNotificationReason = 'role' | 'mention' | 'comment' | 'status';
+
+/**
+ * How much a notification matters: being handed an item outranks being named
+ * in it, and both outrank hearing that it moved on. An unread notification is
+ * only replaced by one that matters as much or more.
+ */
+const RANK_SQL = (reason: string) => `CASE ${reason} WHEN 'role' THEN 3 WHEN 'mention' THEN 2 ELSE 1 END`;
+
+/**
+ * What an existing row becomes when another reason arrives for the same person
+ * and item. One that matters less than an unread one leaves it as it was, time
+ * and all: it is already waiting, and saying it again under someone else's name
+ * would misreport who did what.
+ */
+const UPSERT_SQL = `
+     ON CONFLICT (work_item_id, user_id) DO UPDATE
+        SET reason = EXCLUDED.reason, detail = EXCLUDED.detail,
+            created_by = EXCLUDED.created_by, created_at = now(), read_at = NULL
+      WHERE work_item_notifications.read_at IS NOT NULL
+         OR ${RANK_SQL('EXCLUDED.reason')} >= ${RANK_SQL('work_item_notifications.reason')}`;
+
 /**
  * Tells people about a work item: that they were given a role on it, or named
  * in it. Only people who can open its project are told, and nobody is told
@@ -68,16 +90,35 @@ export async function notifyAboutWorkItem(
       WHERE i.id = $1
         AND m.user_id = ANY($2::uuid[])
         AND ${projectLevelSql('m.user_id', 'm.role_id')} > 0
-     ON CONFLICT (work_item_id, user_id) DO UPDATE
-        -- Being handed the item outranks being named in it, so an unread role
-        -- is not turned into a mere mention by a later comment.
-        SET reason = CASE WHEN work_item_notifications.read_at IS NULL AND work_item_notifications.reason = 'role'
-                          THEN 'role' ELSE EXCLUDED.reason END,
-            detail = CASE WHEN work_item_notifications.read_at IS NULL AND work_item_notifications.reason = 'role'
-                               AND EXCLUDED.reason = 'mention'
-                          THEN work_item_notifications.detail ELSE EXCLUDED.detail END,
-            created_by = EXCLUDED.created_by, created_at = now(), read_at = NULL`,
+     ${UPSERT_SQL}`,
     [itemId, candidates, reason, detail, by],
+  );
+}
+
+/**
+ * Tells everyone holding a role on a work item — whichever role, watcher
+ * included — that it moved on: a comment, or a new status (`detail` names it).
+ * As above, only people who can still open its project, and never the person
+ * who did it.
+ */
+export async function notifyRoleHolders(
+  itemId: string,
+  reason: 'comment' | 'status',
+  detail: string | null,
+  by: string,
+): Promise<void> {
+  await query(
+    `INSERT INTO work_item_notifications (work_item_id, user_id, reason, detail, created_by)
+     SELECT DISTINCT i.id, m.user_id, $2, $3, $4::uuid
+       FROM work_items i
+       JOIN work_item_roles r ON r.work_item_id = i.id AND r.user_id IS NOT NULL
+       JOIN projects p ON p.id = i.project_id
+       JOIN workspace_members m ON m.workspace_id = p.workspace_id AND m.user_id = r.user_id
+      WHERE i.id = $1
+        AND m.user_id <> $4::uuid
+        AND ${projectLevelSql('m.user_id', 'm.role_id')} > 0
+     ${UPSERT_SQL}`,
+    [itemId, reason, detail, by],
   );
 }
 

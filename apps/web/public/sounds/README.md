@@ -48,10 +48,13 @@ notifications. The feedback from your own call controls still plays.
 In the desktop app, notifications from the operating system are **silent**,
 and these sounds replace the system's. A connection's page, while it is loaded,
 plays the sound for what it hears itself: direct messages in any workspace,
-mentions in the workspace it has open, and anything new in its bell. The desktop
-app plays `mention_or_dm` or `notification_generic` itself for everything else:
-a server not opened yet this session, a mention in another workspace, or no
-window open at all on macOS. It uses a hidden window and the copy of these files
+channel messages and mentions in the workspace it has open, and anything new
+in its bell. The desktop
+app plays `mention_or_dm`, `message_received` or `notification_generic` itself
+for everything else: a server not opened yet this session, a channel in another
+workspace, or no window open at all on macOS. Each conversation keeps only its
+latest notification, and a mention gets its own, so a busy channel cannot push
+it out. It uses a hidden window and the copy of these files
 bundled with the app (`apps/desktop/src/main/soundPlayer.ts`). The system's sound
 is used only if that player cannot load. See `apps/desktop/src/main/notifier.ts`.
 
@@ -59,13 +62,12 @@ is used only if that player cannot load. See `apps/desktop/src/main/notifier.ts`
 
 | Sound | When |
 |---|---|
-| `message_received` (3 variants) | A message arrives in the conversation you are looking at |
-| `message_received_background` | A message arrives in your open conversation while its window is behind another |
-| `mention_or_dm` | A direct message, or a mention of you, that you are not looking at |
-| `message_sent` (3 variants) | Your message was sent |
+| `message_sent` (3 variants) | Someone else's message arrives in the channel or DM you are looking at. There is no notification. Sending your own makes no sound |
+| `message_received` (3 variants) | A message in a text channel you are not looking at, along with a notification |
+| `mention_or_dm` | A direct message, or a mention of you, that you are not looking at, along with a notification |
 | `message_failed` | Your message could not be sent |
 | `reaction_added` | Someone reacts to one of your messages, in a conversation loaded this session |
-| `notification_generic` | Something new reaches the bell: a work item, a document tag, an invitation |
+| `notification_generic` | Something new reaches the bell, along with a notification: a role on a work item, a comment or status change on an item you hold any role on, being named in one, a document tag, an invitation |
 | `error` | An error toast. It gives way to a more specific sound played at the same moment |
 | `call_incoming` (loop) | Someone is calling you |
 | `call_waiting` | Someone is calling you while you are already in a call (replaces the ringtone) |
@@ -98,4 +100,5 @@ here. They are still in the suite. PARA-35 tracks the work.
 | `connection_poor` | A call-quality indicator (connection quality is not shown anywhere yet) |
 | `warning` | A warning level. Toasts are only "success" or "error" |
 | `call_ended` | A separate "call ended" moment. Hanging up already plays `self_leave_call`, and the other side leaving plays `participant_left` |
+| `message_received_background` | Not skipped for lack of a feature. A conversation you have open but are not looking at is treated like any other one you are not looking at, and gets `message_received` or `mention_or_dm` |
 | `success` | Not skipped for lack of a feature. Success toasts are routine confirmations, such as a copied link, and a sound on each would be intrusive. It can be added in `Toast.tsx` beside `error` |

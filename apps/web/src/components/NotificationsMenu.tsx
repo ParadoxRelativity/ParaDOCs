@@ -574,23 +574,52 @@ function WorkItemRow({ item, onOpen }: { item: WorkItemNotification; onOpen: (ne
           <span className="ml-auto shrink-0">{formatRelative(item.createdAt)}</span>
         </div>
         <p className="mt-0.5 line-clamp-2 text-sm">
-          <span className="font-medium">{item.by?.name ?? 'Someone'}</span>{' '}
-          {item.reason === 'role' ? `made you ${item.role ?? 'part of'}` : 'mentioned you in'}{' '}
+          <span className="font-medium">{item.by?.name ?? 'Someone'}</span> {workItemAction(item)}{' '}
           <span className="font-medium">{item.title}</span>
+          {item.reason === 'status' && item.status ? ` to ${item.status}` : ''}
         </p>
         <p className="mt-1">
-          <span
-            className={cx(
-              'rounded-full px-1.5 text-[11px] font-semibold text-white',
-              item.reason === 'role' ? 'bg-[var(--color-accent)]' : 'bg-amber-500',
-            )}
-          >
-            {item.reason === 'role' ? (item.role ?? 'Assigned') : 'Mentioned you'}
+          <span className={cx('rounded-full px-1.5 text-[11px] font-semibold text-white', WORK_ITEM_BADGE[item.reason])}>
+            {workItemBadge(item)}
           </span>
         </p>
       </div>
     </button>
   );
+}
+
+/** What was done, as the words between the person and the item's title. */
+function workItemAction(item: WorkItemNotification): string {
+  switch (item.reason) {
+    case 'role':
+      return `made you ${item.role ?? 'part of'}`;
+    case 'comment':
+      return 'commented on';
+    case 'status':
+      return item.status ? 'moved' : 'changed the status of';
+    default:
+      return 'mentioned you in';
+  }
+}
+
+const WORK_ITEM_BADGE: Record<WorkItemNotification['reason'], string> = {
+  role: 'bg-[var(--color-accent)]',
+  mention: 'bg-amber-500',
+  comment: 'bg-slate-500',
+  status: 'bg-slate-500',
+};
+
+function workItemBadge(item: WorkItemNotification): string {
+  switch (item.reason) {
+    case 'role':
+      return item.role ?? 'Assigned';
+    case 'comment':
+      return 'New comment';
+    case 'status':
+      return item.status ?? 'Status changed';
+    default:
+      return 'Mentioned you';
+  }
 }
 
 function InviteRow({ invite, actions }: { invite: InviteNotification; actions: Actions }) {

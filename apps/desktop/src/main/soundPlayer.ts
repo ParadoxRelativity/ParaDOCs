@@ -10,13 +10,29 @@ import { getPreferences } from './preferences.js';
  * It is made on first use and kept, so later sounds start at once.
  */
 
-/** The sounds the notifier may ask for, at the levels the sound suite recommends. */
-const LEVELS = {
-  mention_or_dm: 0.75,
-  notification_generic: 0.5,
+/**
+ * The sounds the notifier may ask for, at the levels the sound suite
+ * recommends, and how many variants each has (`_v1` … `_vN`, picked at random).
+ */
+const SOUNDS = {
+  mention_or_dm: { level: 0.75, variants: 0 },
+  message_received: { level: 0.36, variants: 3 },
+  notification_generic: { level: 0.5, variants: 0 },
 } as const;
 
-export type AppSound = keyof typeof LEVELS;
+export type AppSound = keyof typeof SOUNDS;
+
+const lastVariant = new Map<AppSound, number>();
+
+/** A variant's file, never the same one twice running. */
+function fileFor(sound: AppSound): string {
+  const { variants } = SOUNDS[sound];
+  if (!variants) return sound;
+  let index = Math.floor(Math.random() * variants);
+  if (index === lastVariant.get(sound)) index = (index + 1) % variants;
+  lastVariant.set(sound, index);
+  return `${sound}_v${index + 1}`;
+}
 
 let player: BrowserWindow | null = null;
 let ready: Promise<boolean> | null = null;
@@ -63,12 +79,12 @@ function open(): Promise<boolean> {
 export function playAppSound(sound: AppSound): boolean {
   if (broken || !app.isReady()) return false;
   const preferences = getPreferences();
-  const volume = LEVELS[sound] * ((preferences.sounds?.volume ?? 100) / 100);
+  const volume = SOUNDS[sound].level * ((preferences.sounds?.volume ?? 100) / 100);
   const speaker = preferences.media?.speakerId ?? '';
   void open().then((loaded) => {
     if (!loaded || !player || player.isDestroyed()) return;
     void player.webContents
-      .executeJavaScript(`play(${JSON.stringify(sound)}, ${volume}, ${JSON.stringify(speaker)})`)
+      .executeJavaScript(`play(${JSON.stringify(fileFor(sound))}, ${volume}, ${JSON.stringify(speaker)})`)
       .catch(() => {});
   });
   return true;

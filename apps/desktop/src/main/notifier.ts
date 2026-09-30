@@ -62,6 +62,8 @@ interface Announcement {
   channelId?: string;
   /** Opening a tagged document is what answers the tag. */
   documentId?: string;
+  /** For a channel message, how it reads when it newly names you. */
+  mentioned?: string;
   /** The app sound that goes with it. */
   sound: AppSound;
   /**
@@ -79,6 +81,12 @@ const checking = new Map<string, Promise<void>>();
 const queued = new Map<string, Promise<void>>();
 /** Held until clicked or closed; a notification that is collected can no longer be clicked. */
 const showing = new Set<Notification>();
+/**
+ * The latest notification for each conversation, replaced by the next rather
+ * than stacked under it. A mention is kept apart, so a busy channel cannot
+ * push it out before it is seen.
+ */
+const latestFor = new Map<string, Notification>();
 /** Keys stay small, but a long session should not grow them without end. */
 const MAX_KEYS = 5000;
 
@@ -149,13 +157,17 @@ async function look(connectionId: string): Promise<void> {
     if (previous.keys.has(announcement.key)) continue;
     previous.keys.add(announcement.key);
     if (page?.quiet) continue;
+    let shown = announcement;
     if (announcement.channelId) {
-      const message = listing.notifications.messages.find((m) => m.channelId === announcement.channelId);
-      // In a channel, only being named is news, and only when it is a new one.
-      if (message && !message.direct && message.mentions <= (previous.mentions.get(message.channelId) ?? 0)) continue;
       if (watching(connectionId, announcement.channelId)) continue;
+      const message = listing.notifications.messages.find((m) => m.channelId === announcement.channelId);
+      // Anything new in a channel is worth knowing about; a new mention of you
+      // in it is urgent, and says so.
+      if (announcement.mentioned && message && message.mentions > (previous.mentions.get(message.channelId) ?? 0)) {
+        shown = { ...announcement, title: announcement.mentioned, sound: 'mention_or_dm' };
+      }
     }
-    show(connection, announcement, sounded(connectionId, announcement));
+    show(connection, shown, sounded(connectionId, shown));
   }
   previous.mentions = mentions;
   if (previous.keys.size > MAX_KEYS) previous.keys = new Set(found.map((a) => a.key));
@@ -195,15 +207,17 @@ function announcements(notifications: Notifications): Announcement[] {
       ? author === message.channelName
         ? author
         : `${author} in ${message.channelName}`
-      : `${author} mentioned you in #${message.channelName}`;
+      : `${author} in #${message.channelName}`;
     found.push({
       key: `message:${message.channelId}:${message.latest.id}`,
       title,
+      mentioned: message.direct ? undefined : `${author} mentioned you in #${message.channelName}`,
       body: message.latest.preview,
       picture: message.latest.author?.avatarUrl ?? null,
       path: `/w/${message.workspace.id}/c/${message.channelId}`,
       channelId: message.channelId,
-      sound: 'mention_or_dm',
+      sound: message.direct ? 'mention_or_dm' : 'message_received',
+      // A page hears direct messages in every workspace, channels only in the one it has open.
       heardBy: (page) => message.direct || page.workspaceId === message.workspace.id,
     });
   }
@@ -228,7 +242,13 @@ function announcements(notifications: Notifications): Announcement[] {
       title:
         item.reason === 'role'
           ? `${by} made you ${item.role ? item.role.toLowerCase() : 'a participant'} on ${item.key}`
-          : `${by} mentioned you in ${item.key}`,
+          : item.reason === 'comment'
+            ? `${by} commented on ${item.key}`
+            : item.reason === 'status'
+              ? item.status
+                ? `${by} moved ${item.key} to ${item.status}`
+                : `${by} changed the status of ${item.key}`
+              : `${by} mentioned you in ${item.key}`,
       body: item.title,
       picture: item.by?.avatarUrl ?? null,
       path: `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`,
@@ -278,11 +298,20 @@ function show(connection: Connection, announcement: Announcement, silent: boolea
     silent,
   });
   showing.add(notification);
-  notification.on('click', () => {
+  const slot = announcement.channelId ? `${connection.id}:${announcement.channelId}:${announcement.sound}` : null;
+  const forget = () => {
     showing.delete(notification);
+    if (slot && latestFor.get(slot) === notification) latestFor.delete(slot);
+  };
+  notification.on('click', () => {
+    forget();
     void open(connection.id, announcement);
   });
-  notification.on('close', () => showing.delete(notification));
+  notification.on('close', forget);
+  if (slot) {
+    latestFor.get(slot)?.close();
+    latestFor.set(slot, notification);
+  }
   notification.show();
 }
 

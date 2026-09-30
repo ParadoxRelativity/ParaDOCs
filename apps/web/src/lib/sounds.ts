@@ -16,7 +16,6 @@ import { getMediaPreferences } from './mediaPreferences';
  */
 export type SoundName =
   | 'message_received'
-  | 'message_received_background'
   | 'message_sent'
   | 'message_failed'
   | 'mention_or_dm'
@@ -61,7 +60,6 @@ interface SoundSpec {
 
 const SOUNDS: Record<SoundName, SoundSpec> = {
   message_received: { variants: 3, volume: 0.36 },
-  message_received_background: { volume: 0.6 },
   message_sent: { variants: 3, volume: 0.32 },
   message_failed: { volume: 0.55 },
   mention_or_dm: { volume: 0.75 },

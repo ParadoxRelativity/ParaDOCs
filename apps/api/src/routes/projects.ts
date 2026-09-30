@@ -92,7 +92,7 @@ import {
   uploadLimits,
   uploadUrlSql,
 } from '../lib/storage.js';
-import { notifyAboutWorkItem, projectChanged, syncWorkItemMentions } from '../lib/workItems.js';
+import { notifyAboutWorkItem, notifyRoleHolders, projectChanged, syncWorkItemMentions } from '../lib/workItems.js';
 import { archiveDormantWorkItems } from '../lib/workItemArchive.js';
 import { CURSOR_TEXT, decodeCursor, encodeCursor, isInteger } from '../lib/cursor.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
@@ -596,6 +596,26 @@ async function tell(
     await notifyAboutWorkItem(itemId, userIds, reason, detail, req.user!.id);
   } catch (err) {
     req.log.warn({ err, itemId }, 'could not record work item notifications');
+  }
+}
+
+/**
+ * Tells the people holding roles on items that they moved on, logging rather
+ * than failing when that goes wrong. Called after anyone named in the same
+ * change was told, since being named outranks it.
+ */
+async function tellHolders(
+  req: FastifyRequest,
+  itemIds: string[],
+  reason: 'comment' | 'status',
+  detail: string | null = null,
+): Promise<void> {
+  for (const itemId of itemIds) {
+    try {
+      await notifyRoleHolders(itemId, reason, detail, req.user!.id);
+    } catch (err) {
+      req.log.warn({ err, itemId }, 'could not record work item notifications');
+    }
   }
 }
 
@@ -1714,7 +1734,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           ORDER BY picked.n`,
         [itemIds, req.params.id, target.id],
       );
-      if (rows.length === 0) return 0;
+      if (rows.length === 0) return [];
       const start = await endOfStatus(client, target.id);
       await client.query(
         `UPDATE work_items i
@@ -1733,11 +1753,12 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
            FROM unnest($1::uuid[], $2::text[]) AS m(id, from_name)`,
         [rows.map((r) => r.id), rows.map((r) => r.from_name), req.user!.id, target.name],
       );
-      return rows.length;
+      return rows.map((r) => r.id);
     });
 
+    await tellHolders(req, moved, 'status', target.name);
     projectChanged(workspaceId, req.params.id);
-    return { moved };
+    return { moved: moved.length };
   });
 
   app.get<{ Params: { id: string } }>('/work-items/:id', async (req) => {
@@ -1896,6 +1917,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       const already = new Set(textMembers([current.description]));
       await tell(req, req.params.id, textMembers([input.description]).filter((id) => !already.has(id)), 'mention');
     }
+    if (target) await tellHolders(req, [req.params.id], 'status', target.name);
     projectChanged(workspaceId, projectId, req.params.id);
     // Its status and title are shown on every item linked to it.
     if (target || (input.title && input.title !== current.title)) await linkedChanged(req.params.id, workspaceId);
@@ -2237,6 +2259,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     });
     await recordItemMentions(req, req.params.id, workspaceId);
     await tell(req, req.params.id, textMembers([input.body]), 'mention');
+    await tellHolders(req, [req.params.id], 'comment');
     projectChanged(workspaceId, projectId, req.params.id);
     reply.status(201);
     return { id };

@@ -322,7 +322,6 @@ export function ChatView({
             playSound('message_failed');
             throw err;
           }
-          playSound('message_sent');
         }}
       />
 
