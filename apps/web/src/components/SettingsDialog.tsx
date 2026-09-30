@@ -15,6 +15,7 @@ import { desktop } from '../lib/desktop';
 import type { Theme } from '../lib/theme';
 import { useCallLayout, type CallLayout } from '../lib/callLayout';
 import { useOpenBehaviour, type OpenBehaviour } from '../lib/openBehaviour';
+import { playSound, useSoundPreferences } from '../lib/sounds';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
 import AiConnectionsSettings from './AiConnectionsSettings';
 
@@ -319,6 +320,50 @@ function OptionCard({
   );
 }
 
+/** The app's own sounds: messages, notifications, and calls. Busy silences the ones that interrupt. */
+function SoundsSection() {
+  const [sounds, setSounds] = useSoundPreferences();
+  return (
+    <Section title="Sounds" hint="For messages, notifications and calls. Busy keeps the interrupting ones quiet.">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={sounds.enabled}
+          onChange={(e) => setSounds({ ...sounds, enabled: e.target.checked })}
+          className="accent-[var(--color-accent)]"
+        />
+        <span className="text-sm">Play sounds</span>
+      </label>
+      <div className={cx('mt-3 flex items-end gap-3', !sounds.enabled && 'opacity-50')}>
+        <label className="block flex-1">
+          <span className="mb-1 flex items-center justify-between text-xs text-[var(--color-muted)]">
+            <span className="flex items-center gap-1.5">
+              <Icon name="volume-up" /> Volume
+            </span>
+            <span className="tabular-nums">{sounds.volume}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={sounds.volume}
+            disabled={!sounds.enabled}
+            onChange={(e) => setSounds({ ...sounds, volume: Number(e.target.value) })}
+            // Heard at the new level once the slider is let go, not at every step of it.
+            onPointerUp={() => playSound('message_received')}
+            onKeyUp={() => playSound('message_received')}
+            className="w-full accent-[var(--color-accent)]"
+          />
+        </label>
+        <Button variant="subtle" className="text-xs" disabled={!sounds.enabled} onClick={() => playSound('mention_or_dm')}>
+          Play a sound
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
 /** A small picture of the layout: the focused video, and where the others go. */
 function CallLayoutDiagram({ layout }: { layout: CallLayout }) {
   const side = layout === 'side';
@@ -383,6 +428,8 @@ function AppearanceSection({
           ))}
         </div>
       </Section>
+
+      <SoundsSection />
 
       {showCallLayout && (
         <Section title="Focused video in calls">

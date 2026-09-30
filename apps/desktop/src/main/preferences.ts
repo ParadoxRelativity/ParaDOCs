@@ -3,7 +3,7 @@ import { paths } from './paths.js';
 import { readJson, writeJson } from './store.js';
 
 /**
- * Appearance and call-device choices, kept by the app rather than by each page.
+ * Appearance, sound and call-device choices, kept by the app rather than by each page.
  *
  * A page's own storage belongs to its address, and every connection is a
  * different address, so a theme chosen in one would not follow to the next.
@@ -28,6 +28,13 @@ export interface Preferences {
   openNotifications?: 'here' | 'tab';
   /** Update notices set aside, one entry per release, so the next one still shows. */
   dismissedUpdates?: string[];
+  /** The app's own sounds: on or off, and how loud. */
+  sounds?: SoundPreferences;
+}
+
+export interface SoundPreferences {
+  enabled: boolean;
+  volume: number;
 }
 
 const file = path.join(paths.userData, 'preferences.json');
@@ -68,6 +75,15 @@ function sanitizeMedia(value: unknown): MediaPreferences | undefined {
   };
 }
 
+function sanitizeSounds(value: unknown): SoundPreferences | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.enabled !== 'boolean' || typeof raw.volume !== 'number' || !Number.isFinite(raw.volume)) {
+    return undefined;
+  }
+  return { enabled: raw.enabled, volume: Math.min(100, Math.max(0, Math.round(raw.volume))) };
+}
+
 export function getPreferences(): Preferences {
   const stored = readJson<Record<string, unknown>>(file, {});
   const preferences: Preferences = {};
@@ -78,6 +94,8 @@ export function getPreferences(): Preferences {
   if (media) preferences.media = media;
   const dismissed = sanitizeDismissed(stored.dismissedUpdates);
   if (dismissed) preferences.dismissedUpdates = dismissed;
+  const sounds = sanitizeSounds(stored.sounds);
+  if (sounds) preferences.sounds = sounds;
   return preferences;
 }
 
@@ -94,6 +112,8 @@ export function setPreference(key: unknown, value: unknown): unknown {
     next.openNotifications = value;
   } else if (key === 'dismissedUpdates' && sanitizeDismissed(value)) {
     next.dismissedUpdates = sanitizeDismissed(value);
+  } else if (key === 'sounds' && sanitizeSounds(value)) {
+    next.sounds = sanitizeSounds(value);
   } else {
     return undefined;
   }

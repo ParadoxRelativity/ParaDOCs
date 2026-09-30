@@ -86,7 +86,13 @@ export interface PoppedOut {
   inCall: boolean;
 }
 
-export type DesktopPreferenceKey = 'theme' | 'media' | 'callLayout' | 'openNotifications' | 'dismissedUpdates';
+export type DesktopPreferenceKey =
+  | 'theme'
+  | 'media'
+  | 'callLayout'
+  | 'openNotifications'
+  | 'dismissedUpdates'
+  | 'sounds';
 
 export interface DesktopBridge {
   connections: {
@@ -145,7 +151,12 @@ export interface DesktopBridge {
      * This page's own bar has changed, or what it has open has. The app asks
      * the server again and announces anything new through the operating system.
      */
-    changed(state: { quiet: boolean; openChannelId: string | null }): Promise<void>;
+    changed(state: {
+      quiet: boolean;
+      openChannelId: string | null;
+      /** The workspace open, whose channels this page hears; the app plays the sound for the rest. */
+      workspaceId: string | null;
+    }): Promise<void>;
     markRead(connectionId: string, channelIds?: string[]): Promise<Outcome>;
     /** Clears tags in the given documents, or in all of them. */
     markMentionsRead(connectionId: string, documentIds?: string[]): Promise<Outcome>;

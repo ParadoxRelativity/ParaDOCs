@@ -21,6 +21,7 @@ import { api } from '../api/client';
 import { keys, refetchAfterAccessChange, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
 import { desktop } from './desktop';
+import { playSound, soundsEnabled } from './sounds';
 import { setTyping } from './typing';
 
 export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
@@ -31,6 +32,11 @@ function permissionState(): NotificationPermissionState {
   if (desktop) return 'granted';
   if (typeof Notification === 'undefined') return 'unsupported';
   return Notification.permission as NotificationPermissionState;
+}
+
+/** How many reactions on a message are other people's. */
+function reactedByOthers(message: { reactions: { users: { id: string }[] }[] }, selfId: string): number {
+  return message.reactions.reduce((total, r) => total + r.users.filter((u) => u.id !== selfId).length, 0);
 }
 
 function mentionsByName(body: string, userId: string): boolean {
@@ -78,6 +84,7 @@ export function useChatEvents({
   idle,
   quiet,
   notify: notifyEnabled = true,
+  elsewhere = [],
   onNotifyClick,
   onCallEvent,
 }: {
@@ -95,6 +102,11 @@ export function useChatEvents({
    * announce every mention a second time.
    */
   notify?: boolean;
+  /**
+   * Conversations open in windows of their own. Each makes its own sounds, so
+   * this one stays quiet about them.
+   */
+  elsewhere?: string[];
   onNotifyClick: (workspaceId: string, channelId: string) => void;
   onCallEvent: (event: CallEvent) => void;
 }): {
@@ -120,11 +132,22 @@ export function useChatEvents({
   muted.current = quiet;
   const announcing = useRef(notifyEnabled);
   announcing.current = notifyEnabled;
+  const openElsewhere = useRef(elsewhere);
+  openElsewhere.current = elsewhere;
 
   const applyMessage = useCallback(
     (event: ChatMessageEvent) => {
       const channelId = event.message.channelId;
       const direct = event.channelKind === 'direct';
+      const here = active.current === channelId;
+      // Sounds for a conversation come from the window showing it, or from the
+      // one that announces for the rest.
+      const sounding = !muted.current && (here || (announcing.current && !openElsewhere.current.includes(channelId)));
+
+      if (event.type === 'message.updated' && sounding && event.message.author?.id === selfId) {
+        const before = qc.getQueryData<MessagePage>(keys.messages(channelId))?.messages.find((m) => m.id === event.message.id);
+        if (before && reactedByOthers(event.message, selfId) > reactedByOthers(before, selfId)) playSound('reaction_added');
+      }
 
       // Update the channel's page only if it has been loaded; a message for a
       // channel never opened simply has nothing to merge into.
@@ -180,12 +203,23 @@ export function useChatEvents({
         void qc.invalidateQueries({ queryKey: keys.notifications });
       }
 
-      if (!fromSomeoneElse || muted.current || !announcing.current) return;
+      if (!fromSomeoneElse) return;
       // Everything in a direct conversation is said to you; in a channel, only
       // a mention is.
-      if (!direct && !mentions(event.message.body, selfId)) return;
+      const addressedToYou = direct || mentions(event.message.body, selfId);
+      const visible = document.visibilityState === 'visible';
+      if (sounding) {
+        // Read as it arrives gets the quietest sound; the same conversation
+        // behind another window gets a fuller one, and anything said to you
+        // anywhere else the fullest.
+        if (here && visible && document.hasFocus()) playSound('message_received');
+        else if (addressedToYou) playSound('mention_or_dm');
+        else if (here) playSound('message_received_background');
+      }
+
+      if (muted.current || !announcing.current || !addressedToYou) return;
       // Already looking at it is not worth interrupting.
-      const watching = active.current === channelId && document.visibilityState === 'visible';
+      const watching = here && visible;
       if (watching) return;
 
       const authorName = author?.name ?? 'Someone';
@@ -361,7 +395,8 @@ function notify({
 }): void {
   if (desktop || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
-    const notification = new Notification(title, { body, tag });
+    // The app plays its own sound for it; the system's would be a second one.
+    const notification = new Notification(title, { body, tag, silent: soundsEnabled() });
     notification.onclick = () => {
       window.focus();
       onClick();

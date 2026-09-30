@@ -2,13 +2,23 @@ import { Notification, nativeImage } from 'electron';
 import type { Notifications } from '@paradocs/shared';
 import { getConnection, listConnections, type Connection } from './connections.js';
 import { notificationsFor, postTo } from './connectionApi.js';
-import { activeConnectionId, getAppWindow, openConnection, sendToConnection } from './windows.js';
+import { getPreferences } from './preferences.js';
+import { playAppSound, type AppSound } from './soundPlayer.js';
+import { activeConnectionId, getAppWindow, loadedOrigin, openConnection, sendToConnection } from './windows.js';
 import { focusPopout, isPopoutFocused } from './popouts.js';
 
 /**
  * What reaches the notifications bar also reaches the operating system, as a
- * notification of its own: a banner, a sound, a place in the notification
- * centre — whatever the person has the OS do for this app.
+ * notification of its own: a banner and a place in the notification centre —
+ * whatever the person has the OS do for this app.
+ *
+ * The notification itself is silent: the app's own sounds replace the
+ * system's. A connection's page, while it is loaded, has already played one
+ * for what arrived on its own socket. Everything else — a server not opened
+ * yet this session, a mention in a workspace its page does not have open, the
+ * app with no window at all — is played here instead (soundPlayer.ts). Only
+ * if that cannot play does the system make its sound, so nothing arrives
+ * unheard.
  *
  * It lives here rather than in the pages because it has to cover every
  * connection, loaded or not, and has to be raised once however many pages are
@@ -29,6 +39,8 @@ export interface PageState {
   quiet: boolean;
   /** The channel open in the main window, if chat is what it is showing. */
   openChannelId: string | null;
+  /** The workspace open in it, whose channels its socket hears. */
+  workspaceId: string | null;
 }
 
 interface Seen {
@@ -50,6 +62,14 @@ interface Announcement {
   channelId?: string;
   /** Opening a tagged document is what answers the tag. */
   documentId?: string;
+  /** The app sound that goes with it. */
+  sound: AppSound;
+  /**
+   * Whether this connection's own page plays that sound by itself. It hears a
+   * direct message in any workspace, a mention only in the one it has open,
+   * and notices anything new in its bar except a server update.
+   */
+  heardBy: (page: PageState) => boolean;
 }
 
 const seen = new Map<string, Seen>();
@@ -135,7 +155,7 @@ async function look(connectionId: string): Promise<void> {
       if (message && !message.direct && message.mentions <= (previous.mentions.get(message.channelId) ?? 0)) continue;
       if (watching(connectionId, announcement.channelId)) continue;
     }
-    show(connection, announcement);
+    show(connection, announcement, sounded(connectionId, announcement));
   }
   previous.mentions = mentions;
   if (previous.keys.size > MAX_KEYS) previous.keys = new Set(found.map((a) => a.key));
@@ -149,6 +169,20 @@ function watching(connectionId: string, channelId: string): boolean {
       activeConnectionId() === connectionId &&
       pages.get(connectionId)?.openChannelId === channelId,
   );
+}
+
+/**
+ * Makes sure the app's sound for an announcement is heard: left to the
+ * connection's page when it has played it, played here when not. False when
+ * it cannot be played at all and the system's sound is needed instead.
+ */
+function sounded(connectionId: string, announcement: Announcement): boolean {
+  // Turned off is a choice to hear nothing, not a reason for the system's sound.
+  if (getPreferences().sounds?.enabled === false) return true;
+  // A page stops hearing anything once unloaded, which what it last said does not show.
+  const page = loadedOrigin(connectionId) ? pages.get(connectionId) : undefined;
+  if (page && announcement.heardBy(page)) return true;
+  return playAppSound(announcement.sound);
 }
 
 /** Everything in a listing that could be announced, each under a key that changes when there is something new. */
@@ -169,6 +203,8 @@ function announcements(notifications: Notifications): Announcement[] {
       picture: message.latest.author?.avatarUrl ?? null,
       path: `/w/${message.workspace.id}/c/${message.channelId}`,
       channelId: message.channelId,
+      sound: 'mention_or_dm',
+      heardBy: (page) => message.direct || page.workspaceId === message.workspace.id,
     });
   }
 
@@ -180,6 +216,8 @@ function announcements(notifications: Notifications): Announcement[] {
       picture: mention.taggedBy?.avatarUrl ?? null,
       path: `/w/${mention.workspace.id}/d/${mention.documentId}`,
       documentId: mention.documentId,
+      sound: 'notification_generic',
+      heardBy: () => true,
     });
   }
 
@@ -194,6 +232,8 @@ function announcements(notifications: Notifications): Announcement[] {
       body: item.title,
       picture: item.by?.avatarUrl ?? null,
       path: `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`,
+      sound: 'notification_generic',
+      heardBy: () => true,
     });
   }
 
@@ -206,6 +246,8 @@ function announcements(notifications: Notifications): Announcement[] {
         : `You are invited to join as ${invite.role}.`,
       picture: invite.workspace.avatarUrl,
       path: `/invite/${invite.token}`,
+      sound: 'notification_generic',
+      heardBy: () => true,
     });
   }
 
@@ -217,13 +259,15 @@ function announcements(notifications: Notifications): Announcement[] {
       body: `This server is running ${update.currentVersion}.`,
       picture: null,
       path: null,
+      sound: 'notification_generic',
+      heardBy: () => false,
     });
   }
 
   return found;
 }
 
-function show(connection: Connection, announcement: Announcement): void {
+function show(connection: Connection, announcement: Announcement, silent: boolean): void {
   // With more than one server in the app, which one it came from is part of the news.
   const several = listConnections().length > 1;
   const notification = new Notification({
@@ -231,6 +275,7 @@ function show(connection: Connection, announcement: Announcement): void {
     subtitle: several ? connection.label : undefined,
     body: several && process.platform !== 'darwin' ? `${announcement.body}\n${connection.label}` : announcement.body,
     icon: announcement.picture ? nativeImage.createFromDataURL(announcement.picture) : undefined,
+    silent,
   });
   showing.add(notification);
   notification.on('click', () => {

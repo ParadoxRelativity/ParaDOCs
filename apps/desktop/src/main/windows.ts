@@ -21,6 +21,7 @@ import {
 import { startProxy, type ProxyHandle } from './proxy.js';
 import { startLocalServer, type LocalServer } from './localServer.js';
 import { enableScreenSharing } from './screenShare.js';
+import { closeSoundPlayer } from './soundPlayer.js';
 
 /**
  * The app is one window. Every connection opened in it — the workspace on this
@@ -229,6 +230,9 @@ function ensureWindow(): BaseWindow {
     loaded.clear();
     for (const entry of entries) void release(entry);
     emitActiveChanged();
+    // Everywhere but macOS, closing this window quits the app, which only
+    // happens once no window is left, the hidden one that plays sounds included.
+    if (process.platform !== 'darwin') closeSoundPlayer();
   });
 
   return window;
