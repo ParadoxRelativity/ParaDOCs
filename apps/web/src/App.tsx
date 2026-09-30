@@ -41,6 +41,7 @@ import AuthScreen from './components/AuthScreen';
 import LeftSidebar from './components/LeftSidebar';
 import RightSidebar, { type RightTab } from './components/RightSidebar';
 import DocumentEditor from './components/DocumentEditor';
+import DocumentOutline from './components/DocumentOutline';
 import ErrorBoundary from './components/ErrorBoundary';
 import AllDocuments from './components/AllDocuments';
 import AcceptInvite from './components/AcceptInvite';
@@ -416,7 +417,10 @@ function Workspace({
   const logout = useLogout();
 
   const [leftOpen, setLeftOpen] = useLocalStorage('paradocs.leftOpen', true);
-  const [rightOpen, setRightOpen] = useLocalStorage('paradocs.rightOpen', true);
+  // Starts closed: the page has its own outline down the side for finding your
+  // way. Kept under a new key, as the old one holds everyone's untouched
+  // "open" from when that was the default.
+  const [rightOpen, setRightOpen] = useLocalStorage('paradocs.detailsOpen', false);
   const [membersOpen, setMembersOpen] = useLocalStorage('paradocs.membersOpen', true);
   const [rightTab, setRightTab] = useLocalStorage<RightTab>('paradocs.rightTab', 'toc');
   // On a phone the members and details panels cover the page rather than
@@ -884,7 +888,7 @@ function Workspace({
           )}
         </header>
 
-        <div className="min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1">
           {chat ? (
             channels.isLoading ? (
               <Spinner />
@@ -1050,6 +1054,8 @@ function Workspace({
                   else navigate(path);
                 }}
               />
+              {/* The sidebar's contents, in miniature, while it is closed. */}
+              {!rightShown && !mobile && document.data.mode === 'page' && <DocumentOutline blocks={liveBlocks} />}
             </ErrorBoundary>
           ) : null}
         </div>
