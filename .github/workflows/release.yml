@@ -5,13 +5,14 @@
 # to a DRAFT GitHub Release. Publishing that draft is a deliberate second step,
 # because publishing is what makes every installed client start updating.
 #
-# The same tag builds the mobile apps. The Android APK goes into the same draft
+# The same tag builds the Android app, and its APK goes into the same draft
 # release: a debug-signed one that sideloads anywhere, or a release-signed one
-# (plus an .aab for Google Play) once a keystore is configured. iOS always
-# builds for the simulator, which proves the project compiles; with signing
-# secrets it also archives an .ipa, kept as a workflow artifact for upload to
-# App Store Connect, since an App Store build cannot be installed from a
-# release page.
+# (plus an .aab for Google Play) once a keystore is configured.
+#
+# iOS builds only when BUILD_IOS is on. It then always builds for the
+# simulator, which proves the project compiles; with signing secrets it also
+# archives an .ipa, kept as a workflow artifact for upload to App Store
+# Connect, since an App Store build cannot be installed from a release page.
 #
 # The same tag also builds the server image and pushes it as X.Y.Z, X.Y and
 # latest to the GitHub Container Registry (ghcr.io/<owner>/<repo>) and, when
@@ -31,10 +32,12 @@ permissions:
 
 env:
   NODE_VERSION: '20'
-  # Whether the tag also builds the iOS and Android apps. Set the repository
-  # variable BUILD_MOBILE to false to turn them off without editing this file;
-  # it wins over the default here.
-  BUILD_MOBILE: 'false'
+  # Whether the tag also builds the iOS app. Android always builds, since its
+  # APK is part of the release. Set the repository variable BUILD_IOS to true
+  # or false to override this without editing the file; it wins over the
+  # default here. The older BUILD_MOBILE variable is still read if BUILD_IOS
+  # is unset.
+  BUILD_IOS: 'false'
 
 jobs:
   verify:
@@ -42,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      mobile: ${{ steps.mobile.outputs.build }}
+      ios: ${{ steps.ios.outputs.build }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -84,20 +87,20 @@ jobs:
 
       # Resolved here because a job's `if:` cannot read `env`, only the outputs
       # of a job it waits for.
-      - name: Mobile builds on or off
-        id: mobile
+      - name: iOS build on or off
+        id: ios
         shell: bash
         env:
-          OVERRIDE: ${{ vars.BUILD_MOBILE }}
+          OVERRIDE: ${{ vars.BUILD_IOS || vars.BUILD_MOBILE }}
         run: |
-          WANTED="${OVERRIDE:-$BUILD_MOBILE}"
+          WANTED="${OVERRIDE:-$BUILD_IOS}"
           case "$(echo "$WANTED" | tr '[:upper:]' '[:lower:]')" in
             true|yes|1) BUILD=true ;;
             false|no|0) BUILD=false ;;
-            *) echo "::error::BUILD_MOBILE is \"$WANTED\"; use true or false."; exit 1 ;;
+            *) echo "::error::BUILD_IOS is \"$WANTED\"; use true or false."; exit 1 ;;
           esac
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
-          echo "Mobile builds: $BUILD"
+          echo "iOS build: $BUILD"
 
   build:
     name: Build ${{ matrix.platform }}
@@ -161,23 +164,25 @@ jobs:
             exit 0
           fi
           echo "Signing certificate found."
-          # Heredoc form: a base64 certificate may span several lines.
+          # Everything in the block goes to $GITHUB_ENV, so messages for the log
+          # go to stderr.
           {
+            # Heredoc form: a base64 certificate may span several lines.
             echo "CSC_LINK<<__PARADOCS_EOF__"
             echo "$CERT"
             echo "__PARADOCS_EOF__"
+            if [ -n "$CERT_PASSWORD" ]; then
+              echo "CSC_KEY_PASSWORD=$CERT_PASSWORD"
+            fi
+            if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM_ID" ]; then
+              echo "APPLE_ID=$NOTARY_APPLE_ID"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$NOTARY_PASSWORD"
+              echo "APPLE_TEAM_ID=$NOTARY_TEAM_ID"
+              echo "Notarisation credentials found." >&2
+            else
+              echo "Notarisation credentials incomplete; skipping notarisation." >&2
+            fi
           } >> "$GITHUB_ENV"
-          if [ -n "$CERT_PASSWORD" ]; then
-            echo "CSC_KEY_PASSWORD=$CERT_PASSWORD" >> "$GITHUB_ENV"
-          fi
-          if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM_ID" ]; then
-            echo "APPLE_ID=$NOTARY_APPLE_ID" >> "$GITHUB_ENV"
-            echo "APPLE_APP_SPECIFIC_PASSWORD=$NOTARY_PASSWORD" >> "$GITHUB_ENV"
-            echo "APPLE_TEAM_ID=$NOTARY_TEAM_ID" >> "$GITHUB_ENV"
-            echo "Notarisation credentials found."
-          else
-            echo "Notarisation credentials incomplete; skipping notarisation."
-          fi
 
       # Build only; publishing happens once, in the release job. When each
       # platform published itself, both jobs asked GitHub "is there a draft for
@@ -203,7 +208,6 @@ jobs:
   android:
     name: Build Android
     needs: verify
-    if: needs.verify.outputs.mobile == 'true'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.verify.outputs.version }}
@@ -283,7 +287,7 @@ jobs:
   ios:
     name: Build iOS
     needs: verify
-    if: needs.verify.outputs.mobile == 'true'
+    if: needs.verify.outputs.ios == 'true'
     # Capacitor 8 needs Xcode 26.
     runs-on: macos-26
     env:
@@ -363,7 +367,13 @@ jobs:
           echo "$CERT" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
           security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          # Ours goes first in the search list, ahead of the runner's own, which
+          # are listed one quoted path per line and kept whole even with spaces.
+          EXISTING=()
+          while IFS= read -r path; do
+            EXISTING+=("$path")
+          done < <(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')
+          security list-keychains -d user -s "$KEYCHAIN" "${EXISTING[@]}"
 
           # Installed under its own UUID, which is also how the export names it.
           echo "$PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
@@ -429,14 +439,6 @@ jobs:
     # The APK is part of the release, so Android is waited for too. iOS is not:
     # nothing from it goes on a release page.
     needs: [verify, build, android]
-    # A skipped dependency would skip this job with it, and Android is skipped
-    # whenever mobile builds are off. So the results are checked by hand, which
-    # means `always()` and a failure of either other job stopping this one.
-    if: >-
-      always()
-      && needs.verify.result == 'success'
-      && needs.build.result == 'success'
-      && (needs.android.result == 'success' || needs.android.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
