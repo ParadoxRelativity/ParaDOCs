@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { SearchHit, SheetSearchHit, WorkItemSearchHit } from '@paradocs/shared';
 import { useAppEnabled, useSearch, useTags } from '../api/hooks';
+import { useBackHandler } from '../lib/back';
 import { cx, formatRelative, plainSnippet, useDebounced } from '../lib/util';
 import { TagChip } from './ui';
 import Icon, { DocumentIcon } from './Icon';
@@ -36,6 +37,7 @@ export default function SearchPalette({
   const [to, setTo] = useState('');
   const [cursor, setCursor] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(initialTagIds.length > 0);
+  useBackHandler(onClose);
 
   const debounced = useDebounced(text, 180);
   // Tags belong to Docs, so a workspace without it has none to filter by.

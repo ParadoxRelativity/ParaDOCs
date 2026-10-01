@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useBackHandler } from '../../lib/back';
 import Icon from '../Icon';
 
 export interface ViewerItem {
@@ -27,6 +28,7 @@ export function MediaViewer({
   const closeButton = useRef<HTMLButtonElement>(null);
   const count = items.length;
   const item = items[index];
+  useBackHandler(onClose);
 
   useEffect(() => {
     closeButton.current?.focus();

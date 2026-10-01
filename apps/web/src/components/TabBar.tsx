@@ -9,6 +9,7 @@ import {
   type Tab,
   type TabKind,
 } from '../lib/tabs';
+import { useBackHandler } from '../lib/back';
 import { cx } from '../lib/util';
 import Icon, { type IconName } from './Icon';
 import WorkspaceIcon from './WorkspaceIcon';
@@ -57,6 +58,7 @@ export default function TabBar({
   const { tabs, activeId } = useTabState();
   const [dragging, setDragging] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  useBackHandler(() => setMenuFor(null), { active: menuFor !== null });
   const strip = useRef<HTMLDivElement>(null);
 
   // Only worth marking which workspace a tab is in when they are not all in

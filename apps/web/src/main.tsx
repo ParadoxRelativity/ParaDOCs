@@ -9,6 +9,7 @@ import { ToastProvider } from './components/Toast';
 import ServerPicker from './components/ServerPicker';
 import { isNativeApp, serverOrigin } from './lib/server';
 import { keepLonger, persistOptions, sweepOtherServers } from './lib/queryPersistence';
+import { listenForBackButton } from './lib/back';
 import 'bootstrap-icons/font/bootstrap-icons.min.css';
 // BlockNote's styles are a chain of `@import url(...)` files, which Tailwind
 // leaves unresolved if they go through index.css; Vite's own CSS pipeline
@@ -32,6 +33,8 @@ const queryClient = new QueryClient({
 keepLonger(queryClient);
 // The mobile app may have been pointed at a different server since last time.
 void sweepOtherServers();
+// Android's back button closes what was opened last; see lib/back.ts.
+listenForBackButton();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

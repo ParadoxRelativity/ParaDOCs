@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { useBackHandler } from '../lib/back';
 import { cx } from '../lib/util';
 import { Button } from './ui';
 
@@ -16,6 +17,7 @@ interface ModalProps {
 
 /** In-app dialog used wherever a window.confirm or window.prompt used to be. */
 export function Modal({ title, description, children, footer, onClose, wide, fullScreen }: ModalProps) {
+  useBackHandler(onClose);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {

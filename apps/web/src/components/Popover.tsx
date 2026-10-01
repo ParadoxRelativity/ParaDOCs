@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useBackHandler } from '../lib/back';
 import { cx } from '../lib/util';
 
 /**
@@ -29,6 +30,7 @@ export function Popover({
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  useBackHandler(onClose);
 
   useLayoutEffect(() => {
     const element = panel.current;

@@ -9,6 +9,7 @@ import { FIELD, PictureField, Section } from './SettingsParts';
 import { AwayAfterSelect, StatusChoices, useStatusControls } from './Presence';
 import { useToast } from './Toast';
 import { Button, IconButton } from './ui';
+import { useBackHandler } from '../lib/back';
 import { useIsMobile } from '../lib/mobile';
 import Icon, { type IconName } from './Icon';
 import VoiceSettings from './VoiceSettings';
@@ -56,6 +57,8 @@ export default function SettingsDialog(props: Props) {
   const mobile = useIsMobile();
   // On a phone, whether the list of sections is showing rather than one of them.
   const [browsing, setBrowsing] = useState(true);
+  // Back from a section returns to the list before it closes Settings.
+  useBackHandler(() => setBrowsing(true), { active: mobile && !browsing });
 
   const nav: { id: SettingsSection; label: string; icon: IconName }[] = [
     { id: 'account', label: 'Account', icon: 'person' },

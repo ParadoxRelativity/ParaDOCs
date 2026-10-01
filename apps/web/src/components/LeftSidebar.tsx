@@ -28,6 +28,7 @@ import {
   useTree,
   type WorkspaceSummary,
 } from '../api/hooks';
+import { useBackHandler } from '../lib/back';
 import { cx, useLocalStorage } from '../lib/util';
 import {
   desktop,
@@ -152,6 +153,7 @@ export default function LeftSidebar(props: Props) {
   const createWorkspace = useCreateWorkspace();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const switcher = useRef<HTMLDivElement>(null);
+  useBackHandler(() => setSwitcherOpen(false), { active: switcherOpen });
   /**
    * Where a new folder is being named: `null` for the top level, a folder id for
    * a subfolder, `undefined` when nothing is being created.

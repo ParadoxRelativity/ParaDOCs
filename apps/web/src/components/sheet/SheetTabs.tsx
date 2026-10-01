@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SheetInfo } from '@paradocs/shared';
+import { useBackHandler } from '../../lib/back';
 import { cx } from '../../lib/util';
 import { ConfirmDialog } from '../Modal';
 import Icon from '../Icon';
@@ -36,6 +37,7 @@ export default function SheetTabs({
 }) {
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
+  useBackHandler(() => setMenu(null), { active: menu !== null });
   const [confirming, setConfirming] = useState<SheetInfo | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
 
