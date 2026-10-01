@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/ParaDOCs%20banner.jpeg" alt="ParaDOCs — Beyond Documentation" width="800" />
+  <img src="resources/ParaDOCs%20banner%20lightmode.jpeg" alt="ParaDOCs — Beyond Documentation" width="800" />
 </p>
 
 # ParaDOCs
