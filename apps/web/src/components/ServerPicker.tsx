@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { normalizeServerUrl, serverOrigin, setServerOrigin } from '../lib/server';
+import Banner from './Banner';
 import { Button } from './ui';
 
 /**
@@ -55,8 +56,9 @@ export default function ServerPicker({ onCancel }: { onCancel?: () => void }) {
   return (
     <div className="flex h-full items-center justify-center bg-[var(--color-surface)] p-6">
       <div className="w-full max-w-sm rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-6 shadow-sm">
+        <Banner />
         <div className="mb-5">
-          <h1 className="text-lg font-semibold tracking-tight">ParaDOCs</h1>
+          <h1 className="sr-only">ParaDOCs</h1>
           <p className="text-sm text-[var(--color-muted)]">Connect to the server your workspace is on.</p>
         </div>
 

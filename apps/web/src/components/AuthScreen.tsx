@@ -7,6 +7,7 @@ import { isNativeApp, serverOrigin } from '../lib/server';
 import { forgetVerifier, onSsoReturn, readVerifier, startSso, takeBrowserSsoError } from '../lib/sso';
 import ServerPicker from './ServerPicker';
 import ConnectServerDialog from './ConnectServerDialog';
+import Banner from './Banner';
 import Icon from './Icon';
 import { ConfirmDialog } from './Modal';
 import { useToast } from './Toast';
@@ -91,8 +92,9 @@ export default function AuthScreen({ allowRegistration, passwordSignIn, oidc }: 
   return (
     <div className="flex h-full items-center justify-center bg-[var(--color-surface)] p-6">
       <div className="w-full max-w-sm rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-6 shadow-sm">
+        <Banner />
         <div className="mb-5">
-          <h1 className="text-lg font-semibold tracking-tight">ParaDOCs</h1>
+          <h1 className="sr-only">ParaDOCs</h1>
           <p className="text-sm text-[var(--color-muted)]">
             {mode === 'login' ? 'Sign in to your workspace.' : 'Create your account on this server.'}
           </p>
