@@ -27,6 +27,7 @@ import {
   type DesktopConnection,
   type Outcome,
 } from '../lib/desktop';
+import { useBackHandler } from '../lib/back';
 import { useDismissedUpdates } from '../lib/dismissedUpdates';
 import { getOpenBehaviour } from '../lib/openBehaviour';
 import { openTab } from '../lib/tabs';
@@ -152,6 +153,7 @@ function useClientUpdate(): ClientUpdate | null {
  */
 export default function NotificationsMenu() {
   const [open, setOpen] = useState(false);
+  useBackHandler(() => setOpen(false), { active: open });
   const container = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const toast = useToast();

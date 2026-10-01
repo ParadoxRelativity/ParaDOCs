@@ -20,6 +20,7 @@ import {
   useWorkItems,
   type WorkspaceSummary,
 } from '../../api/hooks';
+import { useBackHandler } from '../../lib/back';
 import { useIsMobile } from '../../lib/mobile';
 import { canFrom } from '../../lib/permissions';
 import { cx, useLocalStorage } from '../../lib/util';
@@ -134,6 +135,7 @@ function ProjectView({
   const memberMap = useMemberMap(members);
   // A phone has no width to share, so an open item takes the whole screen.
   const mobile = useIsMobile();
+  useBackHandler(onCloseItem, { active: itemId !== null });
   const [storedView, setView] = useLocalStorage<View | null>(`paradocs.projectView.${projectId}`, null);
   // A link to the board or the queue opens on it, and then is just where you are.
   const [search, setSearch] = useSearchParams();

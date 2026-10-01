@@ -69,6 +69,7 @@ import { useDirectCalls } from './lib/directCalls';
 import { effectiveStatus, useIdle } from './lib/idle';
 import { getOpenBehaviour } from './lib/openBehaviour';
 import { setMobilePane, useIsMobile, useMobilePane } from './lib/mobile';
+import { useBackHandler } from './lib/back';
 import {
   activeTab,
   describePath,
@@ -312,6 +313,9 @@ function Workspace({
     },
     [navigate],
   );
+  // Back from what was chosen returns to the menu it was chosen from, once
+  // anything opened over it has been closed.
+  useBackHandler(() => setMobilePane('menu'), { active: mobile && mobilePane === 'content', base: true });
 
   const workspaces = useWorkspaces();
   const workspace = workspaces.data?.find((w) => w.id === workspaceId);
@@ -1162,6 +1166,8 @@ function SidePanel({
   onClose: () => void;
   children: ReactNode;
 }) {
+  // Only a phone's panel covers the page; beside it on a desktop it is a layout choice.
+  useBackHandler(onClose, { active: mobile && open });
   if (mobile) {
     if (!open) return null;
     return (

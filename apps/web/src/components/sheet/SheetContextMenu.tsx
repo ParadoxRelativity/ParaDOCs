@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useBackHandler } from '../../lib/back';
 import { cx } from '../../lib/util';
 import Icon, { type IconName } from '../Icon';
 
@@ -26,6 +27,7 @@ export default function SheetContextMenu({
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  useBackHandler(onClose);
 
   useLayoutEffect(() => {
     const element = panel.current;

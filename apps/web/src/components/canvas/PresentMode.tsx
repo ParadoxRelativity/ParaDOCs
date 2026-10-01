@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CanvasElement, FrameElement, WorkspaceMember } from '@paradocs/shared';
 import CanvasElementView from './CanvasElementView';
 import Connectors from './Connectors';
+import { useBackHandler } from '../../lib/back';
 import Icon from '../Icon';
 
 interface Props {
@@ -31,6 +32,7 @@ export default function PresentMode({
   const [index, setIndex] = useState(startIndex);
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const root = useRef<HTMLDivElement>(null);
+  useBackHandler(onExit);
 
   // Presenting must take focus. Without this the Present button keeps it, so
   // keystrokes are aimed at a control sitting behind the overlay and Escape
