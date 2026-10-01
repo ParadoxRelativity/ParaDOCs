@@ -8,6 +8,7 @@ import {
   type OidcNewAccountMode,
   type ServerSettings,
 } from '@paradocs/shared';
+import Banner from '../components/Banner';
 import { Button, Spinner } from '../components/ui';
 import { ConfirmDialog, Modal } from '../components/Modal';
 import { FIELD, Section } from '../components/SettingsParts';
@@ -171,6 +172,7 @@ function SignIn({ setupRequired }: { setupRequired: boolean }) {
   return (
     <Centered>
       <div className="w-full max-w-sm rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-6 shadow-sm">
+        <Banner />
         <div className="mb-5">
           <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
             <Icon name="shield-lock" className="text-[var(--color-accent)]" /> Server administration

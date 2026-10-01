@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/ParaDOCs%20banner.jpeg" alt="ParaDOCs — Beyond Documentation" width="800" />
+</p>
+
 # ParaDOCs
 
 A self-hosted, open-source document management system. Workspaces, folders, tags,
