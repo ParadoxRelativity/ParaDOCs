@@ -10,10 +10,12 @@ interface ModalProps {
   onClose: () => void;
   /** Wider panel, for dialogs with their own internal navigation. */
   wide?: boolean;
+  /** Covers the whole screen, for a phone, where a floating panel leaves too little room to work in. */
+  fullScreen?: boolean;
 }
 
 /** In-app dialog used wherever a window.confirm or window.prompt used to be. */
-export function Modal({ title, description, children, footer, onClose, wide }: ModalProps) {
+export function Modal({ title, description, children, footer, onClose, wide, fullScreen }: ModalProps) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -27,7 +29,7 @@ export function Modal({ title, description, children, footer, onClose, wide }: M
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className={cx('fixed inset-0 z-50 flex items-center justify-center bg-black/50', !fullScreen && 'p-4')}
       onMouseDown={(e) => {
         // Only a click that starts on the backdrop itself closes, so a drag out
         // of a text field does not dismiss the dialog, and neither does a press
@@ -41,14 +43,16 @@ export function Modal({ title, description, children, footer, onClose, wide }: M
         aria-modal="true"
         aria-label={title}
         className={cx(
-          'w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-5 shadow-2xl',
-          wide ? 'max-w-2xl' : 'max-w-sm',
+          'w-full bg-[var(--color-raised)] p-5',
+          fullScreen
+            ? 'flex h-full flex-col pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))]'
+            : cx('rounded-xl border border-[var(--color-line)] shadow-2xl', wide ? 'max-w-2xl' : 'max-w-sm'),
         )}
       >
         <h2 className="text-base font-semibold">{title}</h2>
         {description && <p className="mt-1 text-sm text-[var(--color-muted)]">{description}</p>}
-        {children && <div className="mt-3">{children}</div>}
-        <div className="mt-5 flex justify-end gap-2">{footer}</div>
+        {children && <div className={cx('mt-3', fullScreen && 'flex min-h-0 flex-1 flex-col')}>{children}</div>}
+        <div className="mt-5 flex shrink-0 justify-end gap-2">{footer}</div>
       </div>
     </div>
   );
