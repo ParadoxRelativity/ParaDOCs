@@ -8,7 +8,8 @@ import { Modal } from './Modal';
 import { FIELD, PictureField, Section } from './SettingsParts';
 import { AwayAfterSelect, StatusChoices, useStatusControls } from './Presence';
 import { useToast } from './Toast';
-import { Button } from './ui';
+import { Button, IconButton } from './ui';
+import { useIsMobile } from '../lib/mobile';
 import Icon, { type IconName } from './Icon';
 import VoiceSettings from './VoiceSettings';
 import { desktop } from '../lib/desktop';
@@ -52,6 +53,9 @@ export default function SettingsDialog(props: Props) {
   const { section, onSectionChange } = props;
   // Device settings are only worth showing on a server that can hold a call.
   const voiceEnabled = useVoiceConfig().data?.enabled ?? false;
+  const mobile = useIsMobile();
+  // On a phone, whether the list of sections is showing rather than one of them.
+  const [browsing, setBrowsing] = useState(true);
 
   const nav: { id: SettingsSection; label: string; icon: IconName }[] = [
     { id: 'account', label: 'Account', icon: 'person' },
@@ -68,17 +72,69 @@ export default function SettingsDialog(props: Props) {
       : []),
   ];
 
+  const content = (
+    <>
+      {section === 'account' && <AccountSection user={props.user} />}
+      {section === 'appearance' && (
+        <AppearanceSection
+          theme={props.theme}
+          onThemeChange={props.onThemeChange}
+          showCallLayout={voiceEnabled}
+        />
+      )}
+      {section === 'voice' && <VoiceSettings />}
+      {section === 'ai' && <AiConnectionsSettings />}
+      {desktop && section === 'servers' && <ServersSection />}
+      {desktop && section === 'updates' && <UpdatesSection />}
+    </>
+  );
+
+  const footer = (
+    <Button variant="subtle" className="text-xs" onClick={props.onClose}>
+      Done
+    </Button>
+  );
+
+  // A phone has no room for the list beside a section, so it shows one or the
+  // other: the list first, and a section with a way back to it.
+  if (mobile) {
+    const current = nav.find((item) => item.id === section);
+    return (
+      <Modal title="Settings" onClose={props.onClose} fullScreen footer={footer}>
+        {browsing || !current ? (
+          <nav className="scroll-thin min-h-0 flex-1 divide-y divide-[var(--color-line)] overflow-y-auto">
+            {nav.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  onSectionChange(item.id);
+                  setBrowsing(false);
+                }}
+                className="flex w-full items-center gap-3 px-1 py-3 text-left text-sm"
+              >
+                <Icon name={item.icon} className="text-[var(--color-muted)]" />
+                <span className="flex-1">{item.label}</span>
+                <Icon name="chevron-right" className="text-xs text-[var(--color-muted)]" />
+              </button>
+            ))}
+          </nav>
+        ) : (
+          <>
+            <div className="mb-3 flex shrink-0 items-center gap-1 border-b border-[var(--color-line)] pb-2">
+              <IconButton label="Back to settings" onClick={() => setBrowsing(true)}>
+                <Icon name="chevron-left" />
+              </IconButton>
+              <h3 className="text-sm font-semibold">{current.label}</h3>
+            </div>
+            <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">{content}</div>
+          </>
+        )}
+      </Modal>
+    );
+  }
+
   return (
-    <Modal
-      title="Settings"
-      onClose={props.onClose}
-      wide
-      footer={
-        <Button variant="subtle" className="text-xs" onClick={props.onClose}>
-          Done
-        </Button>
-      }
-    >
+    <Modal title="Settings" onClose={props.onClose} wide footer={footer}>
       <div className="flex gap-4">
         <nav className="w-36 shrink-0 space-y-0.5">
           {nav.map((item) => (
@@ -98,20 +154,7 @@ export default function SettingsDialog(props: Props) {
           ))}
         </nav>
 
-        <div className="scroll-thin max-h-[60vh] min-w-0 flex-1 overflow-y-auto pr-1">
-          {section === 'account' && <AccountSection user={props.user} />}
-          {section === 'appearance' && (
-            <AppearanceSection
-              theme={props.theme}
-              onThemeChange={props.onThemeChange}
-              showCallLayout={voiceEnabled}
-            />
-          )}
-          {section === 'voice' && <VoiceSettings />}
-          {section === 'ai' && <AiConnectionsSettings />}
-          {desktop && section === 'servers' && <ServersSection />}
-          {desktop && section === 'updates' && <UpdatesSection />}
-        </div>
+        <div className="scroll-thin max-h-[60vh] min-w-0 flex-1 overflow-y-auto pr-1">{content}</div>
       </div>
     </Modal>
   );
