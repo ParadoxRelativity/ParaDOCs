@@ -7,6 +7,7 @@ import { isNativeApp, serverOrigin } from '../lib/server';
 import { forgetVerifier, onSsoReturn, readVerifier, startSso, takeBrowserSsoError } from '../lib/sso';
 import ServerPicker from './ServerPicker';
 import ConnectServerDialog from './ConnectServerDialog';
+import PrivacyLink from './PrivacyLink';
 import Banner from './Banner';
 import Icon from './Icon';
 import { ConfirmDialog } from './Modal';
@@ -200,6 +201,10 @@ export default function AuthScreen({ allowRegistration, passwordSignIn, oidc }: 
             </Button>
           </div>
         )}
+
+        <p className="mt-4 text-center">
+          <PrivacyLink />
+        </p>
       </div>
     </div>
   );

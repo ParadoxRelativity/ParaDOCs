@@ -20,6 +20,7 @@ import { useOpenBehaviour, type OpenBehaviour } from '../lib/openBehaviour';
 import { playSound, useSoundPreferences } from '../lib/sounds';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
 import AiConnectionsSettings from './AiConnectionsSettings';
+import PrivacyLink from './PrivacyLink';
 
 export const SETTINGS_SECTIONS = [
   'account',
@@ -93,9 +94,12 @@ export default function SettingsDialog(props: Props) {
   );
 
   const footer = (
-    <Button variant="subtle" className="text-xs" onClick={props.onClose}>
-      Done
-    </Button>
+    <>
+      <PrivacyLink className="mr-auto self-center" />
+      <Button variant="subtle" className="text-xs" onClick={props.onClose}>
+        Done
+      </Button>
+    </>
   );
 
   // A phone has no room for the list beside a section, so it shows one or the
