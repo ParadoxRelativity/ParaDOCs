@@ -2,9 +2,14 @@ import { session as electronSession } from 'electron';
 import http from 'node:http';
 import https from 'node:https';
 import type {
+  AccountActor,
+  AccountRequestNotification,
   InviteNotification,
+  OwnAccountRequestNotification,
+  WorkspaceSuspensionNotification,
   MentionNotification,
   MessageNotification,
+  MessageReportNotification,
   Notifications,
   WorkItemNotification,
 } from '@paradocs/shared';
@@ -326,7 +331,81 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
           }
         : null;
 
-    return { status: 'ok', notifications: { invites, messages, mentions, workItems, serverUpdate } };
+    const actor = (value: unknown): AccountActor | null => {
+      if (!value || typeof value !== 'object') return null;
+      const a = record(value);
+      return {
+        id: nullable(a.id),
+        name: text(a.name, 'A team lead').slice(0, 200),
+        workspaceName: nullable(a.workspaceName)?.slice(0, 200) ?? null,
+      };
+    };
+    const note = (value: unknown) => nullable(value)?.slice(0, 1000) ?? null;
+
+    const kind = (value: unknown) => (value === 'disable' ? ('disable' as const) : ('delete' as const));
+
+    const accountRequests: AccountRequestNotification[] = records(body.accountRequests, 50).map((request) => ({
+      userId: text(request.userId),
+      name: text(request.name, 'Someone').slice(0, 200),
+      email: text(request.email).slice(0, 254),
+      kind: kind(request.kind),
+      requestedAt: text(request.requestedAt),
+      note: note(request.note),
+      requestedBy: actor(request.requestedBy),
+      memberNote: note(request.memberNote),
+    }));
+
+    const own = body.ownAccountRequest ? record(body.ownAccountRequest) : null;
+    const ownBy = own ? actor(own.requestedBy) : null;
+    const ownAccountRequest: OwnAccountRequestNotification | null =
+      own && ownBy
+        ? { kind: kind(own.kind), requestedAt: text(own.requestedAt), requestedBy: ownBy, note: note(own.note) }
+        : null;
+
+    const suspensions: WorkspaceSuspensionNotification[] = await Promise.all(
+      records(body.suspensions, 50).map(async (suspension) => ({
+        workspace: await workspace(suspension.workspace),
+        byName: text(suspension.byName, 'Someone').slice(0, 200),
+        at: text(suspension.at),
+      })),
+    );
+
+    const person = (value: unknown, fallback: string) => {
+      const p = value && typeof value === 'object' ? record(value) : {};
+      return { id: nullable(p.id), name: text(p.name, fallback).slice(0, 200) };
+    };
+    const messageReports: MessageReportNotification[] = await Promise.all(
+      records(body.messageReports, 50).map(async (report) => ({
+        id: text(report.id),
+        workspace: await workspace(report.workspace),
+        channelId: nullable(report.channelId),
+        messageId: nullable(report.messageId),
+        direct: report.direct === true,
+        channelName: text(report.channelName).slice(0, 200),
+        author: person(report.author, 'Someone'),
+        reporter: person(report.reporter, 'Someone'),
+        excerpt: text(report.excerpt).slice(0, 1000),
+        attachmentCount: typeof report.attachmentCount === 'number' ? report.attachmentCount : 0,
+        reason: note(report.reason),
+        reportedAt: text(report.reportedAt),
+        reports: typeof report.reports === 'number' ? Math.max(1, Math.floor(report.reports)) : 1,
+      })),
+    );
+
+    return {
+      status: 'ok',
+      notifications: {
+        invites,
+        messages,
+        mentions,
+        workItems,
+        serverUpdate,
+        accountRequests,
+        ownAccountRequest,
+        suspensions,
+        messageReports,
+      },
+    };
   } catch {
     return { status: 'unavailable' };
   }

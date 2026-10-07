@@ -5,9 +5,13 @@ import {
   messagePreview,
   type DocumentMode,
   type MentionNotification,
+  type AccountRequestNotification,
   type MessageNotification,
+  type MessageReportNotification,
   type NotificationWorkspace,
   type Notifications,
+  type OwnAccountRequestNotification,
+  type WorkspaceSuspensionNotification,
   type Role,
   type WorkItemNotification,
 } from '@paradocs/shared';
@@ -20,6 +24,8 @@ import { appEnabledSql } from '../lib/apps.js';
 import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { availableServerUpdate } from '../lib/releases.js';
+import { requesterSql } from '../lib/accountRequests.js';
+import { notBlockedAuthorSql } from '../lib/blocks.js';
 
 const PREVIEW_LENGTH = 200;
 const MAX_CHANNELS = 50;
@@ -35,6 +41,27 @@ const readMentionsSchema = z.object({
 });
 
 const MAX_MENTIONS = 50;
+
+const MAX_ACCOUNT_REQUESTS = 50;
+
+const MAX_MESSAGE_REPORTS = 50;
+
+interface MessageReportRow extends WorkspaceColumns {
+  id: string;
+  channel_id: string | null;
+  message_id: string | null;
+  direct: boolean;
+  channel_name: string;
+  author_id: string | null;
+  author_name: string;
+  reporter_id: string | null;
+  reporter_name: string;
+  body: string;
+  attachment_count: number;
+  reason: string | null;
+  created_at: string;
+  reports: number;
+}
 
 const readWorkItemsSchema = z.object({
   /** Omit to clear every work item notification. */
@@ -118,9 +145,12 @@ function workspaceOf(row: WorkspaceColumns): NotificationWorkspace {
   };
 }
 
-function truncate(text: string): string {
-  return text.length > PREVIEW_LENGTH ? `${text.slice(0, PREVIEW_LENGTH - 1).trimEnd()}…` : text;
+function truncate(text: string, length = PREVIEW_LENGTH): string {
+  return text.length > length ? `${text.slice(0, length - 1).trimEnd()}…` : text;
 }
+
+/** A report is reviewed from what it copied, so admins are given more of it than a preview. */
+const REPORT_EXCERPT_LENGTH = 1000;
 
 async function isServerAdmin(userId: string): Promise<boolean> {
   const { rows } = await query<{ admin: boolean }>('SELECT is_server_admin AS admin FROM users WHERE id = $1', [userId]);
@@ -142,7 +172,16 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
   app.get('/notifications', async (req): Promise<Notifications> => {
     const user = req.user!;
 
-    const [{ rows: inviteRows }, { rows: channelRows }, { rows: mentionRows }, { rows: workItemRows }] = await Promise.all([
+    const [
+      { rows: inviteRows },
+      { rows: channelRows },
+      { rows: mentionRows },
+      { rows: workItemRows },
+      { rows: accountRequests },
+      { rows: ownRequestRows },
+      { rows: suspensionRows },
+      { rows: reportRows },
+    ] = await Promise.all([
       query<InviteRow>(
         `SELECT i.id, i.token, r.name AS role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
            FROM workspace_invites i
@@ -196,6 +235,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
                 AND m.deleted_at IS NULL
                 AND m.author_id IS DISTINCT FROM $1
                 AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
+                AND ${notBlockedAuthorSql('$1')}
            ) stats
            CROSS JOIN LATERAL (
              SELECT m.id, m.body, m.created_at, m.author_id,
@@ -205,6 +245,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
                 AND m.deleted_at IS NULL
                 AND m.author_id IS DISTINCT FROM $1
                 AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
+                AND ${notBlockedAuthorSql('$1')}
               ORDER BY m.created_at DESC, m.id DESC
               LIMIT 1
            ) latest
@@ -229,6 +270,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
            LEFT JOIN users author ON author.id = dm.created_by
           WHERE dm.user_id = $1
             AND dm.read_at IS NULL
+            -- A tag from someone you blocked is not one you are shown.
+            AND ${notBlockedAuthorSql('$1', 'dm.created_by')}
             -- An archived document is off the shelf; a tag in one is not news.
             AND d.archived_at IS NULL
             AND ${appEnabledSql('d.workspace_id', 'docs')}
@@ -260,6 +303,59 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           LIMIT ${MAX_MENTIONS}`,
         [user.id],
       ),
+      // Requests about accounts, for server administrators only: the check is
+      // part of the query, so everyone else's costs nothing extra. A disabled
+      // account's request is left to the admin page, where it stays flagged;
+      // disabling is how an account that cannot be deleted yet is usually dealt
+      // with, and it should not keep ringing the bell.
+      query<AccountRequestNotification>(
+        `SELECT u.id AS "userId", u.name, u.email, u.account_request AS kind,
+                u.account_requested_at AS "requestedAt", u.account_request_note AS note,
+                ${requesterSql('u')} AS "requestedBy", u.account_member_note AS "memberNote"
+           FROM users u
+          WHERE u.account_requested_at IS NOT NULL
+            AND u.disabled_at IS NULL
+            AND EXISTS (SELECT 1 FROM users me WHERE me.id = $1 AND me.is_server_admin)
+          ORDER BY u.account_requested_at DESC
+          LIMIT ${MAX_ACCOUNT_REQUESTS}`,
+        [user.id],
+      ),
+      // A team lead asked the administrators about this person's own account; they are told.
+      query<OwnAccountRequestNotification>(
+        `SELECT u.account_request AS kind, u.account_requested_at AS "requestedAt",
+                ${requesterSql('u')} AS "requestedBy", u.account_request_note AS note
+           FROM users u
+          WHERE u.id = $1 AND u.account_requested_at IS NOT NULL AND u.account_requested_by_lead`,
+        [user.id],
+      ),
+      // Workspaces this person is suspended from, which have left their list.
+      query<WorkspaceColumns & { by_name: string; at: string }>(
+        `SELECT ${WORKSPACE_SELECT}, s.suspended_by_name AS by_name, s.suspended_at AS at
+           FROM workspace_suspensions s
+           JOIN workspaces w ON w.id = s.workspace_id
+          WHERE s.user_id = $1
+          ORDER BY s.suspended_at DESC`,
+        [user.id],
+      ),
+      // Reported chat messages, for the owners and admins of their workspaces.
+      // One row per message, the latest report's, however many people reported it.
+      query<MessageReportRow>(
+        `SELECT * FROM (
+           SELECT DISTINCT ON (r.workspace_id, COALESCE(r.message_id, r.id))
+                  r.id, r.channel_id, r.message_id, r.direct, r.channel_name, r.author_id, r.author_name,
+                  r.reporter_id, r.reporter_name, r.body, r.attachment_count, r.reason, r.created_at,
+                  (count(*) OVER (PARTITION BY r.workspace_id, COALESCE(r.message_id, r.id)))::int AS reports,
+                  ${WORKSPACE_SELECT}
+             FROM message_reports r
+             JOIN workspaces w ON w.id = r.workspace_id
+             JOIN workspace_members wm ON wm.workspace_id = r.workspace_id AND wm.user_id = $1
+            WHERE r.resolved_at IS NULL AND wm.role IN ('owner', 'admin')
+            ORDER BY r.workspace_id, COALESCE(r.message_id, r.id), r.created_at DESC
+         ) latest
+         ORDER BY created_at DESC
+         LIMIT ${MAX_MESSAGE_REPORTS}`,
+        [user.id],
+      ),
     ]);
 
     // Only administrators hear about releases, and only while there is one, so
@@ -288,6 +384,30 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
               ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
               : null,
           },
+        };
+      }),
+    );
+
+    const messageReports: MessageReportNotification[] = await Promise.all(
+      reportRows.map(async (row) => {
+        const references = await resolveReferences([row.body], row.workspace_id, user.id);
+        return {
+          id: row.id,
+          workspace: workspaceOf(row),
+          channelId: row.channel_id,
+          messageId: row.message_id,
+          direct: row.direct,
+          channelName: row.channel_name,
+          author: { id: row.author_id, name: row.author_name },
+          reporter: { id: row.reporter_id, name: row.reporter_name },
+          excerpt: truncate(
+            messagePreview(row.body, references) || attachmentSummary(row.attachment_count),
+            REPORT_EXCERPT_LENGTH,
+          ),
+          attachmentCount: row.attachment_count,
+          reason: row.reason,
+          reportedAt: row.created_at,
+          reports: row.reports,
         };
       }),
     );
@@ -332,6 +452,12 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         }),
       ),
       serverUpdate,
+      accountRequests,
+      ownAccountRequest: ownRequestRows[0] ?? null,
+      suspensions: suspensionRows.map(
+        (row): WorkspaceSuspensionNotification => ({ workspace: workspaceOf(row), byName: row.by_name, at: row.at }),
+      ),
+      messageReports,
     };
   });
 

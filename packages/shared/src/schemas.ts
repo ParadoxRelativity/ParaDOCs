@@ -57,6 +57,29 @@ export const changePasswordSchema = z.object({
   newPassword: z.string().min(10, 'password must be at least 10 characters').max(200),
 });
 
+export const requestAccountDeletionSchema = z.object({
+  /** Omitted only by accounts that have no password yet. */
+  password: z.string().max(200).optional(),
+  /** Anything the person wants the administrators to know. */
+  note: z.string().trim().max(1000).optional(),
+});
+
+/** What you tell the administrators about a team lead's request about your account. */
+export const accountMemberNoteSchema = z.object({
+  note: z.string().trim().max(1000),
+});
+
+/** A team lead asking the server's administrators to disable or delete a member's account. */
+export const memberAccountRequestSchema = z.object({
+  kind: z.enum(['delete', 'disable']),
+  note: z.string().trim().max(1000).optional(),
+});
+
+/** Reporting a chat message to the owners and admins of its workspace. */
+export const reportMessageSchema = z.object({
+  reason: z.string().trim().max(1000).optional(),
+});
+
 export const createWorkspaceSchema = z.object({
   name: z.string().min(1).max(80),
   icon: z.string().max(16).nullish(),
@@ -208,6 +231,9 @@ export const updateEventSchema = createEventSchema.partial();
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+export type RequestAccountDeletionInput = z.infer<typeof requestAccountDeletionSchema>;
+export type MemberAccountRequestInput = z.infer<typeof memberAccountRequestSchema>;
+export type ReportMessageInput = z.infer<typeof reportMessageSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
 export type CreateFolderInput = z.infer<typeof createFolderSchema>;

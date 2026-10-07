@@ -6,7 +6,7 @@ import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js
 import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess, workspaceMembership } from '../plugins/session.js';
 import { assertMayGrant, loadRole, type RoleRow } from '../lib/workspaceRoles.js';
-import { managesAccess, permissionList } from '../lib/roles.js';
+import { managesAccess, permissionList, type Membership } from '../lib/roles.js';
 import { publishToUser, publishToWorkspace } from '../chat/hub.js';
 import { accessChanged } from '../lib/accessEvents.js';
 
@@ -51,19 +51,42 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/members', async (req) => {
-    await assertWorkspaceAccess(req, req.params.id);
+    const viewer = await assertWorkspaceAccess(req, req.params.id);
+    // Who is suspended, and what the administrators have been asked about
+    // someone's account, is for those who could act on it: owners, admins and
+    // team leads. Everyone else sees the workspace's members as they are.
+    const oversees = managesAccess(viewer.role) || viewer.permissions.has('teams.accounts');
     const { rows } = await query(
-      `SELECT m.user_id AS "userId", u.name, u.email, ${uploadUrlSql('u.avatar_key')} AS "avatarUrl", m.role,
+      `SELECT * FROM (
+       SELECT m.user_id AS "userId", u.name, u.email, ${uploadUrlSql('u.avatar_key')} AS "avatarUrl", m.role,
               json_build_object('id', r.id, 'name', r.name) AS "workspaceRole",
-              m.created_at AS "joinedAt", (m.user_id = $2) AS "isSelf"
+              m.created_at AS "joinedAt", (m.user_id = $2) AS "isSelf",
+              (u.disabled_at IS NOT NULL) AS disabled,
+              CASE WHEN $3 THEN u.account_request END AS "accountRequest",
+              NULL::json AS suspension,
+              r.position, r.name AS role_name
          FROM workspace_members m
          JOIN users u ON u.id = m.user_id
          JOIN workspace_roles r ON r.id = m.role_id
         WHERE m.workspace_id = $1
-        ORDER BY r.position, lower(r.name), lower(u.name)`,
-      [req.params.id, req.user!.id],
+       UNION ALL
+       SELECT s.user_id, u.name, u.email, ${uploadUrlSql('u.avatar_key')}, s.role,
+              json_build_object('id', COALESCE(r.id::text, s.role), 'name', COALESCE(r.name, initcap(s.role))),
+              s.joined_at, false,
+              (u.disabled_at IS NOT NULL),
+              u.account_request,
+              json_build_object('at', s.suspended_at, 'byName', s.suspended_by_name),
+              2147483647, COALESCE(r.name, s.role)
+         FROM workspace_suspensions s
+         JOIN users u ON u.id = s.user_id
+         LEFT JOIN workspace_roles r ON r.id = s.role_id
+        WHERE s.workspace_id = $1 AND $3
+       ) everyone
+       ORDER BY position, lower(role_name), lower(name)`,
+      [req.params.id, req.user!.id, oversees],
     );
-    return rows;
+    // The sort keys stay on the server.
+    return rows.map(({ position: _position, role_name: _roleName, ...member }) => member);
   });
 
   app.patch<{ Params: { id: string; userId: string } }>(
@@ -105,17 +128,30 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
       // Anyone may remove themselves; removing someone else needs an owner or admin.
       const actor = await assertWorkspaceAccess(req, req.params.id, leaving ? undefined : 'manage');
 
-      const target = await workspaceMembership(req.params.userId, req.params.id);
+      // Someone suspended is no member until it is lifted, but can still be
+      // removed outright, which ends the suspension too.
+      const member = await workspaceMembership(req.params.userId, req.params.id);
+      const { rows: suspension } = member
+        ? { rows: [] }
+        : await query<{ role: Membership['role'] }>(
+            'SELECT role FROM workspace_suspensions WHERE workspace_id = $1 AND user_id = $2',
+            [req.params.id, req.params.userId],
+          );
+      const target = member ?? suspension[0];
       if (!target) throw notFound('That person is not a member of this workspace');
       if (!leaving && target.role === 'owner' && actor.role !== 'owner') {
         throw forbidden('Only an owner can remove another owner');
       }
-      if (target.role === 'owner' && (await countOwners(req.params.id)) <= 1) {
+      if (member && target.role === 'owner' && (await countOwners(req.params.id)) <= 1) {
         throw badRequest('A workspace must keep at least one owner');
       }
 
       await transaction(async (client) => {
         await client.query('DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
+          req.params.id,
+          req.params.userId,
+        ]);
+        await client.query('DELETE FROM workspace_suspensions WHERE workspace_id = $1 AND user_id = $2', [
           req.params.id,
           req.params.userId,
         ]);
@@ -297,6 +333,13 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     );
     // The name of the role they hold, which is what they will be shown.
     if (existing[0]) return { workspaceId: invite.workspace_id, role: existing[0].name, alreadyMember: true };
+
+    // A new invite is no way back in from a suspension; only lifting it is.
+    const { rowCount: suspended } = await query(
+      'SELECT 1 FROM workspace_suspensions WHERE workspace_id = $1 AND user_id = $2',
+      [invite.workspace_id, req.user.id],
+    );
+    if (suspended) throw forbidden('You are suspended from this workspace. Ask its owners or admins to lift it.');
 
     await transaction(async (client) => {
       await client.query(

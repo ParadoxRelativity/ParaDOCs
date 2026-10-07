@@ -160,11 +160,16 @@ export const MessageComposer = forwardRef<
     /** A conversation between two people, where `@here` would only ever reach the one other. */
     direct?: boolean;
     disabled?: boolean;
+    /** Why it is disabled, in place of the usual placeholder. */
+    disabledPlaceholder?: string;
     onSend: (input: { body: string; attachmentIds: string[] }) => Promise<void>;
     /** Tells the others here that you are typing, or have stopped. */
     onTyping?: (typing: boolean) => void;
   }
->(function MessageComposer({ workspaceId, channelId, channels, target, direct = false, disabled, onSend, onTyping }, ref) {
+>(function MessageComposer(
+  { workspaceId, channelId, channels, target, direct = false, disabled, disabledPlaceholder, onSend, onTyping },
+  ref,
+) {
   const [value, setValue] = useState('');
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [highlighted, setHighlighted] = useState(0);
@@ -615,7 +620,7 @@ export const MessageComposer = forwardRef<
             disabled={disabled}
             placeholder={
               disabled
-                ? 'You cannot post here'
+                ? (disabledPlaceholder ?? 'You cannot post here')
                 : `Message ${target}   —   @ someone, # a channel, [[ a document, : an emoji`
             }
             onChange={(e) => sync(e.target.value, e.target.selectionStart)}

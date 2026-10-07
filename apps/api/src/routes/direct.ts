@@ -14,6 +14,7 @@ import { removeStoredFiles, uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 import { publishToUser } from '../chat/hub.js';
 import { removeFromCall } from './voice.js';
+import { notBlockedAuthorSql } from '../lib/blocks.js';
 
 /**
  * Direct conversations: a channel of kind 'direct' between two or more members
@@ -43,12 +44,14 @@ async function listDirect(workspaceId: string, userId: string, channelId: string
               WHERE m.channel_id = c.id
                 AND m.deleted_at IS NULL
                 AND m.author_id IS DISTINCT FROM $2
-                AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)) AS unread,
+                AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
+                AND ${notBlockedAuthorSql('$2')}) AS unread,
             (SELECT count(*)::int FROM messages m
               WHERE m.channel_id = c.id
                 AND m.deleted_at IS NULL
                 AND m.author_id IS DISTINCT FROM $2
                 AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
+                AND ${notBlockedAuthorSql('$2')}
                 AND ${mentionsUserSql('$2')}) AS mentions
        FROM channel_members mine
        JOIN channels c ON c.id = mine.channel_id

@@ -15,6 +15,9 @@ import { voiceProxyRoutes } from './lib/voiceProxy.js';
 import { resolveMediaToken, sessionPlugin } from './plugins/session.js';
 import { mayReadUpload } from './lib/uploadAccess.js';
 import { authRoutes } from './routes/auth.js';
+import { accountRoutes } from './routes/account.js';
+import { teamAccountRoutes } from './routes/teamAccounts.js';
+import { moderationRoutes } from './routes/moderation.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { documentRoutes } from './routes/documents.js';
 import { spreadsheetRoutes } from './routes/spreadsheets.js';
@@ -126,6 +129,7 @@ export async function buildApp() {
 
   for (const routes of [
     authRoutes,
+    accountRoutes,
     workspaceRoutes,
     documentRoutes,
     spreadsheetRoutes,
@@ -142,6 +146,8 @@ export async function buildApp() {
     eventRoutes,
     uploadRoutes,
     memberRoutes,
+    teamAccountRoutes,
+    moderationRoutes,
     roleRoutes,
     accessRoutes,
     inviteRoutes,

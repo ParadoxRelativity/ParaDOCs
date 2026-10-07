@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { normalizeServerUrl, serverOrigin, setServerOrigin } from '../lib/server';
 import Banner from './Banner';
+import PrivacyLink from './PrivacyLink';
 import { Button } from './ui';
 
 /**
@@ -90,6 +91,10 @@ export default function ServerPicker({ onCancel }: { onCancel?: () => void }) {
             </Button>
           )}
         </form>
+
+        <p className="mt-4 text-center">
+          <PrivacyLink />
+        </p>
       </div>
     </div>
   );

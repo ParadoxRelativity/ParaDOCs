@@ -1,4 +1,5 @@
 import { app, Menu, dialog, shell, type MenuItemConstructorOptions, type WebContents } from 'electron';
+import { PRIVACY_POLICY_URL } from '@paradocs/shared';
 import { listConnections } from './connections.js';
 import { check } from './updater.js';
 import {
@@ -187,6 +188,10 @@ export function buildMenu(): void {
         {
           label: 'ParaDOCs on GitHub',
           click: () => void shell.openExternal('https://github.com/paradocs/paradocs'),
+        },
+        {
+          label: 'Privacy Policy',
+          click: () => void shell.openExternal(PRIVACY_POLICY_URL),
         },
         ...(isMac ? [] : ([{ type: 'separator' }, { role: 'about' }] as MenuItemConstructorOptions[])),
       ],

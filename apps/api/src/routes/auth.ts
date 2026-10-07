@@ -19,7 +19,7 @@ const USER_COLUMNS = `id, email, name, ${uploadUrlSql('avatar_key')} AS "avatarU
  * should take more than a session. Accounts created through a provider have
  * no password yet, so there is nothing to check for them.
  */
-async function confirmPassword(userId: string, given: string | undefined): Promise<void> {
+export async function confirmPassword(userId: string, given: string | undefined): Promise<void> {
   const { rows } = await query<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [
     userId,
   ]);

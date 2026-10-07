@@ -26,6 +26,7 @@ import {
   useCreateUser,
   useDeleteOidcProvider,
   useDeleteUser,
+  useDismissAccountRequest,
   useOidcProviders,
   useServerSettings,
   useSetUserPassword,
@@ -595,7 +596,9 @@ function SettingsForm({ current }: { current: ServerSettings }) {
 function AccountsPanel({ selfId }: { selfId: string }) {
   const [search, setSearch] = useState('');
   const query = useDebounced(search.trim(), 250);
-  const users = useAdminUsers(query);
+  const [requestedOnly, setRequestedOnly] = useState(false);
+  const users = useAdminUsers(query, requestedOnly);
+  const requests = users.data?.requests ?? 0;
   const [creating, setCreating] = useState(false);
   const [managingId, setManagingId] = useState<string | null>(null);
   // Looked up from the list each render, so the dialog shows changes as they land.
@@ -629,6 +632,30 @@ function AccountsPanel({ selfId }: { selfId: string }) {
         />
       </div>
 
+      {(requests > 0 || requestedOnly) && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => setRequestedOnly(!requestedOnly)}
+            aria-pressed={requestedOnly}
+            className={cx(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium',
+              requestedOnly
+                ? 'border-red-500/50 bg-red-500/10 text-red-500'
+                : 'border-[var(--color-line)] hover:bg-[var(--color-surface)]',
+            )}
+          >
+            <Icon name="person-x" /> Requests ({requests})
+          </button>
+          {!requestedOnly && (
+            <span className="text-[var(--color-muted)]">
+              {requests === 1 ? 'One account has a request' : `${requests} accounts have requests`} to disable or
+              delete waiting for you.
+            </span>
+          )}
+        </div>
+      )}
+
       {users.isLoading ? (
         <Spinner />
       ) : !users.data ? (
@@ -651,6 +678,9 @@ function AccountsPanel({ selfId }: { selfId: string }) {
                     {u.id === selfId && <Badge tone="muted">You</Badge>}
                     {u.isServerAdmin && <Badge tone="accent">Admin</Badge>}
                     {u.disabled && <Badge tone="danger">Disabled</Badge>}
+                    {u.accountRequest && (
+                      <Badge tone="danger">{u.accountRequest === 'disable' ? 'Disable requested' : 'Deletion requested'}</Badge>
+                    )}
                   </div>
                   <div className="truncate text-xs text-[var(--color-muted)]">{u.email}</div>
                 </div>
@@ -747,6 +777,7 @@ function ManageAccountDialog({ user, self, onClose }: { user: AdminUser; self: b
   const setPassword = useSetUserPassword();
   const signOut = useSignOutUser();
   const remove = useDeleteUser();
+  const dismiss = useDismissAccountRequest();
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
   const [password, setPasswordValue] = useState('');
@@ -800,6 +831,71 @@ function ManageAccountDialog({ user, self, onClose }: { user: AdminUser; self: b
           {user.workspaceCount === 1 ? '' : 's'} ·{' '}
           {user.lastSignInAt ? `last signed in ${formatRelative(user.lastSignInAt)}` : 'no active sessions'}
         </p>
+
+        {user.accountRequest && user.accountRequestedAt && (
+          <div className="mb-5 rounded-lg border border-red-500/40 bg-red-500/5 p-3">
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-red-500">
+              <Icon name={user.accountRequest === 'disable' ? 'slash-circle' : 'person-x'} />
+              {user.accountRequestedBy
+                ? `${user.accountRequestedBy.name} asked for this account to be ${user.accountRequest === 'disable' ? 'disabled' : 'deleted'}`
+                : 'Asked for this account to be deleted'}
+            </p>
+            <p className="mt-1 text-xs text-[var(--color-muted)]">
+              {formatDateTime(user.accountRequestedAt)} ({formatRelative(user.accountRequestedAt)})
+              {user.accountRequestedBy
+                ? `${user.accountRequestedBy.workspaceName ? `, from ${user.accountRequestedBy.workspaceName}` : ''}. ${user.name} has been told and can add a note; only you can set the request aside.`
+                : ', from the app. They can still sign in until you act, and can cancel the request themselves.'}
+            </p>
+            {user.accountRequestNote && (
+              <p className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--color-raised)] p-2 text-sm">
+                {user.accountRequestedBy && (
+                  <span className="mb-0.5 block text-xs text-[var(--color-muted)]">{user.accountRequestedBy.name}:</span>
+                )}
+                {user.accountRequestNote}
+              </p>
+            )}
+            {user.accountMemberNote && (
+              <p className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--color-raised)] p-2 text-sm">
+                <span className="mb-0.5 block text-xs text-[var(--color-muted)]">{user.name}:</span>
+                {user.accountMemberNote}
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {!self && (
+                <Button variant="danger" disabled={remove.isPending} onClick={() => setConfirmingDelete(true)}>
+                  <Icon name="trash" /> Delete account
+                </Button>
+              )}
+              {!self && !user.disabled && (
+                <Button
+                  variant="subtle"
+                  disabled={update.isPending}
+                  onClick={() =>
+                    update.mutate(
+                      { id: user.id, input: { disabled: true } },
+                      { onSuccess: () => toast(`Disabled ${user.name}`), onError: fail },
+                    )
+                  }
+                >
+                  <Icon name="slash-circle" /> {user.accountRequest === 'disable' ? 'Disable account' : 'Disable instead'}
+                </Button>
+              )}
+              <Button
+                variant="subtle"
+                disabled={dismiss.isPending}
+                onClick={() =>
+                  dismiss.mutate(user.id, { onSuccess: () => toast('Request dismissed'), onError: fail })
+                }
+              >
+                Dismiss request
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-[var(--color-muted)]">
+              Deleting fails while workspaces this account created are still used by others. Hand them over first,
+              or disable the account to keep its content.
+            </p>
+          </div>
+        )}
 
         <Section title="Profile">
           <form onSubmit={saveProfile} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">

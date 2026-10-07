@@ -7,6 +7,7 @@ import { isNativeApp, serverOrigin } from '../lib/server';
 import { forgetVerifier, onSsoReturn, readVerifier, startSso, takeBrowserSsoError } from '../lib/sso';
 import ServerPicker from './ServerPicker';
 import ConnectServerDialog from './ConnectServerDialog';
+import PrivacyLink from './PrivacyLink';
 import Banner from './Banner';
 import Icon from './Icon';
 import { ConfirmDialog } from './Modal';
@@ -19,11 +20,14 @@ interface Props {
   /** Off when the server signs in with single sign-on only. */
   passwordSignIn: boolean;
   oidc: OidcStatus;
+  /** Why signing in is being asked for, when it is for something in particular. */
+  notice?: string;
 }
 
-export default function AuthScreen({ allowRegistration, passwordSignIn, oidc }: Props) {
+export default function AuthScreen({ allowRegistration, passwordSignIn, oidc, notice }: Props) {
+  // Someone sent here for a reason, such as deleting their account, already has one.
   const [mode, setMode] = useState<'login' | 'register'>(
-    allowRegistration && passwordSignIn ? 'register' : 'login',
+    allowRegistration && passwordSignIn && !notice ? 'register' : 'login',
   );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -98,6 +102,11 @@ export default function AuthScreen({ allowRegistration, passwordSignIn, oidc }: 
           <p className="text-sm text-[var(--color-muted)]">
             {mode === 'login' ? 'Sign in to your workspace.' : 'Create your account on this server.'}
           </p>
+          {notice && (
+            <p className="mt-2 rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] p-2 text-xs">
+              {notice}
+            </p>
+          )}
         </div>
 
         {passwordSignIn && (
@@ -200,6 +209,10 @@ export default function AuthScreen({ allowRegistration, passwordSignIn, oidc }: 
             </Button>
           </div>
         )}
+
+        <p className="mt-4 text-center">
+          <PrivacyLink />
+        </p>
       </div>
     </div>
   );

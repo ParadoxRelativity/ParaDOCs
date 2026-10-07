@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import type { PresenceStatus, WorkspaceMember } from '@paradocs/shared';
-import { useMembers } from '../../api/hooks';
+import { useBlockedIds, useMembers } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import { Popover } from '../Popover';
 import { PresenceAvatar, STATUS_LABEL, StatusDot, StatusMenu } from '../Presence';
 import { Button, Spinner } from '../ui';
+import { BlockDialog } from './Moderation';
 
 /**
  * Everyone in the workspace, beside the chat: who is around first, then
- * everyone else. Pressing a name opens their card, with a way to message or
- * call them — or, on your own name, to set your status.
+ * everyone else. Pressing a name opens their card, with a way to message,
+ * call or block them — or, on your own name, to set your status.
  *
  * Rows are alphabetical within each group rather than ordered by status, so a
  * list of people drifting between online and away does not reshuffle under
@@ -34,6 +35,8 @@ export function MemberList({
 }) {
   const members = useMembers(workspaceId);
   const [open, setOpen] = useState<{ userId: string; anchor: HTMLElement } | null>(null);
+  const [blocking, setBlocking] = useState<{ id: string; name: string; blocked: boolean } | null>(null);
+  const blockedIds = useBlockedIds();
 
   const statusOf = (member: WorkspaceMember): PresenceStatus =>
     member.isSelf ? selfStatus : (presence[member.userId] ?? 'offline');
@@ -94,6 +97,11 @@ export function MemberList({
             member={selected}
             status={statusOf(selected)}
             voiceEnabled={voiceEnabled}
+            blocked={blockedIds.has(selected.userId)}
+            onBlock={(blocked) => {
+              setOpen(null);
+              setBlocking({ id: selected.userId, name: selected.name, blocked });
+            }}
             onMessage={() => {
               setOpen(null);
               onMessage(selected.userId);
@@ -105,6 +113,7 @@ export function MemberList({
           />
         </Popover>
       )}
+      {blocking && <BlockDialog user={blocking} blocked={blocking.blocked} onClose={() => setBlocking(null)} />}
     </div>
   );
 }
@@ -160,12 +169,17 @@ function MemberCard({
   member,
   status,
   voiceEnabled,
+  blocked,
+  onBlock,
   onMessage,
   onCall,
 }: {
   member: WorkspaceMember;
   status: PresenceStatus;
   voiceEnabled: boolean;
+  /** Whether you blocked them: you can't message or call them until you unblock them. */
+  blocked: boolean;
+  onBlock: (blocked: boolean) => void;
   onMessage: () => void;
   onCall: (video: boolean) => void;
 }) {
@@ -197,34 +211,49 @@ function MemberCard({
         <div className="-mx-2 mt-3 border-t border-[var(--color-line)] pt-2">
           <StatusMenu />
         </div>
-      ) : (
-        <div className="mt-4 flex gap-1.5">
-          <Button variant="primary" className="min-w-0 flex-1 text-xs" onClick={onMessage}>
-            <Icon name="chat-dots" /> Message
+      ) : blocked ? (
+        <div className="mt-4">
+          <p className="text-xs text-[var(--color-muted)]">You blocked {member.name}.</p>
+          <Button variant="subtle" className="mt-2 w-full text-xs" onClick={() => onBlock(true)}>
+            <Icon name="person-check" /> Unblock
           </Button>
-          {voiceEnabled && (
-            <>
-              <Button
-                variant="subtle"
-                className="px-2.5 text-xs"
-                title={`Voice call ${member.name}`}
-                aria-label={`Voice call ${member.name}`}
-                onClick={() => onCall(false)}
-              >
-                <Icon name="telephone" />
-              </Button>
-              <Button
-                variant="subtle"
-                className="px-2.5 text-xs"
-                title={`Video call ${member.name}`}
-                aria-label={`Video call ${member.name}`}
-                onClick={() => onCall(true)}
-              >
-                <Icon name="camera-video" />
-              </Button>
-            </>
-          )}
         </div>
+      ) : (
+        <>
+          <div className="mt-4 flex gap-1.5">
+            <Button variant="primary" className="min-w-0 flex-1 text-xs" onClick={onMessage}>
+              <Icon name="chat-dots" /> Message
+            </Button>
+            {voiceEnabled && (
+              <>
+                <Button
+                  variant="subtle"
+                  className="px-2.5 text-xs"
+                  title={`Voice call ${member.name}`}
+                  aria-label={`Voice call ${member.name}`}
+                  onClick={() => onCall(false)}
+                >
+                  <Icon name="telephone" />
+                </Button>
+                <Button
+                  variant="subtle"
+                  className="px-2.5 text-xs"
+                  title={`Video call ${member.name}`}
+                  aria-label={`Video call ${member.name}`}
+                  onClick={() => onCall(true)}
+                >
+                  <Icon name="camera-video" />
+                </Button>
+              </>
+            )}
+          </div>
+          <button
+            onClick={() => onBlock(false)}
+            className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-red-500"
+          >
+            <Icon name="slash-circle" /> Block {member.name}
+          </button>
+        </>
       )}
     </div>
   );

@@ -134,14 +134,20 @@ export function useCheckForUpdate() {
 
 // --- accounts ----------------------------------------------------------------
 
-export function useAdminUsers(search: string) {
+export function useAdminUsers(search: string, requestedOnly = false) {
   return useQuery({
-    queryKey: [...adminKeys.users, search],
-    queryFn: () =>
-      request<{ users: AdminUser[]; total: number }>(
+    queryKey: [...adminKeys.users, search, requestedOnly],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (search) params.set('q', search);
+      if (requestedOnly) params.set('requested', 'true');
+      const qs = params.toString();
+      // `requests` counts every open request about an account, whatever the search.
+      return request<{ users: AdminUser[]; total: number; requests?: number }>(
         'GET',
-        `/users${search ? `?q=${encodeURIComponent(search)}` : ''}`,
-      ),
+        `/users${qs ? `?${qs}` : ''}`,
+      );
+    },
     // Keeps the list in place while a new search loads, instead of flashing empty.
     placeholderData: keepPreviousData,
   });
@@ -176,6 +182,10 @@ export const useSignOutUser = () =>
   useAccountMutation((id: string) => request<void>('POST', `/users/${id}/sign-out`));
 
 export const useDeleteUser = () => useAccountMutation((id: string) => request<void>('DELETE', `/users/${id}`));
+
+/** Sets aside a request about someone's account. */
+export const useDismissAccountRequest = () =>
+  useAccountMutation((id: string) => request<AdminUser>('DELETE', `/users/${id}/account-request`));
 
 // --- single sign-on ------------------------------------------------------------
 

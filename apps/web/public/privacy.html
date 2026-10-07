@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParaDOCs Privacy Policy</title>
+<meta name="description" content="How the ParaDOCs apps for iOS, Android, macOS and Windows handle your information.">
+<link rel="icon" href="favicon.png">
+<!--
+  The privacy policy for the ParaDOCs apps. Store listings link to the copy
+  that .github/workflows/pages.yml publishes to GitHub Pages; every server
+  also serves this file at /privacy.html.
+
+  Self-contained on purpose: no scripts and nothing fetched from elsewhere, so
+  it reads the same on GitHub Pages, on any server and offline.
+
+  Keep it consistent with the Play Data safety form, the App Store privacy
+  label and ios/App/App/PrivacyInfo.xcprivacy. Change the "Last updated" date
+  with every edit.
+
+  TODO(PARA-44): replace contact-address-todo@example.com with the project's
+  contact address. The Pages workflow refuses to publish until it is gone.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #1f2328;
+    --muted: #59636e;
+    --line: #d1d9e0;
+    --surface: #ffffff;
+    --raised: #f6f8fa;
+    --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e6edf3;
+      --muted: #9198a1;
+      --line: #3d444d;
+      --surface: #0d1117;
+      --raised: #151b23;
+      --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 0.25rem; }
+  h2 { font-size: 1.2rem; margin: 2.25rem 0 0.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 1.25rem 0 0.25rem; }
+  p, ul { margin: 0.5rem 0; }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.25rem 0; }
+  a { color: var(--accent); }
+  .updated { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .summary {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1.25rem;
+  }
+  .summary h2 { border: 0; margin-top: 0.5rem; padding-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.95rem; }
+  th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  @media (max-width: 30rem) {
+    td:first-child { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>ParaDOCs Privacy Policy</h1>
+  <p class="updated">Last updated: 1 October 2026</p>
+
+  <section class="summary" aria-labelledby="summary">
+    <h2 id="summary">The short version</h2>
+    <ul>
+      <li>ParaDOCs is an app for a ParaDOCs <strong>server that you choose</strong>. Your organisation, you, or someone you trust runs that server. We don't.</li>
+      <li>Everything you put into ParaDOCs (your account, documents, messages, files, calls) goes <strong>only to that server</strong>. Whoever runs it decides how it's stored, kept and protected.</li>
+      <li><strong>We collect nothing.</strong> The apps contain no analytics, advertising, tracking or crash reporting, and we have no account system of our own.</li>
+      <li>To delete your account, use <strong>Settings → Account → Delete account</strong> in the app. Your request goes to your server's administrators.</li>
+    </ul>
+  </section>
+
+  <h2 id="who">Who we are</h2>
+  <p>ParadoxRelativity publishes the ParaDOCs apps for iOS, Android, macOS and Windows, and the open-source ParaDOCs server software. In this policy, "we" and "us" mean ParadoxRelativity, and "the apps" means those apps. This policy covers the apps. It doesn't cover any particular ParaDOCs server, because we don't run the servers people connect to (see the exception below).</p>
+
+  <h2 id="how">How ParaDOCs works</h2>
+  <p>On first launch the app asks for the address of a ParaDOCs server. From then on it talks to that server and nothing else, except for the few connections listed under <a href="#other-connections">Other connections the apps make</a>.</p>
+  <p>The person or organisation that runs your server is its <strong>operator</strong>. They are responsible for the information on it, and their own privacy policy or workplace rules apply to it. If you're not sure who runs your server, ask whoever gave you its address.</p>
+  <p><strong>The exception: our demonstration server.</strong> If you connect to a demonstration server that we run, we are its operator. It's for trying ParaDOCs out, its contents may be reset at any time, and you shouldn't put personal or confidential information on it.</p>
+
+  <h2 id="we-collect">What we collect</h2>
+  <p>Nothing. The apps don't send us any information about you or how you use them. They contain no analytics, advertising, tracking or crash-reporting code, and no third-party SDKs that collect data. We don't sell or share personal information, because we don't have any.</p>
+  <p>Apple and Google may give us anonymous, aggregated statistics about the apps, such as download counts, and crash reports if you chose to share them in your device's settings. Their privacy policies cover what they collect when you use their stores.</p>
+
+  <h2 id="server-data">What goes to your server</h2>
+  <p>When you use ParaDOCs, the app sends the following to the server you connected to. This is how the app works, not something we receive:</p>
+  <table>
+    <thead><tr><th>Information</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td>Account</td><td>Your name, email address, password (stored by the server as a one-way hash), profile picture and status.</td></tr>
+      <tr><td>Content</td><td>Documents, spreadsheets, canvases, chat messages, files, photos and videos you attach, comments and work items.</td></tr>
+      <tr><td>Calls</td><td>Your voice and, when you turn it on, your camera or screen, streamed live to the others in the call through the media service your server uses. The app doesn't record calls.</td></tr>
+      <tr><td>Technical</td><td>Your IP address, sign-in sessions and times, and when you were last active, as servers normally record.</td></tr>
+    </tbody>
+  </table>
+  <p>The operator decides how long this is kept, who can see it, and how it's backed up and secured. Some servers delete chat messages after a set time. For questions about information on your server, or to exercise your rights over it, contact its operator.</p>
+
+  <h2 id="device">What's kept on your device</h2>
+  <ul>
+    <li>The address of your server, your sign-in session and your preferences, such as theme, sounds, and microphone and camera choices.</li>
+    <li>A cache of the lists you use to find your way around: workspace, folder, channel, project and people names, so the app opens quickly. It doesn't contain what's written in your documents or messages. It's discarded after 14 days, when you sign out, or when someone else signs in.</li>
+    <li>In the desktop app, any <strong>local workspaces</strong> you create live entirely on your computer and are never sent anywhere.</li>
+  </ul>
+  <p>Uninstalling the app removes all of this from your device.</p>
+
+  <h2 id="permissions">Device permissions</h2>
+  <p>The apps ask for these permissions only when you first use the feature that needs them. You can turn them off at any time in your device's settings.</p>
+  <table>
+    <thead><tr><th>Permission</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Microphone</td><td>To talk in voice channels and calls.</td></tr>
+      <tr><td>Camera</td><td>To share video in calls, and to take photos to attach.</td></tr>
+      <tr><td>Photos</td><td>To attach photos and videos you pick to messages and documents (iOS). The app sees only what you pick.</td></tr>
+      <tr><td>Local network</td><td>To connect to a ParaDOCs server on your home or office network, when you choose one (iOS).</td></tr>
+      <tr><td>Screen recording</td><td>To share your screen in calls, when you choose to (macOS).</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="other-connections">Other connections the apps make</h2>
+  <h3>Single sign-on</h3>
+  <p>If your server lets you sign in with an organisation account (such as Microsoft or Google), the app opens your browser to that identity provider. The provider's privacy policy applies to that sign-in, and your server's operator chose the provider.</p>
+  <h3>Embedded content</h3>
+  <p>Documents and canvases can include pictures, videos and web pages from other websites, such as a YouTube video someone added. When you view them, your device loads them from those websites, which can see your IP address and may set cookies under their own policies.</p>
+  <h3>Desktop app updates</h3>
+  <p>The macOS and Windows apps check GitHub for new versions and download updates from there. GitHub sees your IP address and the app version, under the <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy Statement</a>. You can turn automatic checks off in Settings → Updates. The mobile apps update through the App Store and Google Play.</p>
+  <h3>AI assistants</h3>
+  <p>If your server allows it and you connect an AI assistant to your account, the assistant can read, and if you allow it change, what you have access to in ParaDOCs. Your information is then handled by that assistant's provider under their privacy policy. You set this up yourself and can disconnect it in Settings → AI connections.</p>
+
+  <h2 id="safety">Moderation and safety</h2>
+  <p>Content is moderated by the operator of the server you connect to and by the owners and administrators of each workspace on it, not by us. In the app you can report a chat message, which sends a copy of it, with your name and any reason you give, to the workspace's owners and administrators. You can also block a person so you no longer see their messages or mentions, and they can no longer message or call you directly. Blocks are kept on your server, so they apply on all your devices. For serious concerns about a server, contact its operator. If you can't reach them, or something is wrong with the apps themselves, contact us at the address below.</p>
+
+  <h2 id="deletion">Deleting your account</h2>
+  <p>Open <strong>Settings → Account → Delete account</strong> in the app and send a deletion request. You can cancel it until it's carried out. You can also make the request in a web browser at <code>/account/delete</code> on your server, for example <code>https://docs.example.com/account/delete</code>.</p>
+  <p>Your server's administrators are notified and delete the account. Administrators may first need to hand over workspaces that other people still use. How long deletion takes and what happens to content you shared with others depend on your server's operator, so contact them if you have questions. We can't delete information on servers we don't run.</p>
+
+  <h2 id="security">Security</h2>
+  <p>The app connects to your server over HTTPS when the server supports it. So that it can reach servers on home and office networks, it also allows plain HTTP, which isn't encrypted. Operators should use HTTPS for any server reachable from the internet. How a server stores and protects information is up to its operator.</p>
+
+  <h2 id="children">Children</h2>
+  <p>The apps aren't directed at children under 13, or under 16 where the law requires a higher age. Server operators decide who can have an account on their server.</p>
+
+  <h2 id="rights">Your rights</h2>
+  <p>Depending on where you live, you may have rights to access, correct, export or delete your personal information. Because we hold no personal information from the apps, these requests go to your server's operator, who controls your information. If you need help working out who that is, contact us.</p>
+
+  <h2 id="changes">Changes to this policy</h2>
+  <p>If we change this policy, we'll update the date at the top. We'll mention significant changes in the release notes of the version they apply to.</p>
+
+  <h2 id="contact">Contact</h2>
+  <p>For questions about this policy or the apps, email <a href="mailto:contact-address-todo@example.com">contact-address-todo@example.com</a> or open an issue at <a href="https://github.com/ParadoxRelativity/ParaDOCs/issues">github.com/ParadoxRelativity/ParaDOCs</a>.</p>
+</main>
+</body>
+</html>
