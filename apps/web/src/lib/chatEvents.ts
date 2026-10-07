@@ -18,7 +18,7 @@ import {
   type VoiceOccupant,
 } from '@paradocs/shared';
 import { api } from '../api/client';
-import { keys, refetchAfterAccessChange, type MessagePage } from '../api/hooks';
+import { keys, refetchAfterAccessChange, useBlockedIds, type MessagePage } from '../api/hooks';
 import { useChatSocket, type SocketStatus } from './chatSocket';
 import { desktop } from './desktop';
 import { notify } from './browserNotifications';
@@ -135,6 +135,8 @@ export function useChatEvents({
   announcing.current = notifyEnabled;
   const openElsewhere = useRef(elsewhere);
   openElsewhere.current = elsewhere;
+  const blocked = useRef<Set<string>>(new Set());
+  blocked.current = useBlockedIds();
 
   const applyMessage = useCallback(
     (event: ChatMessageEvent) => {
@@ -205,6 +207,9 @@ export function useChatEvents({
       }
 
       if (!fromSomeoneElse) return;
+      // Someone you blocked makes no sound and sends no notification; their
+      // message is folded away in the conversation too.
+      if (author && blocked.current.has(author.id)) return;
       // Everything in a direct conversation is said to you; in a channel, only
       // a mention is. Anything else in a channel is still worth knowing about,
       // just less urgently.
@@ -252,7 +257,10 @@ export function useChatEvents({
       switch (event.type) {
         case 'typing':
           // Your own typing comes back from your other windows; it is not news.
-          if (event.user.id !== selfId) setTyping(event.channelId, event.user, event.typing);
+          // Nor is anyone's you blocked.
+          if (event.user.id !== selfId && !blocked.current.has(event.user.id)) {
+            setTyping(event.channelId, event.user, event.typing);
+          }
           return;
         case 'presence.changed':
           qc.setQueryData<Record<string, PresenceStatus>>(keys.presence(event.workspaceId), (current) =>
@@ -320,6 +328,13 @@ export function useChatEvents({
         case 'call.ringing':
         case 'call.ended':
           callHandler.current(event);
+          return;
+        case 'blocks.changed':
+          // Blocked or unblocked on another window or device.
+          void qc.invalidateQueries({ queryKey: keys.blocks });
+          void qc.invalidateQueries({ queryKey: keys.notifications });
+          void qc.invalidateQueries({ queryKey: ['channels'] });
+          void qc.invalidateQueries({ queryKey: ['directs'] });
           return;
         case 'notifications.changed':
           // Read on another window or device. The counts are the server's, so

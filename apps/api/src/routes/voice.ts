@@ -2,7 +2,8 @@ import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import { AccessToken, RoomServiceClient, WebhookReceiver, type WebhookEvent } from 'livekit-server-sdk';
 import { ringSchema, type VoiceOccupant } from '@paradocs/shared';
 import { query, type DbClient } from '../db/pool.js';
-import { badRequest, notFound, parse, unauthorized } from '../lib/http.js';
+import { badRequest, forbidden, notFound, parse, unauthorized } from '../lib/http.js';
+import { blockBetween, blockedBy } from '../lib/blocks.js';
 import { channelAccessFor, channelParticipants, UUID } from '../lib/channels.js';
 import { channelLevelSql } from '../lib/access.js';
 import { onAccessChanged } from '../lib/accessEvents.js';
@@ -252,8 +253,17 @@ export const voiceRoutes: FastifyPluginAsync = async (app) => {
 
     if (input.action === 'start') {
       if (!voiceEnabled()) throw badRequest('This server has no voice service configured');
-      for (const userId of participants) {
-        if (userId === self.id) continue;
+      // Nobody is rung by someone they blocked. Between just two people, a
+      // block either way stops the call, as it stops their messages.
+      const others = participants.filter((userId) => userId !== self.id);
+      if (others.length === 1) {
+        const block = await blockBetween(self.id, others[0]);
+        if (block === 'blocked') throw forbidden('You blocked this person. Unblock them to call.');
+        if (block === 'blockedBy') throw forbidden('You can’t call in this conversation');
+      }
+      const blocking = await blockedBy(self.id, others);
+      for (const userId of others) {
+        if (blocking.has(userId)) continue;
         publishToUser(userId, {
           type: 'call.ringing',
           workspaceId: access.workspaceId,

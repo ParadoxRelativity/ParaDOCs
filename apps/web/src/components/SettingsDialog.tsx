@@ -13,7 +13,7 @@ import { useBackHandler } from '../lib/back';
 import { useIsMobile } from '../lib/mobile';
 import Icon, { type IconName } from './Icon';
 import VoiceSettings from './VoiceSettings';
-import { desktop } from '../lib/desktop';
+import { desktop, useDesktopConnections } from '../lib/desktop';
 import type { Theme } from '../lib/theme';
 import { useCallLayout, type CallLayout } from '../lib/callLayout';
 import { useOpenBehaviour, type OpenBehaviour } from '../lib/openBehaviour';
@@ -21,6 +21,8 @@ import { playSound, useSoundPreferences } from '../lib/sounds';
 import { ServersSection, UpdatesSection } from './DesktopSettings';
 import AiConnectionsSettings from './AiConnectionsSettings';
 import PrivacyLink from './PrivacyLink';
+import AccountDeletion from './AccountDeletion';
+import { BlockedPeople } from './chat/Moderation';
 
 export const SETTINGS_SECTIONS = [
   'account',
@@ -172,6 +174,7 @@ function AccountSection({ user }: { user: User }) {
   const changePassword = useChangePassword();
   const setAvatar = useSetAvatar();
   const toast = useToast();
+  const localWorkspace = useDesktopConnections().find((c) => c.active)?.kind === 'local';
 
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
@@ -311,6 +314,21 @@ function AccountSection({ user }: { user: User }) {
           </Button>
         </form>
       </Section>
+
+      {/* A local workspace has nobody else on it to block, and no administrator to ask. */}
+      {!localWorkspace && (
+        <>
+          <Section
+            title="Blocked people"
+            hint="You don’t see their messages or mentions, and they can’t message or call you directly, anywhere on this server."
+          >
+            <BlockedPeople />
+          </Section>
+          <Section title="Delete account">
+            <AccountDeletion />
+          </Section>
+        </>
+      )}
     </>
   );
 }

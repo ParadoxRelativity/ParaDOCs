@@ -32,6 +32,7 @@ import {
   usePresenceSettings,
   useVoiceConfig,
   useVoiceParticipants,
+  useBlockedIds,
   type DocumentPatch,
 } from './api/hooks';
 import { ApiError } from './api/client';
@@ -45,6 +46,7 @@ import DocumentOutline from './components/DocumentOutline';
 import ErrorBoundary from './components/ErrorBoundary';
 import AllDocuments from './components/AllDocuments';
 import AcceptInvite from './components/AcceptInvite';
+import AccountDeletionPage from './components/AccountDeletionPage';
 import ConnectAi, { rememberConnectRequest, takeConnectRequest } from './components/ConnectAi';
 import SettingsDialog, { isSettingsSection, type SettingsSection, type Theme } from './components/SettingsDialog';
 import ConnectServerDialog from './components/ConnectServerDialog';
@@ -92,7 +94,8 @@ export default function App() {
   // A popped-out channel is this same client on the same session, with only
   // the one conversation in it. It has no menu to be steered from, so the
   // command listener that follows the desktop menu stays out of its way.
-  const popout = useLocation().pathname.startsWith('/popout/');
+  const { pathname } = useLocation();
+  const popout = pathname.startsWith('/popout/');
 
   // The sidebars can start from what was kept from last time, but only once
   // it is known to be this person's; see lib/queryPersistence.ts.
@@ -119,6 +122,12 @@ export default function App() {
         allowRegistration={me.data?.allowRegistration ?? false}
         passwordSignIn={me.data?.passwordSignIn ?? true}
         oidc={me.data?.oidc ?? { providers: [] }}
+        notice={
+          // Someone who followed the store listing's deletion link, signed out.
+          pathname === '/account/delete'
+            ? 'Sign in to ask for your account to be deleted. The request goes to the administrators of this server, who delete the account and what it holds.'
+            : undefined
+        }
       />
     );
   }
@@ -133,6 +142,7 @@ export default function App() {
         <Routes>
           <Route path="/popout/:workspaceId/:channelId" element={<PopoutWindow user={me.data.user} />} />
           <Route path="/invite/:token" element={<AcceptInvite />} />
+          <Route path="/account/delete" element={<AccountDeletionPage />} />
           <Route path="/connect-ai" element={<ConnectAi user={me.data.user} />} />
           <Route path="/w/:workspaceId/d/:documentId" element={<Workspace user={me.data.user} />} />
           <Route path="/w/:workspaceId/all" element={<Workspace user={me.data.user} allDocuments />} />
@@ -343,6 +353,8 @@ function Workspace({
   const channelList = channels.data ?? [];
   // Direct conversations are channels too, listed apart and only to the people in them.
   const directs = useDirectConversations(appOn('chat') ? workspaceId : undefined);
+  // A pair's conversation with someone you blocked has no call to start.
+  const blockedIds = useBlockedIds();
   const directList = directs.data ?? [];
   const findConversation = (id: string | null | undefined) =>
     id ? (channelList.find((c) => c.id === id) ?? directList.find((c) => c.id === id)) : undefined;
@@ -929,7 +941,7 @@ function Workspace({
                 title={direct ? <DirectTitle channel={direct} status={statusOf(direct.peer?.id)} /> : undefined}
                 actions={
                   <>
-                    {direct?.peer && voiceEnabled && !inDirectCall && (
+                    {direct?.peer && voiceEnabled && !inDirectCall && (group || !blockedIds.has(direct.peer.id)) && (
                       <DirectCallActions
                         name={peerName}
                         onCall={(video) => directCalls.start(direct.id, video, directPeople(direct).length)}

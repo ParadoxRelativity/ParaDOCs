@@ -126,6 +126,15 @@ export interface WorkspaceMember {
   joinedAt: string;
   /** True for the account making the request. */
   isSelf: boolean;
+  /** Their account is disabled server-wide. Absent from older servers. */
+  disabled?: boolean;
+  /** What the server's administrators have been asked to do with their account. Absent from older servers. */
+  accountRequest?: AccountRequestKind | null;
+  /**
+   * Suspended from this workspace: they cannot open it until it is lifted.
+   * Listed only to people who may lift it. Absent from older servers.
+   */
+  suspension?: { at: string; byName: string } | null;
 }
 
 export interface WorkspaceInvite {
@@ -381,6 +390,105 @@ export interface ServerUpdateNotification {
   release: ReleaseInfo;
 }
 
+/** What the server's administrators are asked to do with an account. */
+export type AccountRequestKind = 'delete' | 'disable';
+
+/**
+ * Someone asked the server's administrators to delete an account (their own,
+ * or a team lead someone else's) or a team lead asked them to disable one.
+ * Only administrators are told, since only they can act, and only while the
+ * account is enabled and the request stands.
+ */
+export interface AccountRequestNotification {
+  userId: string;
+  name: string;
+  email: string;
+  /** Absent from servers that only knew deletion requests. */
+  kind?: AccountRequestKind;
+  requestedAt: string;
+  note: string | null;
+  /** The team lead who asked, or null when the person asked themselves. */
+  requestedBy?: AccountActor | null;
+  /** What the person said, when a team lead asked. */
+  memberNote?: string | null;
+}
+
+/** A team lead who asked the administrators about someone's account, and the workspace they asked from. */
+export interface AccountActor {
+  /** Null once that account is gone. */
+  id: string | null;
+  name: string;
+  workspaceName: string | null;
+}
+
+/** The request standing on your own account, as settings shows it. */
+export interface AccountRequestStatus {
+  /** Null when there is no request. Your own requests are always to delete. */
+  kind: AccountRequestKind | null;
+  requestedAt: string | null;
+  note: string | null;
+  /** Whether a request must be confirmed with the password. Accounts made through single sign-on may have none. */
+  hasPassword: boolean;
+  /** Set when a team lead asked, rather than you. Only a server administrator can set their request aside. */
+  requestedBy: AccountActor | null;
+  /** What you told the administrators about a team lead's request. */
+  memberNote: string | null;
+}
+
+/** A team lead asked the administrators to disable or delete your account. You are told, and can answer. */
+export interface OwnAccountRequestNotification {
+  kind: AccountRequestKind;
+  requestedAt: string;
+  requestedBy: AccountActor;
+  note: string | null;
+}
+
+/**
+ * You were suspended from a workspace. It is gone from your list until it is
+ * lifted, so this says why, for as long as it lasts.
+ */
+export interface WorkspaceSuspensionNotification {
+  workspace: NotificationWorkspace;
+  byName: string;
+  at: string;
+}
+
+/**
+ * A chat message someone reported to the owners and admins of its workspace.
+ * Only they are told, and it stays until one of them resolves it. What the
+ * message said is as it was when reported: it may since have been edited or
+ * deleted, and a direct conversation is not one they can open.
+ */
+export interface MessageReportNotification {
+  id: string;
+  workspace: NotificationWorkspace;
+  /** Null once the channel is gone. */
+  channelId: string | null;
+  /** Null once the message is gone for good. */
+  messageId: string | null;
+  /** A direct conversation, which admins cannot open: the excerpt is all there is. */
+  direct: boolean;
+  /** The channel's name, without the #. Empty for a direct conversation. */
+  channelName: string;
+  author: { id: string | null; name: string };
+  reporter: { id: string | null; name: string };
+  /** Plain text, with references resolved to names. */
+  excerpt: string;
+  attachmentCount: number;
+  reason: string | null;
+  reportedAt: string;
+  /** How many people have reported the same message and are waiting. */
+  reports: number;
+}
+
+/** Someone you blocked: you do not see their messages, and they cannot message or call you directly. */
+export interface BlockedUser {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+  blockedAt: string;
+}
+
 /** Everything on a server that wants the signed-in person's attention. */
 export interface Notifications {
   invites: InviteNotification[];
@@ -390,4 +498,12 @@ export interface Notifications {
   workItems?: WorkItemNotification[];
   /** Null when there is none, or for anyone but a server administrator. Absent from older servers. */
   serverUpdate?: ServerUpdateNotification | null;
+  /** Requests about accounts, for server administrators; empty for anyone else. Absent from older servers. */
+  accountRequests?: AccountRequestNotification[];
+  /** A team lead's request about your own account, while it stands. Absent from older servers. */
+  ownAccountRequest?: OwnAccountRequestNotification | null;
+  /** Workspaces you are suspended from. Absent from older servers. */
+  suspensions?: WorkspaceSuspensionNotification[];
+  /** Reported chat messages, for the owners and admins of their workspaces. Absent from older servers. */
+  messageReports?: MessageReportNotification[];
 }

@@ -25,6 +25,8 @@ import { sweepExpiredMessages } from '../lib/retention.js';
 import { getServerSettings, updateServerSettings } from '../lib/serverSettings.js';
 import { checkForServerUpdate, versionStatus } from '../lib/releases.js';
 import { removeStoredFiles } from '../lib/storage.js';
+import { notifyServerAdmins } from '../lib/serverAdmins.js';
+import { CLEAR_ACCOUNT_REQUEST, requesterSql } from '../lib/accountRequests.js';
 import { registrationLimits, signInLimits } from '../lib/rateLimit.js';
 import {
   SECRET_PURPOSE,
@@ -43,7 +45,12 @@ const ADMIN_USER_COLUMNS = `u.id, u.email, u.name,
   (u.disabled_at IS NOT NULL) AS disabled,
   u.created_at AS "createdAt",
   (SELECT max(s.created_at) FROM sessions s WHERE s.user_id = u.id) AS "lastSignInAt",
-  (SELECT count(*)::int FROM workspace_members m WHERE m.user_id = u.id) AS "workspaceCount"`;
+  (SELECT count(*)::int FROM workspace_members m WHERE m.user_id = u.id) AS "workspaceCount",
+  u.account_request AS "accountRequest",
+  u.account_requested_at AS "accountRequestedAt",
+  u.account_request_note AS "accountRequestNote",
+  ${requesterSql('u')} AS "accountRequestedBy",
+  u.account_member_note AS "accountMemberNote"`;
 
 /** Past this, the list asks for a search rather than sending every account. */
 const USER_LIST_LIMIT = 500;
@@ -362,21 +369,48 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     /** Asks the release channel now, rather than waiting for the next scheduled check. */
     admin.post('/version/check', async (): Promise<AdminVersionStatus> => checkForServerUpdate(app.log));
 
-    admin.get<{ Querystring: { q?: string } }>('/users', async (req) => {
+    admin.get<{ Querystring: { q?: string; requested?: string } }>('/users', async (req) => {
       const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
       const pattern = q ? `%${q.replace(/[\\%_]/g, '\\$&')}%` : null;
-      const filter = '($1::text IS NULL OR u.name ILIKE $1 OR u.email ILIKE $1)';
+      const requestedOnly = req.query.requested === 'true';
+      const filter =
+        '($1::text IS NULL OR u.name ILIKE $1 OR u.email ILIKE $1)' +
+        (requestedOnly ? ' AND u.account_requested_at IS NOT NULL' : '');
       const [{ rows: users }, { rows: counted }] = await Promise.all([
         query<AdminUser>(
+          // Accounts waiting to be deleted come first: they are the ones asking for something.
           `SELECT ${ADMIN_USER_COLUMNS} FROM users u
             WHERE ${filter}
-            ORDER BY u.is_server_admin DESC, lower(u.name), u.id
+            ORDER BY u.account_requested_at IS NULL, u.is_server_admin DESC, lower(u.name), u.id
             LIMIT ${USER_LIST_LIMIT}`,
           [pattern],
         ),
-        query<{ total: number }>(`SELECT count(*)::int AS total FROM users u WHERE ${filter}`, [pattern]),
+        query<{ total: number; requests: number }>(
+          `SELECT count(*) FILTER (WHERE ${filter})::int AS total,
+                  count(*) FILTER (WHERE u.account_requested_at IS NOT NULL)::int AS requests
+             FROM users u`,
+          [pattern],
+        ),
       ]);
-      return { users, total: counted[0].total };
+      return { users, total: counted[0].total, requests: counted[0].requests };
+    });
+
+    /**
+     * Sets aside a request about someone's account: their own to be deleted,
+     * such as when they have been asked and changed their mind, or a team
+     * lead's. Either can ask again.
+     */
+    admin.delete<{ Params: { id: string } }>('/users/:id/account-request', async (req) => {
+      const id = accountId(req.params.id);
+      const { rowCount } = await query(
+        `UPDATE users SET ${CLEAR_ACCOUNT_REQUEST} WHERE id = $1 AND account_requested_at IS NOT NULL`,
+        [id],
+      );
+      if (rowCount) {
+        req.log.info({ admin: req.admin!.email, userId: id }, 'account request dismissed by server administrator');
+        await notifyServerAdmins();
+      }
+      return loadUser(id);
     });
 
     admin.post('/users', async (req, reply) => {
@@ -440,6 +474,14 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
             WHERE id = $1`,
           [id, input.name ?? null, input.email ?? null, input.isServerAdmin ?? null, input.disabled ?? null],
         );
+        // Disabling carries out a team lead's request to disable, so it is done
+        // with. A request to delete stays: disabling is often the first step.
+        if (input.disabled === true) {
+          await client.query(
+            `UPDATE users SET ${CLEAR_ACCOUNT_REQUEST} WHERE id = $1 AND account_request = 'disable'`,
+            [id],
+          );
+        }
         if (input.disabled === true) {
           await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
           await client.query('DELETE FROM ai_connections WHERE user_id = $1', [id]);
@@ -451,6 +493,9 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
       if (input.disabled === true) signedOut(id);
       req.log.info({ admin: req.admin!.email, userId: id, changes: input }, 'account changed by server administrator');
+      // A disabled account's request leaves the administrators' notifications,
+      // and an administrator added or removed gains or loses them.
+      if (input.disabled !== undefined || input.isServerAdmin !== undefined) await notifyServerAdmins();
       return loadUser(id);
     });
 
@@ -542,6 +587,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       signedOut(id);
       await removeStoredFiles(files, req.log);
       req.log.warn({ admin: req.admin!.email, userId: id }, 'account deleted by server administrator');
+      // Any request about it is gone with it.
+      await notifyServerAdmins();
       reply.status(204);
     });
   });

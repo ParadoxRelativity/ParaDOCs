@@ -17,7 +17,13 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { assertMeets, assertWorkspaceAccess, type Requirement } from '../plugins/session.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelAccessFor, mentionsUserSql, publishChannelEvent, type ChannelAccess } from '../lib/channels.js';
+import {
+  channelAccessFor,
+  channelParticipants,
+  mentionsUserSql,
+  publishChannelEvent,
+  type ChannelAccess,
+} from '../lib/channels.js';
 import { channelLevelSql, permissionSql } from '../lib/access.js';
 import { missingPermission } from '../lib/roles.js';
 import {
@@ -31,6 +37,7 @@ import {
 } from '../lib/storage.js';
 import { publishToUser, publishToWorkspace } from '../chat/hub.js';
 import { syncWorkItemMentions } from '../lib/workItems.js';
+import { blockBetween, notBlockedAuthorSql } from '../lib/blocks.js';
 
 const CHANNEL_COLUMNS = `c.id, c.workspace_id AS "workspaceId", c.name, c.topic, c.kind,
   c.position, c.created_at AS "createdAt", c.access`;
@@ -142,12 +149,14 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
                 WHERE m.channel_id = c.id
                   AND m.deleted_at IS NULL
                   AND m.author_id IS DISTINCT FROM $2
-                  AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)) AS unread,
+                  AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
+                  AND ${notBlockedAuthorSql('$2')}) AS unread,
               (SELECT count(*)::int FROM messages m
                 WHERE m.channel_id = c.id
                   AND m.deleted_at IS NULL
                   AND m.author_id IS DISTINCT FROM $2
                   AND m.created_at > COALESCE(r.last_read_at, 'epoch'::timestamptz)
+                  AND ${notBlockedAuthorSql('$2')}
                   AND ${mentionsUserSql('$2')}) AS mentions
          FROM channels c
          LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = $2
@@ -280,6 +289,7 @@ export const channelRoutes: FastifyPluginAsync = async (app) => {
     // A lock can still make a channel read-only for someone.
     const access = await channelAccess(req, req.params.id, { post: true });
     if (!carriesMessages(access.kind)) throw badRequest('That channel does not carry messages');
+    if (access.kind === 'direct') await assertNotBlocked(req.params.id, req.user!.id);
     const input = parse(createMessageSchema, req.body);
     const attachmentIds = input.attachmentIds ?? [];
 
@@ -555,6 +565,22 @@ async function sweepUnsentFiles(req: FastifyRequest): Promise<void> {
   } catch (err) {
     req.log.warn({ err }, 'could not remove unsent chat files');
   }
+}
+
+/**
+ * A conversation between just two people stops when either blocks the other.
+ * In a group, a block only hides one person's messages from the other; the
+ * group carries on for everyone else.
+ */
+async function assertNotBlocked(channelId: string, userId: string): Promise<void> {
+  const { rows } = await query<{ direct_group: boolean }>('SELECT direct_group FROM channels WHERE id = $1', [channelId]);
+  if (rows[0]?.direct_group) return;
+  const other = (await channelParticipants(channelId)).find((id) => id !== userId);
+  if (!other) return;
+  const block = await blockBetween(userId, other);
+  if (block === 'blocked') throw forbidden('You blocked this person. Unblock them to send a message.');
+  // Said the same way whoever's choice it was not, so the block is not announced.
+  if (block === 'blockedBy') throw forbidden('You can’t send messages in this conversation');
 }
 
 async function messageRow(id: string) {

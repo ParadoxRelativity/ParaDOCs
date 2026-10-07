@@ -13,6 +13,7 @@
  */
 
 import type { ProjectKind } from './projects.js';
+import type { Role } from './types.js';
 
 export const WORKSPACE_PERMISSIONS = [
   'docs.view',
@@ -46,6 +47,7 @@ export const WORKSPACE_PERMISSIONS = [
   'queues.delete',
   'members.invite',
   'teams.members',
+  'teams.accounts',
   'uploads.manage',
 ] as const;
 
@@ -192,6 +194,14 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
           'Add and remove other people on the teams they are on. Never themselves, and never on a team they are not on.',
         requires: [],
       },
+      {
+        id: 'teams.accounts',
+        label: "Manage team members' access",
+        description:
+          'Suspend other people on the teams they are on from this workspace, and lift it. ' +
+          'Ask the server administrators to disable or delete their accounts, which reaches every workspace and is theirs to decide.',
+        requires: [],
+      },
       { id: 'uploads.manage', label: 'Manage uploads', description: 'See every uploaded file and clean up unused ones.', requires: [] },
     ],
   },
@@ -231,7 +241,16 @@ export function dependentsOf(permission: WorkspacePermission): WorkspacePermissi
 /** What the built-in Editor role starts with: today's editor. */
 export const EDITOR_PERMISSIONS: WorkspacePermission[] = WORKSPACE_PERMISSIONS.filter(
   (p) =>
-    !['chat.channels', 'chat.moderate', 'projects.delete', 'queues.delete', 'members.invite', 'teams.members', 'uploads.manage'].includes(p),
+    ![
+      'chat.channels',
+      'chat.moderate',
+      'projects.delete',
+      'queues.delete',
+      'members.invite',
+      'teams.members',
+      'teams.accounts',
+      'uploads.manage',
+    ].includes(p),
 );
 
 /** What the built-in Viewer role starts with: read everything, comment on documents, talk in chat. */
@@ -276,4 +295,31 @@ export function mayChangeTeamMember(
 ): boolean {
   if (actor.manages) return true;
   return actor.can('teams.members') && userId !== actor.id && teamMemberIds.includes(actor.id);
+}
+
+/** How far each workspace role reaches over another's: an owner over admins and members, an admin over members. */
+const ACCOUNT_RANK: Record<Role, number> = { owner: 2, admin: 1, member: 0 };
+
+/**
+ * Whether someone may suspend another member from a workspace, lift it, or ask
+ * the server's administrators to disable or delete their account: a team lead
+ * acting on their team.
+ *
+ * It is held to the same footing as changing a team. Owners and admins may act
+ * on anyone in the workspace, and anyone else needs `teams.accounts` and a team
+ * in common with them. Never on themselves, and never on someone whose role
+ * outranks or matches theirs (owners on each other included). Asking about a
+ * server administrator's account is refused too, which only the server can tell.
+ */
+export function mayManageMemberAccount(
+  actor: { id: string; role: Role; can: (permission: WorkspacePermission) => boolean },
+  target: { id: string; role: Role },
+  shareTeam: boolean,
+): boolean {
+  if (target.id === actor.id) return false;
+  const outranks =
+    ACCOUNT_RANK[actor.role] > ACCOUNT_RANK[target.role] || (actor.role === 'member' && target.role === 'member');
+  if (!outranks) return false;
+  if (actor.role === 'owner' || actor.role === 'admin') return true;
+  return actor.can('teams.accounts') && shareTeam;
 }

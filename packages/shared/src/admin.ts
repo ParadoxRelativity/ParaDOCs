@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ReleaseInfo } from './version.js';
+import type { AccountActor, AccountRequestKind } from './types.js';
 
 /**
  * Server administration, served on its own port. These are settings for the
@@ -60,6 +61,14 @@ export interface AdminUser {
   /** When they last signed in to the app, if their session is still around. */
   lastSignInAt: string | null;
   workspaceCount: number;
+  /** What the administrators have been asked to do with the account, while the request stands. */
+  accountRequest: AccountRequestKind | null;
+  accountRequestedAt: string | null;
+  accountRequestNote: string | null;
+  /** The team lead who asked, or null when the person asked themselves. */
+  accountRequestedBy: AccountActor | null;
+  /** What the person said about a team lead's request. */
+  accountMemberNote: string | null;
 }
 
 export interface AdminStatus {

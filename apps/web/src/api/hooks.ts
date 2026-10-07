@@ -1,6 +1,12 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { MAX_ARCHIVE_PAGE_SIZE } from '@paradocs/shared';
 import type {
+  AccountRequestStatus,
+  BlockedUser,
+  ReportMessageInput,
+  MemberAccountRequestInput,
+  RequestAccountDeletionInput,
   ContentsPage,
   ArchivePage,
   LinkTargets,
@@ -124,6 +130,8 @@ export interface DocumentList {
 
 export const keys = {
   me: ['me'] as const,
+  accountDeletion: ['accountDeletion'] as const,
+  blocks: ['blocks'] as const,
   workspaces: ['workspaces'] as const,
   tree: (ws: string) => ['tree', ws] as const,
   sheetTree: (ws: string) => ['sheetTree', ws] as const,
@@ -250,6 +258,64 @@ export function useChangePassword() {
   return useMutation({
     mutationFn: (input: { currentPassword?: string; newPassword: string }) =>
       api.post<void>('/auth/password', input),
+  });
+}
+
+/** Your request to have your account deleted, if you have made one. */
+export function useAccountDeletion() {
+  return useQuery({
+    queryKey: keys.accountDeletion,
+    queryFn: () => api.get<AccountRequestStatus>('/account/deletion-request'),
+  });
+}
+
+/** Asks the server's administrators to delete your account. */
+export function useRequestAccountDeletion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RequestAccountDeletionInput) =>
+      api.post<AccountRequestStatus>('/account/deletion-request', input),
+    onSuccess: (status) => qc.setQueryData(keys.accountDeletion, status),
+  });
+}
+
+/** What you tell the administrators about a team lead's request about your account. */
+export function useSaveAccountMemberNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (note: string) => api.put<AccountRequestStatus>('/account/deletion-request/note', { note }),
+    onSuccess: (status) => qc.setQueryData(keys.accountDeletion, status),
+  });
+}
+
+/** A team lead suspending a member from this workspace, or lifting it. */
+export function useSetMemberSuspended(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, suspended }: { userId: string; suspended: boolean }) =>
+      suspended
+        ? api.post<void>(`/workspaces/${workspaceId}/members/${userId}/suspend`)
+        : api.delete<void>(`/workspaces/${workspaceId}/members/${userId}/suspension`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['members', workspaceId] }),
+  });
+}
+
+/** A team lead asking the server's administrators to disable or delete a member's account. */
+export function useRequestMemberAccount(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, ...input }: MemberAccountRequestInput & { userId: string }) =>
+      api.post<void>(`/workspaces/${workspaceId}/members/${userId}/account-request`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['members', workspaceId] }),
+  });
+}
+
+/** Withdraws your request, before an administrator has acted on it. */
+export function useCancelAccountDeletion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete<AccountRequestStatus>('/account/deletion-request'),
+    onSuccess: (status) => qc.setQueryData(keys.accountDeletion, status),
   });
 }
 
@@ -1802,6 +1868,62 @@ export function useEditMessage() {
 
 export function useDeleteMessage() {
   return useMutation({ mutationFn: (id: string) => api.delete(`/messages/${id}`) });
+}
+
+// --- moderation --------------------------------------------------------------
+
+/** Reports a message to the owners and admins of its workspace. */
+export function useReportMessage() {
+  return useMutation({
+    mutationFn: ({ messageId, ...input }: ReportMessageInput & { messageId: string }) =>
+      api.post<void>(`/messages/${messageId}/report`, input),
+  });
+}
+
+/** An owner or admin marking a reported message dealt with. */
+export function useResolveReport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (reportId: string) => api.post<void>(`/reports/${reportId}/resolve`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
+  });
+}
+
+/** The people you blocked. Kept on the server, so it is the same on every device. */
+export function useBlocks() {
+  return useQuery({
+    queryKey: keys.blocks,
+    queryFn: async () => {
+      try {
+        return await api.get<BlockedUser[]>('/blocks');
+      } catch {
+        // A server from before blocking has nobody to hide.
+        return [];
+      }
+    },
+    staleTime: Infinity,
+  });
+}
+
+/** The ids of the people you blocked, for hiding what they say. */
+export function useBlockedIds(): Set<string> {
+  const blocks = useBlocks();
+  return useMemo(() => new Set((blocks.data ?? []).map((b) => b.id)), [blocks.data]);
+}
+
+export function useSetBlocked() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, blocked }: { userId: string; blocked: boolean }) =>
+      blocked ? api.put<void>(`/blocks/${userId}`) : api.delete<void>(`/blocks/${userId}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.blocks });
+      // Unread counts leave out what you blocked.
+      void qc.invalidateQueries({ queryKey: keys.notifications });
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['directs'] });
+    },
+  });
 }
 
 export function useMarkChannelRead(workspaceId: string) {

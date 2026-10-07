@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { Role, Team, WorkspaceMember, WorkspaceRole } from '@paradocs/shared';
+import { useState, type ReactNode } from 'react';
+import { mayManageMemberAccount, type Role, type Team, type WorkspaceMember, type WorkspaceRole } from '@paradocs/shared';
 import {
   useCreateInvite,
   useInvites,
@@ -19,6 +19,19 @@ import { Button, Spinner } from './ui';
 import Avatar from './Avatar';
 import Icon from './Icon';
 import { Popover } from './Popover';
+import MemberAccountActions from './MemberAccountActions';
+
+/** Someone's standing beside their name: suspended here, or their account disabled or asked about. */
+function StatusChip({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span
+      title={title}
+      className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-red-500"
+    >
+      {children}
+    </span>
+  );
+}
 
 interface Props {
   workspaceId: string;
@@ -45,7 +58,8 @@ export default function MembersPanel({ workspaceId, myRole, can }: Props) {
   const members = useMembers(workspaceId);
   const teams = useTeams(workspaceId);
   const roles = useWorkspaceRoles(workspaceId);
-  const mayChangeTeam = teamChanger(members.data?.find((m) => m.isSelf)?.userId, canManage, can);
+  const selfId = members.data?.find((m) => m.isSelf)?.userId;
+  const mayChangeTeam = teamChanger(selfId, canManage, can);
   const invites = useInvites(workspaceId, canInvite);
   const updateMember = useUpdateMember(workspaceId);
   const removeMember = useRemoveMember(workspaceId);
@@ -164,15 +178,28 @@ export default function MembersPanel({ workspaceId, myRole, can }: Props) {
               <li key={member.userId} className="flex items-start gap-3 px-3 py-2">
                 <Avatar name={member.name} url={member.avatarUrl} seed={member.userId} size="lg" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">
-                    {member.name}
-                    {member.isSelf && <span className="text-[var(--color-muted)]"> (you)</span>}
+                  <p className="flex min-w-0 items-center gap-1.5 text-sm">
+                    <span className={cx('truncate', member.disabled && 'text-[var(--color-muted)]')}>
+                      {member.name}
+                      {member.isSelf && <span className="text-[var(--color-muted)]"> (you)</span>}
+                    </span>
+                    {member.suspension && (
+                      <StatusChip title={`Suspended by ${member.suspension.byName} ${formatRelative(member.suspension.at)}`}>
+                        Suspended
+                      </StatusChip>
+                    )}
+                    {member.disabled && <StatusChip>Disabled</StatusChip>}
+                    {member.accountRequest && (
+                      <StatusChip title="The server administrators have been asked and will decide">
+                        {member.accountRequest === 'disable' ? 'Disable requested' : 'Deletion requested'}
+                      </StatusChip>
+                    )}
                   </p>
                   <p className="truncate text-[11px] text-[var(--color-muted)]">{member.email}</p>
                   <MemberTeams workspaceId={workspaceId} member={member} teams={teamList} mayChange={mayChangeTeam} />
                 </div>
 
-                {canManage && !(member.role === 'owner' && myRole !== 'owner') && roleList.length > 0 ? (
+                {canManage && !member.suspension && !(member.role === 'owner' && myRole !== 'owner') && roleList.length > 0 ? (
                   <select
                     className={control}
                     value={member.workspaceRole.id}
@@ -195,6 +222,13 @@ export default function MembersPanel({ workspaceId, myRole, can }: Props) {
                     {member.workspaceRole.name}
                   </span>
                 )}
+
+                {selfId &&
+                  mayManageMemberAccount(
+                    { id: selfId, role: myRole, can },
+                    { id: member.userId, role: member.role },
+                    teamList.some((team) => team.memberIds.includes(selfId) && team.memberIds.includes(member.userId)),
+                  ) && <MemberAccountActions workspaceId={workspaceId} member={member} />}
 
                 {(canManage || member.isSelf) && (
                   <button

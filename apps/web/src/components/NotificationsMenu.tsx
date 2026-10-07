@@ -2,12 +2,16 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type {
+  AccountRequestNotification,
   InviteNotification,
   MentionNotification,
   MessageNotification,
+  MessageReportNotification,
   Notifications,
+  OwnAccountRequestNotification,
   ServerUpdateNotification,
   WorkItemNotification,
+  WorkspaceSuspensionNotification,
 } from '@paradocs/shared';
 import {
   useAcceptInvite,
@@ -16,6 +20,7 @@ import {
   useMarkNotificationsRead,
   useMarkWorkItemsRead,
   useNotifications,
+  useResolveReport,
   useServerVersion,
 } from '../api/hooks';
 import {
@@ -58,6 +63,10 @@ interface Actions {
   decline: (invite: InviteNotification) => Promise<void>;
   markAllRead: () => Promise<void>;
   dismissServerUpdate: () => void;
+  /** Opens the channel a reported message is in, at the message. */
+  openReport: (report: MessageReportNotification, newTab: boolean) => void;
+  /** Marks a report dealt with. Only from the server on screen; another server's is resolved there. */
+  resolveReport?: (report: MessageReportNotification) => Promise<void>;
 }
 
 /** Everything from one server. In the desktop app there is one per signed-in connection. */
@@ -76,7 +85,11 @@ function countOf(notifications: Notifications): number {
     notifications.messages.length +
     (notifications.mentions?.length ?? 0) +
     (notifications.workItems?.length ?? 0) +
-    (notifications.serverUpdate ? 1 : 0)
+    (notifications.serverUpdate ? 1 : 0) +
+    (notifications.accountRequests?.length ?? 0) +
+    (notifications.ownAccountRequest ? 1 : 0) +
+    (notifications.suspensions?.length ?? 0) +
+    (notifications.messageReports?.length ?? 0)
   );
 }
 
@@ -167,6 +180,7 @@ export default function NotificationsMenu() {
   const markRead = useMarkNotificationsRead();
   const markMentionsRead = useMarkMentionsRead();
   const markWorkItemsRead = useMarkWorkItemsRead();
+  const resolveReport = useResolveReport();
   const dismissed = useDismissedUpdates();
   const update = useClientUpdate();
   const clientUpdate = update && !dismissed.isDismissed(update.key) ? update : null;
@@ -237,6 +251,21 @@ export default function NotificationsMenu() {
           else navigate(path);
           markWorkItemsRead.mutate([item.workItemId]);
         },
+        openReport: (flagged, newTab) => {
+          close();
+          const path = reportPath(flagged);
+          if (!path) return;
+          if (newTab) openTab(path, `#${flagged.channelName}`);
+          else navigate(path);
+        },
+        resolveReport: async (flagged) => {
+          try {
+            await resolveReport.mutateAsync(flagged.id);
+            toast('Report resolved');
+          } catch (err) {
+            report(err, 'Could not resolve the report');
+          }
+        },
         accept: async (invite) => {
           try {
             const result = await acceptInvite.mutateAsync(invite.token);
@@ -303,6 +332,12 @@ export default function NotificationsMenu() {
             bridge.connections.open(connection.id, `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`),
           );
         },
+        openReport: (flagged) => {
+          const path = reportPath(flagged);
+          if (!path) return;
+          close();
+          void settle(bridge.connections.open(connection.id, path));
+        },
         // Joining happens on that server's own invitation page, which the
         // window switches to.
         accept: async (invite) => {
@@ -329,7 +364,8 @@ export default function NotificationsMenu() {
       group.notifications.invites.length > 0 ||
       (group.notifications.mentions?.length ?? 0) > 0 ||
       (group.notifications.workItems?.length ?? 0) > 0 ||
-      group.notifications.messages.some((m) => m.mentions > 0 || m.direct),
+      group.notifications.messages.some((m) => m.mentions > 0 || m.direct) ||
+      (group.notifications.messageReports?.length ?? 0) > 0,
   );
 
   return (
@@ -391,6 +427,10 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
   const mentions = group.notifications.mentions ?? [];
   const workItems = group.notifications.workItems ?? [];
   const serverUpdate = group.notifications.serverUpdate ?? null;
+  const accountRequests = group.notifications.accountRequests ?? [];
+  const ownAccountRequest = group.notifications.ownAccountRequest ?? null;
+  const suspensions = group.notifications.suspensions ?? [];
+  const messageReports = group.notifications.messageReports ?? [];
   if (countOf(group.notifications) === 0) return null;
   const unread = messages.length > 0 || mentions.length > 0 || workItems.length > 0;
   const heading = labelled && group.connection ? group.connection.label : unread ? 'Unread' : null;
@@ -414,6 +454,21 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
         </div>
       )}
       {serverUpdate && <ServerUpdateRow update={serverUpdate} onDismiss={group.actions.dismissServerUpdate} />}
+      {suspensions.map((suspension) => (
+        <SuspensionRow key={suspension.workspace.id} suspension={suspension} />
+      ))}
+      {ownAccountRequest && <OwnAccountRequestRow request={ownAccountRequest} />}
+      {accountRequests.map((request) => (
+        <AccountRequestRow key={request.userId} request={request} />
+      ))}
+      {messageReports.map((report) => (
+        <MessageReportRow
+          key={report.id}
+          report={report}
+          onOpen={(newTab) => group.actions.openReport(report, newTab)}
+          onResolve={group.actions.resolveReport && (() => group.actions.resolveReport!(report))}
+        />
+      ))}
       {invites.map((invite) => (
         <InviteRow key={invite.id} invite={invite} actions={group.actions} />
       ))}
@@ -526,6 +581,191 @@ function ServerUpdateRow({ update, onDismiss }: { update: ServerUpdateNotificati
         </Button>
       </div>
     </UpdateRow>
+  );
+}
+
+/**
+ * Where a reported message is, if an admin can go and look: not in a direct
+ * conversation they are not part of, nor in a channel since deleted.
+ */
+function reportPath(report: MessageReportNotification): string | null {
+  if (report.direct || !report.channelId) return null;
+  const at = report.messageId ? `?message=${report.messageId}` : '';
+  return `/w/${report.workspace.id}/c/${report.channelId}${at}`;
+}
+
+/**
+ * Someone reported a chat message to the owners and admins of its workspace.
+ * It stays until one of them resolves it; deleting the message or removing its
+ * author is done the usual way, and does not resolve it by itself.
+ */
+function MessageReportRow({
+  report,
+  onOpen,
+  onResolve,
+}: {
+  report: MessageReportNotification;
+  onOpen: (newTab: boolean) => void;
+  onResolve?: () => Promise<void>;
+}) {
+  const [resolving, setResolving] = useState(false);
+  const path = reportPath(report);
+  const others = report.reports - 1;
+  return (
+    <div className="flex gap-3 px-4 py-2.5">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/10 text-red-500">
+        <Icon name="flag" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm">
+          <span className="font-medium">{report.reporter.name}</span>
+          {others > 0 && <> and {others === 1 ? 'one other' : `${others} others`}</>} reported a message from{' '}
+          <span className="font-medium">{report.author.name}</span>
+        </p>
+        <p className="truncate text-xs text-[var(--color-muted)]">
+          {report.direct ? 'In a direct conversation' : `In #${report.channelName}`} · {report.workspace.name} ·{' '}
+          {formatRelative(report.reportedAt)}
+        </p>
+        <p className="mt-1 line-clamp-4 whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface)] px-2 py-1 text-xs">
+          {report.excerpt}
+        </p>
+        {report.reason && <p className="mt-1 line-clamp-3 text-xs">Reason: “{report.reason}”</p>}
+        {report.direct && (
+          <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+            You aren’t part of this conversation, so this copy is all there is to review.
+          </p>
+        )}
+        <div className="mt-2 flex gap-1.5">
+          {path && (
+            <Button variant="subtle" className="text-xs" onClick={(event) => onOpen(wantsNewTab(event))}>
+              <Icon name="box-arrow-up-right" /> Open
+            </Button>
+          )}
+          {onResolve && (
+            <Button
+              variant="subtle"
+              className="text-xs"
+              disabled={resolving}
+              onClick={async () => {
+                setResolving(true);
+                try {
+                  await onResolve();
+                } finally {
+                  setResolving(false);
+                }
+              }}
+            >
+              <Icon name="check2" /> Resolve
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The verb for a request, as a sentence finishes it. */
+const ACTION = { delete: 'deleted', disable: 'disabled' } as const;
+
+/**
+ * A request about an account: someone asking for their own to be deleted, or a
+ * team lead asking for someone's to be disabled or deleted. Only server
+ * administrators are sent these, and there is nothing to dismiss here: it stays
+ * until the account is deleted or disabled, or the request is set aside, all on
+ * the admin page. That page has a port of its own and is often not reachable
+ * from where this is read, so it is named rather than linked.
+ */
+function AccountRequestRow({ request }: { request: AccountRequestNotification }) {
+  const action = ACTION[request.kind ?? 'delete'];
+  return (
+    <div className="flex gap-3 px-4 py-2.5">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/10 text-red-500">
+        <Icon name={request.kind === 'disable' ? 'slash-circle' : 'person-x'} />
+      </span>
+      <div className="min-w-0 flex-1">
+        {request.requestedBy ? (
+          <p className="text-sm">
+            <span className="font-medium">{request.requestedBy.name}</span> asked for{' '}
+            <span className="font-medium">{request.name}</span>’s account to be {action}
+            {request.requestedBy.workspaceName && <> from {request.requestedBy.workspaceName}</>}
+          </p>
+        ) : (
+          <p className="text-sm">
+            <span className="font-medium">{request.name}</span> asked for their account to be {action}
+          </p>
+        )}
+        <p className="truncate text-xs text-[var(--color-muted)]">
+          {request.email} · {formatRelative(request.requestedAt)}
+        </p>
+        {request.note && <p className="mt-0.5 line-clamp-2 text-xs">“{request.note}”</p>}
+        {request.memberNote && (
+          <p className="mt-0.5 line-clamp-2 text-xs">
+            {request.name}: “{request.memberNote}”
+          </p>
+        )}
+        <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+          Handle it under Accounts on the server admin page. Only server administrators see this.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A team lead asked the administrators to disable or delete your own account.
+ * It stays while the request stands; settings is where to answer it.
+ */
+function OwnAccountRequestRow({ request }: { request: OwnAccountRequestNotification }) {
+  const where = request.requestedBy.workspaceName ? `From ${request.requestedBy.workspaceName} · ` : '';
+  return (
+    <div className="flex gap-3 px-4 py-2.5">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/10 text-red-500">
+        <Icon name={request.kind === 'disable' ? 'slash-circle' : 'person-x'} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm">
+          <span className="font-medium">{request.requestedBy.name}</span> asked for your account to be{' '}
+          {ACTION[request.kind]}
+        </p>
+        <p className="text-xs text-[var(--color-muted)]">
+          {where}
+          {formatRelative(request.requestedAt)}
+        </p>
+        {request.note && <p className="mt-0.5 line-clamp-2 text-xs">“{request.note}”</p>}
+        <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+          The server administrators will decide. Add a note for them under Settings → Account.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * You were suspended from a workspace. It has left your list, so this says
+ * why, for as long as it lasts.
+ */
+function SuspensionRow({ suspension }: { suspension: WorkspaceSuspensionNotification }) {
+  return (
+    <div className="flex gap-3 px-4 py-2.5">
+      <WorkspaceIcon
+        name={suspension.workspace.name}
+        icon={suspension.workspace.icon}
+        avatarUrl={suspension.workspace.avatarUrl}
+        size="md"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm">
+          You were suspended from <span className="font-medium">{suspension.workspace.name}</span>
+        </p>
+        <p className="text-xs text-[var(--color-muted)]">
+          By {suspension.byName} · {formatRelative(suspension.at)}
+        </p>
+        <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+          You can’t open it until its owners, admins or a team lead lift the suspension. Your other workspaces are
+          unaffected.
+        </p>
+      </div>
+    </div>
   );
 }
 

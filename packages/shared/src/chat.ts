@@ -365,7 +365,12 @@ export interface NotificationsEvent {
   type: 'notifications.changed';
 }
 
-export type ChatEvent = ChatMessageEvent | CallEvent | WorkspaceEvent | TypingEvent | NotificationsEvent;
+/** You blocked or unblocked someone, perhaps on another device: what is hidden changes. */
+export interface BlocksEvent {
+  type: 'blocks.changed';
+}
+
+export type ChatEvent = ChatMessageEvent | CallEvent | WorkspaceEvent | TypingEvent | NotificationsEvent | BlocksEvent;
 
 /** How often a client repeats that someone is still typing. */
 export const TYPING_INTERVAL_MS = 3_000;
