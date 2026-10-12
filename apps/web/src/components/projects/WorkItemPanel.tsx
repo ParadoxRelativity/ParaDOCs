@@ -46,6 +46,7 @@ import Icon, { DocumentIcon } from '../Icon';
 import { ConfirmDialog } from '../Modal';
 import { useToast } from '../Toast';
 import { Button, EmptyState, IconButton, Spinner } from '../ui';
+import { useMoveToBacklog } from './ProjectBoard';
 import ReferenceEditor from './ReferenceEditor';
 import WorkItemAttachments from './WorkItemAttachments';
 import {
@@ -168,6 +169,7 @@ function ItemDetail({
   const update = useUpdateWorkItem(project.id);
   const remove = useDeleteWorkItem(project.id);
   const siblings = useWorkItems(project.id);
+  const toBacklog = useMoveToBacklog(project);
   const publicOrigin = usePublicOrigin();
   const toast = useToast();
   const [title, setTitle] = useState(item.title);
@@ -251,6 +253,12 @@ function ItemDetail({
         {canEdit && done && !item.archivedAt && (
           <IconButton label="Archive" onClick={() => patch({ archived: true })}>
             <Icon name="archive" />
+          </IconButton>
+        )}
+        {/* Dragging to the backlog rail needs a mouse; this is the same move by touch or keyboard. */}
+        {canEdit && !done && !item.archivedAt && !isEpicType(project, item.typeId) && toBacklog.target(item) && (
+          <IconButton label="Move to backlog" onClick={() => toBacklog.move(item)}>
+            <Icon name="inbox" />
           </IconButton>
         )}
         <IconButton label="Copy link" onClick={copyLink}>

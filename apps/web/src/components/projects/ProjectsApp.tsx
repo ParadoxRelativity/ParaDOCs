@@ -373,8 +373,7 @@ function ProjectView({
                   canEdit={canEdit && !filtering}
                   activeItemId={itemId}
                   onOpenItem={onOpenItem}
-                  // The sprint bar leads to the backlog when there are sprints.
-                  onOpenBacklog={hasBacklog && !sprints ? () => setView('backlog') : undefined}
+                  onOpenBacklog={hasBacklog ? () => setView('backlog') : undefined}
                 />
               </div>
             </div>

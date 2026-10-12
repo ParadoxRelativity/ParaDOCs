@@ -553,6 +553,27 @@ export function canMoveTo(
   return allowed === null || allowed.includes(toStatusId);
 }
 
+/**
+ * Where work taken off the board goes back to, or null when it cannot go.
+ * Without sprints that is the project's first backlog status. With sprints it
+ * also leaves its sprint, landing in the first backlog status, or the first
+ * status when there is none. Either way the move must be one the item's
+ * workflow allows.
+ */
+export function backlogTarget(
+  project: Pick<Project, 'kind' | 'sprintsEnabled' | 'statuses' | 'workflows' | 'itemTypes'>,
+  item: Pick<WorkItemSummary, 'typeId' | 'statusId' | 'sprintId'>,
+): ProjectStatus | null {
+  const backlog = project.statuses.find((s) => s.category === 'backlog');
+  if (usesSprints(project)) {
+    const status = backlog ?? project.statuses[0];
+    if (!status || (item.sprintId === null && status.id === item.statusId)) return null;
+    return canMoveTo(project, item.typeId, item.statusId, status.id) ? status : null;
+  }
+  if (!backlog || backlog.id === item.statusId) return null;
+  return canMoveTo(project, item.typeId, item.statusId, backlog.id) ? backlog : null;
+}
+
 // --- board layout ------------------------------------------------------------
 
 /** A cell with its statuses looked up, and a name to put at the top of it. */
