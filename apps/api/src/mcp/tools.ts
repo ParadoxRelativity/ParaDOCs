@@ -2,8 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import * as Y from 'yjs';
 import {
   COLLAB_FRAGMENT,
+  MAX_ARCHIVE_PAGE_SIZE,
   WORK_ITEM_PRIORITIES,
+  isEpicType,
   parseMessage,
+  type ArchivePage,
   type Channel,
   type Message,
   type MessageReferences,
@@ -244,6 +247,29 @@ async function itemIdArg(ctx: ToolContext, arg: string, workspace?: string): Pro
   return rows[0].id;
 }
 
+/** An epic by its key or id, read as the person, so one they cannot see is not found. */
+async function epicArg(ctx: ToolContext, arg: string, workspace?: string): Promise<WorkItem> {
+  const item = await call<WorkItem>(ctx, 'GET', `/work-items/${await itemIdArg(ctx, arg, workspace)}`);
+  const project = await call<Project>(ctx, 'GET', `/projects/${item.projectId}`);
+  if (!isEpicType(project, item.typeId)) throw new ToolError(`${item.key} is not an epic`);
+  return item;
+}
+
+/**
+ * The keys of the epics work is under, by id. An epic is always in the same
+ * project as the work under it, so whoever can see the work can see its epic.
+ */
+async function epicKeys(ids: (string | null)[]): Promise<Map<string, string>> {
+  const wanted = [...new Set(ids.filter((id): id is string => id !== null))];
+  if (wanted.length === 0) return new Map();
+  const { rows } = await query<{ id: string; key: string }>(
+    `SELECT i.id, p.key || '-' || i.number AS key FROM work_items i JOIN projects p ON p.id = i.project_id
+      WHERE i.id = ANY($1::uuid[])`,
+    [wanted],
+  );
+  return new Map(rows.map((r) => [r.id, r.key]));
+}
+
 interface LinkTargets {
   documents: { id: string; title: string }[];
   spreadsheets: { id: string; title: string }[];
@@ -361,15 +387,22 @@ function roleSummary(item: WorkItemSummary, project: Project, people: Map<string
     .join(' · ');
 }
 
-function itemLine(item: WorkItemSummary, project: Project, people: Map<string, string>): string {
+function itemLine(
+  item: WorkItemSummary,
+  project: Project,
+  people: Map<string, string>,
+  epics: Map<string, string>,
+): string {
   const type = project.itemTypes.find((t) => t.id === item.typeId)?.name;
   const roles = roleSummary(item, project, people);
+  const epic = item.epicId && epics.get(item.epicId);
   const extra = [
     type,
     item.priority !== 'none' ? item.priority : '',
     item.dueDate ? `due ${item.dueDate}` : '',
     item.estimate !== null ? `est ${item.estimate}` : '',
     item.blockedBy ? 'blocked' : '',
+    epic ? `epic ${epic}` : '',
     roles,
   ].filter(Boolean);
   return `- ${item.key}: ${item.title}${extra.length ? ` (${extra.join('; ')})` : ''}`;
@@ -387,7 +420,8 @@ function peopleMap(list: Member[]): Map<string, string> {
 async function describeItem(ctx: ToolContext, itemId: string): Promise<string> {
   const item = await call<WorkItem>(ctx, 'GET', `/work-items/${itemId}`);
   const project = await call<Project>(ctx, 'GET', `/projects/${item.projectId}`);
-  const [timeline, people, epic] = await Promise.all([
+  const isEpic = isEpicType(project, item.typeId);
+  const [timeline, people, epic, current, archived] = await Promise.all([
     call<WorkItemTimeline>(ctx, 'GET', `/work-items/${itemId}/timeline`),
     members(ctx, project.workspaceId),
     item.epicId
@@ -395,6 +429,11 @@ async function describeItem(ctx: ToolContext, itemId: string): Promise<string> {
           `SELECT p.key || '-' || i.number AS key, i.title FROM work_items i JOIN projects p ON p.id = i.project_id WHERE i.id = $1`,
           [item.epicId],
         )
+      : null,
+    // An epic's work is all in its own project: what is current, and what has been archived.
+    isEpic ? call<WorkItemSummary[]>(ctx, 'GET', `/projects/${project.id}/items`) : null,
+    isEpic
+      ? call<ArchivePage>(ctx, 'GET', `/projects/${project.id}/archive${qs({ epic: item.id, limit: MAX_ARCHIVE_PAGE_SIZE })}`)
       : null,
   ]);
   const names = peopleMap(people);
@@ -422,8 +461,36 @@ async function describeItem(ctx: ToolContext, itemId: string): Promise<string> {
   return [
     header.filter(Boolean).join('\n'),
     `## Description\n${item.description.trim() ? readable(item.description, item.references) : '(none)'}`,
+    current && archived && childList(project, names, current.filter((i) => i.epicId === item.id), archived),
     `## Comments (${comments.length})\n${comments.length ? comments.join('\n') : '(none)'}`,
-  ].join('\n\n');
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/** The work under an epic, current in board order and then archived, each with its type, status and assignee. */
+function childList(project: Project, people: Map<string, string>, current: WorkItemSummary[], archived: ArchivePage): string {
+  const order = new Map(project.statuses.map((s, n) => [s.id, n]));
+  const done = new Set(project.statuses.filter((s) => s.category === 'done').map((s) => s.id));
+  const sorted = [...current].sort(
+    (a, b) => (order.get(a.statusId) ?? 0) - (order.get(b.statusId) ?? 0) || a.position - b.position,
+  );
+  const role = findAssigneeRole(project);
+  const line = (child: WorkItemSummary, isArchived: boolean) => {
+    const holders = role ? [...(child.roles[role.id] ?? []).map((id) => people.get(id) ?? 'someone'), ...(child.roleNames[role.id] ?? [])] : [];
+    const extra = [
+      project.itemTypes.find((t) => t.id === child.typeId)?.name,
+      project.statuses.find((s) => s.id === child.statusId)?.name,
+      role && `${role.name}: ${holders.length ? holders.join(', ') : 'nobody'}`,
+      isArchived && 'archived',
+    ].filter(Boolean);
+    return `- ${child.key}: ${child.title} (${extra.join('; ')})`;
+  };
+  const total = current.length + archived.total;
+  const finished = current.filter((i) => done.has(i.statusId)).length + archived.total;
+  const lines = [...sorted.map((c) => line(c, false)), ...archived.items.map((c) => line(c, true))];
+  if (archived.total > archived.items.length) lines.push(`…and ${archived.total - archived.items.length} more archived.`);
+  return `## Work under it (${total}, ${finished} done)\n${lines.length ? lines.join('\n') : '(none)'}`;
 }
 
 function statusArg(project: Project, arg: string) {
@@ -441,8 +508,12 @@ function typeArg(project: Project, arg: string) {
 }
 
 /** The role "assignee" means: one called Assignee, or else the project's first role. */
+function findAssigneeRole(project: Project) {
+  return project.roles.find((r) => r.name.toLowerCase() === 'assignee') ?? project.roles[0];
+}
+
 function assigneeRole(project: Project) {
-  const role = project.roles.find((r) => r.name.toLowerCase() === 'assignee') ?? project.roles[0];
+  const role = findAssigneeRole(project);
   if (!role) throw new ToolError(`${project.key} has no roles to assign anyone to`);
   return role;
 }
@@ -745,11 +816,12 @@ export const TOOLS: Tool[] = [
     name: 'list_work_items',
     title: 'List work items',
     description:
-      "A project's or queue's current work, grouped by status in board order. Finished work is left out unless includeDone is set.",
+      "A project's or queue's current work, grouped by status in board order, with the epic each item is under. Finished work is left out unless includeDone is set.",
     params: {
       project: { type: 'string', description: 'Project key (such as ENG), name or id', required: true },
       status: { type: 'string', description: 'Only this status, by name' },
       type: { type: 'string', description: 'Only this type, by name' },
+      epic: { type: 'string', description: 'Only work under this epic, by its key such as ENG-3' },
       assignee: { type: 'string', description: 'Only work this person holds any role on: "me", a name or an email' },
       query: { type: 'string', description: 'Only titles containing this' },
       includeDone: { type: 'boolean', description: 'Include finished work. Default false.' },
@@ -767,6 +839,8 @@ export const TOOLS: Tool[] = [
       const type = str(args, 'type') ? typeArg(p, str(args, 'type')!) : null;
       const person = str(args, 'assignee') ? memberArg(ctx, people, str(args, 'assignee')!) : null;
       if (str(args, 'assignee') && !person) throw new ToolError(`No member "${str(args, 'assignee')}"`);
+      const epic = str(args, 'epic') ? await epicArg(ctx, str(args, 'epic')!, p.workspaceId) : null;
+      if (epic && epic.projectId !== p.id) throw new ToolError(`${epic.key} is not in ${p.key}`);
       const q = str(args, 'query')?.toLowerCase();
       const done = new Set(p.statuses.filter((s) => s.category === 'done').map((s) => s.id));
       const limit = Math.max(num(args, 'limit') ?? 100, 1);
@@ -775,11 +849,13 @@ export const TOOLS: Tool[] = [
         (i) =>
           (status ? i.statusId === status.id : bool(args, 'includeDone') || !done.has(i.statusId)) &&
           (!type || i.typeId === type.id) &&
+          (!epic || i.epicId === epic.id) &&
           (!person || Object.values(i.roles).some((ids) => ids.includes(person.userId))) &&
           (!q || i.title.toLowerCase().includes(q)),
       );
       if (picked.length === 0) return 'No work items match.';
       const names = peopleMap(people);
+      const epics = await epicKeys(picked.map((i) => i.epicId));
       const out: string[] = [];
       let listed = 0;
       for (const s of p.statuses) {
@@ -787,7 +863,7 @@ export const TOOLS: Tool[] = [
         if (here.length === 0 || listed >= limit) continue;
         const shown = here.slice(0, limit - listed);
         listed += shown.length;
-        out.push(`## ${s.name} (${here.length})`, ...shown.map((i) => itemLine(i, p, names)));
+        out.push(`## ${s.name} (${here.length})`, ...shown.map((i) => itemLine(i, p, names, epics)));
       }
       if (picked.length > listed) out.push(`…and ${picked.length - listed} more. Narrow it down or raise limit.`);
       return out.join('\n');
@@ -797,33 +873,48 @@ export const TOOLS: Tool[] = [
     name: 'find_work_items',
     title: 'Find work items',
     description:
-      'Work items across every project: your own with mine, or those matching a query by title, key or description. Open work comes first.',
+      'Work items across every project: your own with mine, those under an epic, or those matching a query by title, key or description. Open work comes first.',
     params: {
       query: { type: 'string', description: 'Words from the title or description, or a key' },
       mine: { type: 'boolean', description: 'Only work you hold a role on' },
       open: { type: 'boolean', description: 'Leave out finished work' },
+      epic: { type: 'string', description: 'Only work under this epic, by its key such as ENG-3' },
       workspace: { ...WORKSPACE, description: 'Workspace name or id. Left out, every workspace is looked through.' },
     },
     writes: false,
     async run(ctx, args) {
-      if (!str(args, 'query') && !bool(args, 'mine')) throw new ToolError('Give a query, or set mine');
+      if (!str(args, 'query') && !bool(args, 'mine') && !str(args, 'epic')) throw new ToolError('Give a query or an epic, or set mine');
+      const epic = str(args, 'epic') ? await epicArg(ctx, str(args, 'epic')!, str(args, 'workspace')) : null;
       const out: string[] = [];
-      const list = await workspacesFor(ctx, str(args, 'workspace'), 'projects');
+      // An epic's work is all in the epic's own workspace.
+      const list = epic
+        ? [await workspaceArg(ctx, await workspaceOf(ctx, 'work_items', epic.id, 'Work item'))]
+        : await workspacesFor(ctx, str(args, 'workspace'), 'projects');
       for (const w of list) {
         // The same key can be in two workspaces; said where each is, they can be told apart.
         const where = list.length > 1 ? ` (${w.name})` : '';
         const items = await call<WorkItemListing[]>(
           ctx,
           'GET',
-          `/workspaces/${w.id}/work-items${qs({ q: str(args, 'query'), mine: bool(args, 'mine'), open: bool(args, 'open'), limit: 50 })}`,
+          `/workspaces/${w.id}/work-items${qs({
+            q: str(args, 'query'),
+            mine: bool(args, 'mine'),
+            open: bool(args, 'open'),
+            epic: epic?.id,
+            limit: 50,
+          })}`,
         );
+        const epics = await epicKeys(items.map((i) => i.epicId));
         out.push(
-          ...items.map(
-            (i) =>
-              `- ${i.key}: ${i.title} [${i.status.name}] (${i.itemType.name}${i.priority !== 'none' ? `; ${i.priority}` : ''}${
-                i.myRoles.length ? `; you: ${i.myRoles.join(', ')}` : ''
-              }) in ${i.project.name}${where}`,
-          ),
+          ...items.map((i) => {
+            const extra = [
+              i.itemType.name,
+              i.priority !== 'none' ? i.priority : '',
+              i.epicId && epics.has(i.epicId) ? `epic ${epics.get(i.epicId)}` : '',
+              i.myRoles.length ? `you: ${i.myRoles.join(', ')}` : '',
+            ].filter(Boolean);
+            return `- ${i.key}: ${i.title} [${i.status.name}] (${extra.join('; ')}) in ${i.project.name}${where}`;
+          }),
         );
       }
       return out.length ? out.join('\n') : 'No work items match.';
@@ -832,7 +923,8 @@ export const TOOLS: Tool[] = [
   {
     name: 'get_work_item',
     title: 'Get a work item',
-    description: 'A work item in full: status, type, people, dates, description and every comment.',
+    description:
+      'A work item in full: status, type, people, dates, the epic it is under, description and every comment. For an epic, also all the work under it, finished and archived included.',
     params: {
       item: { type: 'string', description: 'The key, such as ENG-12, or the id', required: true },
       workspace: WORKSPACE,
@@ -886,7 +978,7 @@ export const TOOLS: Tool[] = [
     name: 'update_work_item',
     title: 'Update a work item',
     description:
-      'Changes a work item: move it to another status, retitle it, rewrite its description, reprioritise, reassign it. Only what is given changes. Returns the item as it now is.',
+      'Changes a work item: move it to another status, retitle it, rewrite its description, reprioritise, reassign it, put it under another epic. Only what is given changes. Returns the item as it now is.',
     params: {
       item: { type: 'string', description: 'The key, such as ENG-12, or the id', required: true },
       status: { type: 'string', description: 'Status name to move it to' },
@@ -897,6 +989,7 @@ export const TOOLS: Tool[] = [
       dueDate: { type: 'string', description: 'YYYY-MM-DD, or an empty string to clear it' },
       estimate: { type: 'integer', description: 'In whatever unit the team estimates in' },
       assignee: { type: 'string', description: '"me", a member\'s name or email, or an empty string to unassign' },
+      epic: { type: 'string', description: 'Key of the epic to put it under, or an empty string to take it out of its epic' },
       workspace: WORKSPACE,
     },
     writes: true,
@@ -912,6 +1005,8 @@ export const TOOLS: Tool[] = [
       if (str(args, 'priority')) patch.priority = str(args, 'priority');
       if (str(args, 'dueDate') !== undefined) patch.dueDate = str(args, 'dueDate') || null;
       if (num(args, 'estimate') !== undefined) patch.estimate = num(args, 'estimate');
+      const epic = str(args, 'epic');
+      if (epic !== undefined) patch.epicId = epic.trim() ? (await epicArg(ctx, epic, p.workspaceId)).id : null;
       const assignee = str(args, 'assignee');
       if (Object.keys(patch).length === 0 && assignee === undefined) throw new ToolError('Nothing to change');
 

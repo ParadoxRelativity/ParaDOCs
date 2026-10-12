@@ -772,6 +772,8 @@ const listQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   mine: z.enum(['true', 'false']).optional(),
   open: z.enum(['true', 'false']).optional(),
+  /** Only work under this epic. */
+  epic: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
@@ -1546,6 +1548,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       if (input.person) {
         params.push(input.person);
         where.push(`EXISTS (SELECT 1 FROM work_item_roles wr WHERE wr.work_item_id = i.id AND wr.user_id = $${params.length})`);
+      }
+      if (input.epic) {
+        params.push(input.epic);
+        where.push(`i.epic_id = $${params.length}`);
       }
       if (input.completedSince) {
         params.push(input.completedSince);
@@ -2368,6 +2374,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         where.push('EXISTS (SELECT 1 FROM work_item_roles wr WHERE wr.work_item_id = i.id AND wr.user_id = $2)');
       }
       if (input.open === 'true') where.push(`st.category <> 'done'`);
+      if (input.epic) {
+        params.push(input.epic);
+        where.push(`i.epic_id = $${params.length}`);
+      }
       if (input.q) {
         params.push(input.q);
         const q = `$${params.length}`;
