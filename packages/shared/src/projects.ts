@@ -1278,6 +1278,11 @@ export const archivePageQuerySchema = z.object({
   epic: uuid.optional(),
   /** Only items finished since this moment. */
   completedSince: z.string().datetime({ offset: true }).optional(),
+  /** A WorkItemFilter, as encodeFilter writes it. Its search also reads descriptions. */
+  f: z.string().max(4000).optional(),
+  /** The reader's day and time zone, which the filter's dates are counted in. */
+  today: isoDate.optional(),
+  tz: z.string().regex(/^[A-Za-z0-9_+\-/]{1,64}$/).optional(),
   /** From the page before; opaque. */
   cursor: z.string().max(1000).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_ARCHIVE_PAGE_SIZE).default(ARCHIVE_PAGE_SIZE),

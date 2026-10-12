@@ -1205,6 +1205,21 @@ export function useWorkItems(projectId: string | undefined) {
 }
 
 /** The address of one page of a project's archive. */
+/**
+ * The ids of a project's current work a search finds, its descriptions
+ * included, which the browser does not hold. Short searches are not asked.
+ */
+export function useWorkItemSearch(projectId: string, q: string) {
+  const needle = q.trim();
+  return useQuery({
+    queryKey: ['workItemSearch', projectId, needle] as const,
+    queryFn: async () =>
+      new Set((await api.get<WorkItemSummary[]>(`/projects/${projectId}/items?q=${encodeURIComponent(needle)}`)).map((item) => item.id)),
+    enabled: needle.length >= 3,
+    staleTime: 30_000,
+  });
+}
+
 function archiveUrl(projectId: string, query: ArchivePageQuery): string {
   const params = new URLSearchParams();
   for (const [name, value] of Object.entries(query)) {

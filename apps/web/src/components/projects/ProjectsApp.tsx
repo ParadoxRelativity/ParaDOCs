@@ -5,6 +5,7 @@ import {
   usesSprints,
   type User,
   isEpicType,
+  isFilterEmpty,
   type Project,
   type WorkItemGroupBy,
   type WorkItemListing,
@@ -35,6 +36,7 @@ import ProjectAllItems from './ProjectAllItems';
 import ProjectEpics from './ProjectEpics';
 import ProjectInsights from './ProjectInsights';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
+import { FilterBar, useFilterMatcher, useProjectFilter } from './ProjectFilters';
 import ProjectSettings from './ProjectSettings';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
 import ProjectTable, { defaultListSettings, type ListSettings } from './ProjectTable';
@@ -154,8 +156,7 @@ function ProjectView({
   }, [linkedView]);
   // How the List and All items are ordered and grouped, kept per project for this reader.
   const [storedList, setListSettings] = useLocalStorage<ListSettings | null>(`paradocs.projectList.${projectId}`, null);
-  const [text, setText] = useState('');
-  const [person, setPerson] = useState('');
+  const [filter, setFilter] = useProjectFilter(projectId);
   const [creating, setCreating] = useState<{ typeId?: string; epicId?: string } | null>(null);
 
   const data = project.data;
@@ -177,13 +178,7 @@ function ProjectView({
   const canComment = data !== undefined && can(projectPermission(data.kind, 'comment'));
   const canManageAccess = workspace.role === 'owner' || workspace.role === 'admin';
 
-  const matches = useMemo(() => {
-    const needle = text.trim().toLowerCase();
-    const who = person === 'me' ? user.id : person;
-    return (item: WorkItemSummary) =>
-      (!needle || item.title.toLowerCase().includes(needle) || item.key.toLowerCase().includes(needle)) &&
-      (!who || Object.values(item.roles).some((holders) => holders.includes(who)));
-  }, [text, person, user.id]);
+  const matches = useFilterMatcher(project.data, filter, user.id);
   // Archived work is not loaded with the rest; All items reads it a page at a time.
   const filtered = useMemo(() => (items.data ?? []).filter(matches), [items.data, matches]);
 
@@ -232,7 +227,7 @@ function ProjectView({
     (view === 'backlog'
       ? data.statuses.find((s) => s.category === 'backlog')
       : data.statuses.find((s) => s.category !== 'backlog'))?.id ?? data.statuses[0]?.id;
-  const filtering = text.trim() !== '' || person !== '';
+  const filtering = !isFilterEmpty(filter);
   const listSettings = storedList ?? defaultListSettings(data);
   const newButton = (
     <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
@@ -254,38 +249,7 @@ function ProjectView({
           {mobile && canEdit && !data.archivedAt && newButton}
           {mobile && <ViewTabs views={views} view={view} onChange={setView} mobile />}
           {view !== 'settings' && view !== 'insights' && (
-            <>
-              <div className={cx('relative', mobile && 'min-w-0 flex-1')}>
-                <Icon name="funnel" className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[var(--color-muted)]" />
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="Filter"
-                  className={cx(
-                    'rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] py-1 pl-6 pr-2 text-xs outline-none focus:border-[var(--color-accent)]',
-                    mobile ? 'w-full' : 'w-40',
-                  )}
-                />
-              </div>
-              {view !== 'workload' && (
-                <select
-                  value={person}
-                  onChange={(e) => setPerson(e.target.value)}
-                  className="rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
-                  aria-label="Show work for"
-                >
-                  <option value="">Anyone</option>
-                  <option value="me">Me</option>
-                  {members
-                    .filter((m) => !m.isSelf)
-                    .map((m) => (
-                      <option key={m.userId} value={m.userId}>
-                        {m.name}
-                      </option>
-                    ))}
-                </select>
-              )}
-            </>
+            <FilterBar project={data} items={items.data ?? []} members={members} filter={filter} onChange={setFilter} />
           )}
           {(view === 'list' || view === 'all') && (
             <ViewMenu project={data} settings={listSettings} onChange={setListSettings} />
@@ -316,8 +280,7 @@ function ProjectView({
             <ProjectAllItems
               project={data}
               current={filtered}
-              text={text}
-              personId={(person === 'me' ? user.id : person) || null}
+              filter={filter}
               memberMap={memberMap}
               canEdit={canEdit}
               activeItemId={itemId}

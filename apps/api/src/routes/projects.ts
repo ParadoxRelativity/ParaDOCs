@@ -15,6 +15,9 @@ import {
   createWorkItemSchema,
   createWorkflowSchema,
   isEpicType,
+  dateBounds,
+  decodeFilter,
+  type WorkItemFilter,
   isSymmetricLink,
   ARCHIVE_PAGE_SIZE,
   archivePageQuerySchema,
@@ -481,6 +484,85 @@ function uniqueNames(names: string[] | undefined): string[] {
     out.push(name);
   }
   return out;
+}
+
+/** Escapes a search for ILIKE, so it is taken literally, as the filter box takes it. */
+function likeText(text: string): string {
+  return text.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** A search over an item's title, key and description. Items aliased `i`, their project `p`. */
+function searchSql(q: string, params: unknown[]): string {
+  params.push(likeText(q));
+  const at = `$${params.length}`;
+  return `(i.title ILIKE '%' || ${at} || '%' OR (p.key || '-' || i.number) ILIKE '%' || ${at} || '%'
+           OR i.description ILIKE '%' || ${at} || '%')`;
+}
+
+/**
+ * A WorkItemFilter as SQL conditions, every one of which an item must meet:
+ * what `matchesFilter` checks in the browser, for work the browser does not
+ * hold. Dates are the reader's: `today` is their day, and moments are read in
+ * their time zone.
+ */
+function filterSql(filter: WorkItemFilter, today: string, timeZone: string, selfId: string, params: unknown[]): string[] {
+  const where: string[] = [];
+  const param = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const uuids = (values: string[]) => values.filter((v) => UUID.test(v));
+
+  if (filter.q?.trim()) where.push(searchSql(filter.q.trim(), params));
+  if (filter.type?.length) where.push(`i.type_id = ANY(${param(uuids(filter.type))}::uuid[])`);
+  if (filter.status?.length) where.push(`i.status_id = ANY(${param(uuids(filter.status))}::uuid[])`);
+  if (filter.priority?.length) where.push(`i.priority = ANY(${param(filter.priority)}::text[])`);
+  for (const [column, values] of [
+    ['epic_id', filter.epic],
+    ['sprint_id', filter.sprint],
+  ] as const) {
+    if (!values?.length) continue;
+    const either = [`i.${column} = ANY(${param(uuids(values))}::uuid[])`];
+    if (values.includes('none')) either.push(`i.${column} IS NULL`);
+    where.push(`(${either.join(' OR ')})`);
+  }
+  for (const [roleId, values] of Object.entries(filter.roles ?? {})) {
+    if (!values.length || !UUID.test(roleId)) continue;
+    const role = param(roleId);
+    const people = uuids(values.map((v) => (v === 'me' ? selfId : v)));
+    const either = [
+      `EXISTS (SELECT 1 FROM work_item_roles wr WHERE wr.work_item_id = i.id AND wr.role_id = ${role}
+                  AND wr.user_id = ANY(${param(people)}::uuid[]))`,
+    ];
+    if (values.includes('none')) {
+      either.push(`NOT EXISTS (SELECT 1 FROM work_item_roles wr WHERE wr.work_item_id = i.id AND wr.role_id = ${role})`);
+    }
+    where.push(`(${either.join(' OR ')})`);
+  }
+  // Bound only when a moment is filtered on: a parameter nothing reads has no type.
+  let zone: string | null = null;
+  const day = (column: string) => `(${column} AT TIME ZONE ${(zone ??= `${param(timeZone)}::text`)})::date`;
+  for (const [field, column] of [
+    ['due', null],
+    ['created', 'i.created_at'],
+    ['updated', 'i.updated_at'],
+  ] as const) {
+    const date = filter[field];
+    if (!date) continue;
+    const expr = column ? day(column) : 'i.due_date';
+    if (date.kind === 'none') {
+      where.push(`${expr} IS NULL`);
+      continue;
+    }
+    // Finished work is never overdue.
+    if (field === 'due' && date.kind === 'overdue') {
+      where.push(`NOT EXISTS (SELECT 1 FROM project_statuses ds WHERE ds.id = i.status_id AND ds.category = 'done')`);
+    }
+    const { from, to } = dateBounds(date, today);
+    if (from) where.push(`${expr} >= ${param(from)}::date`);
+    if (to) where.push(`${expr} <= ${param(to)}::date`);
+  }
+  return where;
 }
 
 /**
@@ -1519,15 +1601,20 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
    * board, the list and the rest show. The archive is read a page at a time
    * from `/projects/:id/archive`.
    */
-  app.get<{ Params: { id: string } }>('/projects/:id/items', async (req) => {
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>('/projects/:id/items', async (req) => {
     await assertProjectAccess(req, req.params.id);
+    // With a search, only the work it finds by title, key or description.
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
+    const params: unknown[] = [req.params.id];
+    const where = ['i.project_id = $1', 'i.archived_at IS NULL'];
+    if (q) where.push(searchSql(q, params));
     const { rows } = await query<WorkItemSummary>(
       `SELECT ${ITEM_COLUMNS}
          FROM work_items i JOIN projects p ON p.id = i.project_id
-        WHERE i.project_id = $1 AND i.archived_at IS NULL
+        WHERE ${where.join(' AND ')}
         ORDER BY i.position, i.number
         LIMIT ${MAX_LISTED_ITEMS}`,
-      [req.params.id],
+      params,
     );
     return rows;
   });
@@ -1552,7 +1639,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       const where = ['i.project_id = $1', 'i.archived_at IS NOT NULL'];
       if (input.q) {
         // Taken literally, as the filter box takes it.
-        params.push(input.q.replace(/[\\%_]/g, (c) => `\\${c}`));
+        params.push(likeText(input.q));
         const q = `$${params.length}`;
         where.push(`(i.title ILIKE '%' || ${q} || '%' OR (p.key || '-' || i.number) ILIKE '%' || ${q} || '%')`);
       }
@@ -1568,6 +1655,9 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         params.push(input.completedSince);
         where.push(`i.completed_at >= $${params.length}`);
       }
+      const filter = decodeFilter(input.f);
+      if (input.f && !filter) throw badRequest('That filter could not be read');
+      if (filter) where.push(...filterSql(filter, input.today ?? new Date().toISOString().slice(0, 10), input.tz ?? 'UTC', req.user!.id, params));
       const filtered = [...where];
       const filterParams = [...params];
 

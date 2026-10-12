@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { Project, WorkItemSummary, WorkspaceMember } from '@paradocs/shared';
+import { encodeFilter, isFilterEmpty, type Project, type WorkItemFilter, type WorkItemSummary, type WorkspaceMember } from '@paradocs/shared';
 import { useArchivePages } from '../../api/hooks';
-import { cx, useDebounced } from '../../lib/util';
+import { cx, toISODate, useDebounced } from '../../lib/util';
 import ProjectTable, { type ArchiveRows, type ListSettings } from './ProjectTable';
 
 /**
@@ -14,8 +14,7 @@ import ProjectTable, { type ArchiveRows, type ListSettings } from './ProjectTabl
 export default function ProjectAllItems({
   project,
   current,
-  text,
-  personId,
+  filter,
   memberMap,
   canEdit,
   activeItemId,
@@ -26,9 +25,8 @@ export default function ProjectAllItems({
   project: Project;
   /** Current work, already filtered. */
   current: WorkItemSummary[];
-  /** What the filter box says, and whose work is being shown, if anyone's. */
-  text: string;
-  personId: string | null;
+  /** What the work is filtered by, which the server applies to the archive. */
+  filter: WorkItemFilter;
   memberMap: Map<string, WorkspaceMember>;
   canEdit: boolean;
   activeItemId: string | null;
@@ -40,11 +38,18 @@ export default function ProjectAllItems({
   const sort = settings.sort;
   const [archivedOnly, setArchivedOnly] = useState(false);
   // Typing asks the server again, so it waits for a pause.
-  const q = useDebounced(text.trim(), 300);
+  const f = useDebounced(isFilterEmpty(filter) ? '' : encodeFilter(filter), 300);
 
   const pages = useArchivePages(
     project.id,
-    { sort: sort.key, descending: String(sort.descending) as 'true' | 'false', q: q || undefined, person: personId ?? undefined },
+    {
+      sort: sort.key,
+      descending: String(sort.descending) as 'true' | 'false',
+      f: f || undefined,
+      // The filter's dates are the reader's own days.
+      today: f ? toISODate(new Date()) : undefined,
+      tz: f ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined,
+    },
     project.archive.count > 0,
   );
   const { fetchNextPage } = pages;
