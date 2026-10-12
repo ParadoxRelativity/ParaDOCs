@@ -310,6 +310,11 @@ export interface Project extends ProjectSummary {
    * off the board and the list, and kept in All items. Null: never.
    */
   archiveAfterDays: number | null;
+  /**
+   * Whether moving work to another status in the app asks for a comment saying
+   * why. Only the app asks; the API and AI connections never do.
+   */
+  askStatusComment: boolean;
   /** What has been archived, totalled, since archived items are not loaded with the rest. */
   archive: ArchiveTotals;
   /** Running first, then planned in the order they were made, then completed, newest first. */
@@ -964,6 +969,7 @@ export const updateProjectSchema = z.object({
   defaultTypeId: uuid.optional(),
   /** Null: never archive finished work. */
   archiveAfterDays: z.number().int().min(1).max(MAX_ARCHIVE_DAYS).nullish(),
+  askStatusComment: z.boolean().optional(),
 });
 
 export const createStatusSchema = z.object({

@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { allowedMoves, itemTypeOf, type Project, type ProjectStatus, type WorkItemSummary, type WorkspaceMember } from '@paradocs/shared';
-import { useCreateWorkItem, useMoveWorkItems, useUpdateWorkItem } from '../../api/hooks';
+import { useCreateWorkItem, useMoveWorkItems, useUpdateWorkItem, useWorkItems } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import { Popover } from '../Popover';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
 import { positionBetween } from './ProjectBoard';
+import { useStatusComment } from './StatusComment';
 import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue } from './projectUi';
 
 const DRAG_TYPE = 'application/x-paradocs-backlog-item';
@@ -45,6 +46,7 @@ export default function ProjectBacklog({
   const [shown, setShown] = useState(PAGE);
   const move = useMoveWorkItems(project.id);
   const toast = useToast();
+  const statusComment = useStatusComment(project);
 
   const groups = useMemo(
     () =>
@@ -88,17 +90,22 @@ export default function ProjectBacklog({
     );
   }
 
-  function moveToBoard(ids: string[], statusId: string) {
+  async function moveToBoard(ids: string[], statusId: string) {
     const statusName = boardStatuses.find((s) => s.id === statusId)?.name ?? 'the board';
     // In backlog order, so what was ranked first lands first.
     const order = groups.flatMap((group) => group.items.map((item) => item.id)).filter((id) => ids.includes(id));
     if (order.length === 0) return;
+    // A bulk move asks once, and the answer goes on every item moved.
+    const moving = items.filter((item) => order.includes(item.id));
+    const answer = await statusComment.confirm(moving.map((item) => ({ key: item.key, statusId: item.statusId, toStatusId: statusId })));
+    if (answer === false) return;
     move.mutate(
       { itemIds: order, statusId },
       {
         onSuccess: () => {
           setSelected(new Set());
           toast(order.length === 1 ? `Moved to ${statusName}` : `Moved ${order.length} items to ${statusName}`);
+          void statusComment.comment(order, answer);
         },
         onError: (err) => toast(err instanceof Error ? err.message : 'Could not move them', 'error'),
       },
@@ -260,6 +267,8 @@ function BacklogGroup({
 }) {
   const create = useCreateWorkItem(project.id);
   const update = useUpdateWorkItem(project.id);
+  const statusComment = useStatusComment(project);
+  const all = useWorkItems(project.id).data ?? [];
   const toast = useToast();
   const [title, setTitle] = useState('');
   const [drop, setDrop] = useState<number | null>(null);
@@ -277,19 +286,28 @@ function BacklogGroup({
   }
 
   /** `index` counts the list as drawn, with the dragged row still in it. */
-  function rank(itemId: string, index: number) {
+  async function rank(itemId: string, index: number) {
     const dragged = items.find((item) => item.id === itemId);
     const original = items.findIndex((item) => item.id === itemId);
     if (original !== -1 && (original === index || original === index - 1)) return;
     const rest = items.filter((item) => item.id !== itemId);
     const at = original !== -1 && index > original ? index - 1 : index;
+    // Dragged in from another backlog status, it changes status too.
+    const incoming = dragged ? undefined : all.find((item) => item.id === itemId);
+    const answer = incoming
+      ? await statusComment.confirm([{ key: incoming.key, statusId: incoming.statusId, toStatusId: status.id }])
+      : null;
+    if (answer === false) return;
     update.mutate(
       {
         id: itemId,
         statusId: dragged ? undefined : status.id,
         position: positionBetween(rest[at - 1]?.position, rest[at]?.position),
       },
-      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not move it', 'error') },
+      {
+        onSuccess: () => void statusComment.comment([itemId], answer),
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not move it', 'error'),
+      },
     );
   }
 

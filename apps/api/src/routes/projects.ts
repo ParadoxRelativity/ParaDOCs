@@ -298,6 +298,7 @@ export async function fetchProject(id: string, userId: string): Promise<Project>
             p.board_layout AS "boardLayout",
             p.kind = 'project' AND p.sprints_enabled AS "sprintsEnabled",
             p.archive_after_days AS "archiveAfterDays",
+            p.ask_status_comment AS "askStatusComment",
             json_build_object(
               'count', (SELECT count(*)::int FROM work_items a WHERE a.project_id = p.id AND a.archived_at IS NOT NULL),
               'epics', ${archivedBy('epic_id')},
@@ -994,6 +995,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
               sprints_enabled = COALESCE($9, sprints_enabled),
               default_type_id = COALESCE($10, default_type_id),
               archive_after_days = CASE WHEN $11::boolean THEN $12::int ELSE archive_after_days END,
+              ask_status_comment = COALESCE($13, ask_status_comment),
               updated_at = now()
         WHERE id = $1`,
       [
@@ -1009,6 +1011,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         input.defaultTypeId ?? null,
         input.archiveAfterDays !== undefined,
         input.archiveAfterDays ?? null,
+        input.askStatusComment ?? null,
       ],
     );
     // A shorter wait archives what has already sat long enough now, not at the next hourly sweep.

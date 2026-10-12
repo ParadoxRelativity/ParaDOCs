@@ -15,6 +15,7 @@ import { useIsMobile } from '../../lib/mobile';
 import { cx, formatRelative } from '../../lib/util';
 import Icon from '../Icon';
 import { useToast } from '../Toast';
+import { useStatusComment } from './StatusComment';
 import { BlockedBadge, PRIORITY, PeopleStack, PriorityIcon, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 export interface TableSort {
@@ -91,6 +92,7 @@ export default function ProjectTable({
 }) {
   const update = useUpdateWorkItem(project.id);
   const toast = useToast();
+  const statusComment = useStatusComment(project);
   const mobile = useIsMobile();
   const columns = mobile ? 4 : 8;
   const [ownSort, setOwnSort] = useState<TableSort>(() => defaultSort(project));
@@ -172,6 +174,19 @@ export default function ProjectTable({
     });
   }
 
+  /** Moves an item to another status, saying why first when the project asks. */
+  async function changeStatus(item: WorkItemSummary, statusId: string) {
+    const answer = await statusComment.confirm([{ key: item.key, statusId: item.statusId, toStatusId: statusId }]);
+    if (answer === false) return;
+    update.mutate(
+      { id: item.id, statusId },
+      {
+        onSuccess: () => void statusComment.comment([item.id], answer),
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the status', 'error'),
+      },
+    );
+  }
+
   function header(key: WorkItemSort, label: string, className?: string) {
     const active = sort.key === key;
     return (
@@ -245,12 +260,7 @@ export default function ProjectTable({
           <select
             value={item.statusId}
             disabled={!canEdit}
-            onChange={(e) =>
-              update.mutate(
-                { id: item.id, statusId: e.target.value },
-                { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the status', 'error') },
-              )
-            }
+            onChange={(e) => void changeStatus(item, e.target.value)}
             className="w-full cursor-pointer rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-[var(--color-line)] disabled:cursor-default"
             style={{ color: status?.color }}
             aria-label={`Status of ${item.key}`}

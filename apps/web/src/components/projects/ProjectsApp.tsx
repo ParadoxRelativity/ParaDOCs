@@ -38,6 +38,7 @@ import ProjectInsights from './ProjectInsights';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
 import { FilterBar, useFilterMatcher, useProjectFilter } from './ProjectFilters';
 import ProjectSettings from './ProjectSettings';
+import { StatusCommentProvider } from './StatusComment';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
 import ProjectTable, { defaultListSettings, type ListSettings } from './ProjectTable';
 import ProjectWorkload from './ProjectWorkload';
@@ -236,187 +237,189 @@ function ProjectView({
   );
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-2">
-          <ProjectIcon project={data} className="text-lg" />
-          <h1 className={cx('min-w-0 truncate text-base font-semibold', mobile && 'flex-1 basis-0')}>{data.name}</h1>
-          <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
-            {data.key}
-          </span>
-          {!mobile && <ViewTabs views={views} view={view} onChange={setView} />}
-          {!mobile && <span className="flex-1" />}
-          {mobile && canEdit && !data.archivedAt && newButton}
-          {mobile && <ViewTabs views={views} view={view} onChange={setView} mobile />}
-          {view !== 'settings' && view !== 'insights' && (
-            <FilterBar project={data} items={items.data ?? []} members={members} filter={filter} onChange={setFilter} />
+    <StatusCommentProvider workspaceId={workspace.id}>
+      <div className="flex h-full min-h-0">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-2">
+            <ProjectIcon project={data} className="text-lg" />
+            <h1 className={cx('min-w-0 truncate text-base font-semibold', mobile && 'flex-1 basis-0')}>{data.name}</h1>
+            <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
+              {data.key}
+            </span>
+            {!mobile && <ViewTabs views={views} view={view} onChange={setView} />}
+            {!mobile && <span className="flex-1" />}
+            {mobile && canEdit && !data.archivedAt && newButton}
+            {mobile && <ViewTabs views={views} view={view} onChange={setView} mobile />}
+            {view !== 'settings' && view !== 'insights' && (
+              <FilterBar project={data} items={items.data ?? []} members={members} filter={filter} onChange={setFilter} />
+            )}
+            {(view === 'list' || view === 'all') && (
+              <ViewMenu project={data} settings={listSettings} onChange={setListSettings} />
+            )}
+            {!mobile && canEdit && !data.archivedAt && newButton}
+          </div>
+
+          {data.archivedAt && (
+            <div className="shrink-0 border-b border-[var(--color-line)] bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+              <Icon name="archive" /> This {data.kind} is archived. Its work can still be read and changed, but nothing new can be added.
+            </div>
           )}
-          {(view === 'list' || view === 'all') && (
-            <ViewMenu project={data} settings={listSettings} onChange={setListSettings} />
-          )}
-          {!mobile && canEdit && !data.archivedAt && newButton}
+
+          <div className="min-h-0 flex-1">
+            {items.isLoading ? (
+              <Spinner />
+            ) : view === 'settings' ? (
+              <ProjectSettings
+                project={data}
+                items={items.data ?? []}
+                canEdit={canConfigure}
+                canManageAccess={canManageAccess}
+                onDeleted={onProjectDeleted}
+              />
+            ) : view === 'insights' ? (
+              <ProjectInsights project={data} items={items.data ?? []} />
+            ) : view === 'all' ? (
+              <ProjectAllItems
+                project={data}
+                current={filtered}
+                filter={filter}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                settings={listSettings}
+                onSettings={setListSettings}
+              />
+            ) : view === 'epics' && epicType ? (
+              <ProjectEpics
+                project={data}
+                items={items.data ?? []}
+                visible={filtered}
+                filtering={filtering}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                onNewItem={setCreating}
+              />
+            ) : view === 'backlog' && sprints ? (
+              <SprintBacklog
+                project={data}
+                items={worked}
+                memberMap={memberMap}
+                canEdit={canRunSprints}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                onOpenBoard={() => setView('board')}
+              />
+            ) : view === 'backlog' ? (
+              <ProjectBacklog
+                project={data}
+                items={worked}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                onOpenBoard={() => setView('board')}
+              />
+            ) : (items.data ?? []).length === 0 ? (
+              <EmptyState
+                icon={data.kind === 'queue' ? 'inboxes' : 'kanban'}
+                title={data.kind === 'queue' ? 'Nothing in the queue' : 'No work items yet'}
+                hint={canEdit ? 'Add the first with New. Work items can be linked from documents, canvases and chat.' : undefined}
+              />
+            ) : view === 'board' && sprints && !running ? (
+              <NoSprintRunning project={data} canEdit={canRunSprints} onOpenBacklog={() => setView('backlog')} />
+            ) : view === 'board' ? (
+              <div className="flex h-full flex-col">
+                {running && (
+                  <SprintBar
+                    project={data}
+                    sprint={running}
+                    items={sprintItems}
+                    canEdit={canRunSprints}
+                    onOpenBacklog={() => setView('backlog')}
+                  />
+                )}
+                <div className="min-h-0 flex-1">
+                  <ProjectBoard
+                    project={data}
+                    items={onBoard}
+                    memberMap={memberMap}
+                    canEdit={canEdit && !filtering}
+                    activeItemId={itemId}
+                    onOpenItem={onOpenItem}
+                    onOpenBacklog={hasBacklog ? () => setView('backlog') : undefined}
+                  />
+                </div>
+              </div>
+            ) : view === 'list' ? (
+              <ProjectTable
+                project={data}
+                items={filtered}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                sort={listSettings.sort}
+                onSort={(sort) => setListSettings({ ...listSettings, sort })}
+                groupBy={listSettings.groupBy}
+              />
+            ) : (
+              <ProjectWorkload
+                project={data}
+                items={worked}
+                members={members}
+                memberMap={memberMap}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+              />
+            )}
+          </div>
         </div>
 
-        {data.archivedAt && (
-          <div className="shrink-0 border-b border-[var(--color-line)] bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
-            <Icon name="archive" /> This {data.kind} is archived. Its work can still be read and changed, but nothing new can be added.
-          </div>
+        {itemId && (
+          <aside
+            className={cx(
+              'bg-[var(--color-canvas)]',
+              mobile
+                ? 'fixed inset-0 z-40 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+                : 'w-[460px] max-w-[50%] shrink-0 border-l border-[var(--color-line)]',
+            )}
+          >
+            <WorkItemPanel
+              workspaceId={workspace.id}
+              itemId={itemId}
+              project={data}
+              members={members}
+              selfId={user.id}
+              canEdit={canEdit}
+              canComment={canComment}
+              onClose={onCloseItem}
+              navigation={navigation}
+            />
+          </aside>
         )}
 
-        <div className="min-h-0 flex-1">
-          {items.isLoading ? (
-            <Spinner />
-          ) : view === 'settings' ? (
-            <ProjectSettings
-              project={data}
-              items={items.data ?? []}
-              canEdit={canConfigure}
-              canManageAccess={canManageAccess}
-              onDeleted={onProjectDeleted}
-            />
-          ) : view === 'insights' ? (
-            <ProjectInsights project={data} items={items.data ?? []} />
-          ) : view === 'all' ? (
-            <ProjectAllItems
-              project={data}
-              current={filtered}
-              filter={filter}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              settings={listSettings}
-              onSettings={setListSettings}
-            />
-          ) : view === 'epics' && epicType ? (
-            <ProjectEpics
-              project={data}
-              items={items.data ?? []}
-              visible={filtered}
-              filtering={filtering}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onNewItem={setCreating}
-            />
-          ) : view === 'backlog' && sprints ? (
-            <SprintBacklog
-              project={data}
-              items={worked}
-              memberMap={memberMap}
-              canEdit={canRunSprints}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onOpenBoard={() => setView('board')}
-            />
-          ) : view === 'backlog' ? (
-            <ProjectBacklog
-              project={data}
-              items={worked}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onOpenBoard={() => setView('board')}
-            />
-          ) : (items.data ?? []).length === 0 ? (
-            <EmptyState
-              icon={data.kind === 'queue' ? 'inboxes' : 'kanban'}
-              title={data.kind === 'queue' ? 'Nothing in the queue' : 'No work items yet'}
-              hint={canEdit ? 'Add the first with New. Work items can be linked from documents, canvases and chat.' : undefined}
-            />
-          ) : view === 'board' && sprints && !running ? (
-            <NoSprintRunning project={data} canEdit={canRunSprints} onOpenBacklog={() => setView('backlog')} />
-          ) : view === 'board' ? (
-            <div className="flex h-full flex-col">
-              {running && (
-                <SprintBar
-                  project={data}
-                  sprint={running}
-                  items={sprintItems}
-                  canEdit={canRunSprints}
-                  onOpenBacklog={() => setView('backlog')}
-                />
-              )}
-              <div className="min-h-0 flex-1">
-                <ProjectBoard
-                  project={data}
-                  items={onBoard}
-                  memberMap={memberMap}
-                  canEdit={canEdit && !filtering}
-                  activeItemId={itemId}
-                  onOpenItem={onOpenItem}
-                  onOpenBacklog={hasBacklog ? () => setView('backlog') : undefined}
-                />
-              </div>
-            </div>
-          ) : view === 'list' ? (
-            <ProjectTable
-              project={data}
-              items={filtered}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              sort={listSettings.sort}
-              onSort={(sort) => setListSettings({ ...listSettings, sort })}
-              groupBy={listSettings.groupBy}
-            />
-          ) : (
-            <ProjectWorkload
-              project={data}
-              items={worked}
-              members={members}
-              memberMap={memberMap}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-            />
-          )}
-        </div>
-      </div>
-
-      {itemId && (
-        <aside
-          className={cx(
-            'bg-[var(--color-canvas)]',
-            mobile
-              ? 'fixed inset-0 z-40 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
-              : 'w-[460px] max-w-[50%] shrink-0 border-l border-[var(--color-line)]',
-          )}
-        >
-          <WorkItemPanel
-            workspaceId={workspace.id}
-            itemId={itemId}
+        {creating && (
+          <NewWorkItemDialog
             project={data}
             members={members}
             selfId={user.id}
-            canEdit={canEdit}
-            canComment={canComment}
-            onClose={onCloseItem}
-            navigation={navigation}
+            initialStatusId={newStatusId}
+            // Filed from the board while a sprint runs, it joins that sprint so it shows up there.
+            initialSprintId={view === 'board' ? running?.id : undefined}
+            initialTypeId={creating.typeId ?? (view === 'epics' && !creating.epicId ? epicType?.id : undefined)}
+            initialEpicId={creating.epicId}
+            onClose={() => setCreating(null)}
+            onCreated={(id) => {
+              setCreating(null);
+              onOpenItem(id);
+            }}
           />
-        </aside>
-      )}
-
-      {creating && (
-        <NewWorkItemDialog
-          project={data}
-          members={members}
-          selfId={user.id}
-          initialStatusId={newStatusId}
-          // Filed from the board while a sprint runs, it joins that sprint so it shows up there.
-          initialSprintId={view === 'board' ? running?.id : undefined}
-          initialTypeId={creating.typeId ?? (view === 'epics' && !creating.epicId ? epicType?.id : undefined)}
-          initialEpicId={creating.epicId}
-          onClose={() => setCreating(null)}
-          onCreated={(id) => {
-            setCreating(null);
-            onOpenItem(id);
-          }}
-        />
-      )}
-    </div>
+        )}
+      </div>
+    </StatusCommentProvider>
   );
 }
 

@@ -21,6 +21,7 @@ import Icon from '../Icon';
 import { Popover } from '../Popover';
 import { useToast } from '../Toast';
 import { IconButton } from '../ui';
+import { useStatusComment } from './StatusComment';
 import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 /** What a dragged card carries, so nothing else can be dropped on a column. */
@@ -46,10 +47,13 @@ export function useMoveToBacklog(project: Project) {
   const update = useUpdateWorkItem(project.id);
   const all = useWorkItems(project.id);
   const toast = useToast();
+  const statusComment = useStatusComment(project);
 
-  function move(item: WorkItemSummary & { key: string }) {
+  async function move(item: WorkItemSummary & { key: string }) {
     const status = backlogTarget(project, item);
     if (!status) return;
+    const answer = await statusComment.confirm([{ key: item.key, statusId: item.statusId, toStatusId: status.id }]);
+    if (answer === false) return;
     const sprints = usesSprints(project);
     // The sprint backlog is everything in no sprint; without sprints, the backlog status.
     const queue = (all.data ?? []).filter(
@@ -66,7 +70,10 @@ export function useMoveToBacklog(project: Project) {
         position: positionBetween(undefined, first),
       },
       {
-        onSuccess: () => toast(`Moved ${item.key} to the backlog`),
+        onSuccess: () => {
+          toast(`Moved ${item.key} to the backlog`);
+          void statusComment.comment([item.id], answer);
+        },
         onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the work item', 'error'),
       },
     );
@@ -117,6 +124,7 @@ export default function ProjectBoard({
   const update = useUpdateWorkItem(project.id);
   const saveProject = useUpdateProject(project.workspaceId, project.id);
   const toast = useToast();
+  const statusComment = useStatusComment(project);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ cellKey: string; index: number; statusId: string | null } | null>(null);
   const [laneDrag, setLaneDrag] = useState<string | null>(null);
@@ -154,7 +162,7 @@ export default function ProjectBoard({
       e.preventDefault();
       setDragging(null);
       setDrop(null);
-      toBacklog.move(item);
+      void toBacklog.move(item);
     },
   };
   const railDragClass = (shown: boolean) =>
@@ -205,7 +213,7 @@ export default function ProjectBoard({
    * `chosen` is the status a drop box was dropped in, where the column offered
    * a choice; without one the column decides for itself.
    */
-  function moveTo(cell: BoardCellView, index: number, itemId: string, chosen: string | null) {
+  async function moveTo(cell: BoardCellView, index: number, itemId: string, chosen: string | null) {
     const current = items.find((item) => item.id === itemId);
     if (!current) return;
     const statusId = chosen ?? cellTarget(project, cell, current);
@@ -217,9 +225,14 @@ export default function ProjectBoard({
     const others = column.filter((item) => item.id !== itemId);
     const target = original !== -1 && index > original ? index - 1 : index;
     const position = positionBetween(others[target - 1]?.position, others[target]?.position);
+    const answer = await statusComment.confirm([{ key: current.key, statusId: current.statusId, toStatusId: statusId }]);
+    if (answer === false) return;
     update.mutate(
       { id: itemId, statusId: statusId === current.statusId ? undefined : statusId, position },
-      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the work item', 'error') },
+      {
+        onSuccess: () => void statusComment.comment([itemId], answer),
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the work item', 'error'),
+      },
     );
   }
 
@@ -458,7 +471,7 @@ export default function ProjectBoard({
                     onDropAt={(index, itemId, statusId) => {
                       setDrop(null);
                       setDragging(null);
-                      moveTo(cell, index, itemId, statusId);
+                      void moveTo(cell, index, itemId, statusId);
                     }}
                     laneKey={lane.key}
                     onLaneDragStart={() => setLaneDrag(lane.key)}

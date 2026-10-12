@@ -60,6 +60,7 @@ export default function ProjectSettings({
         <ItemTypeSection project={project} items={items} canEdit={canEdit} />
         <StatusSection project={project} items={items} canEdit={canEdit} />
         <WorkflowSection project={project} canEdit={canEdit} />
+        <StatusCommentSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
         {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
         <ArchiveSection project={project} canEdit={canEdit} />
@@ -154,6 +155,89 @@ export default function ProjectSettings({
  * Whether the board is run in sprints. Turning it off keeps the sprints and
  * what is in them, so turning it back on picks up where it was.
  */
+/** A setting that is on or off, with what it does and what it is doing now. */
+function SwitchRow({
+  icon,
+  label,
+  detail,
+  on,
+  disabled,
+  onToggle,
+}: {
+  icon: IconName;
+  label: string;
+  detail: string;
+  on: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-[var(--color-line)] px-3 py-2.5">
+      <Icon name={icon} className={cx('text-base', on ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-xs text-[var(--color-muted)]">{detail}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onToggle}
+        className={cx(
+          'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
+          on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-line)]',
+          disabled && 'cursor-not-allowed opacity-50',
+        )}
+      >
+        <span
+          aria-hidden
+          className={cx(
+            'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-[left] duration-150 motion-reduce:transition-none',
+            on ? 'left-[1.125rem]' : 'left-0.5',
+          )}
+        />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Whether moving work in the app asks for a comment saying why. Only the app
+ * asks: the API and AI connections move work as they always have.
+ */
+function StatusCommentSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
+  const update = useUpdateProject(project.workspaceId, project.id);
+  const toast = useToast();
+  const on = project.askStatusComment;
+  return (
+    <Section
+      title="Status comments"
+      hint="Ask whoever moves work here to say why, so the reason is kept on the item with the move."
+    >
+      <SwitchRow
+        icon="chat-left-quote"
+        label="Ask for a comment when work changes status"
+        on={on}
+        disabled={!canEdit || update.isPending}
+        detail={
+          on
+            ? 'On: every move to another status in the app asks for a comment, which can be skipped. Cancelling leaves the work where it was.'
+            : 'Off: work moves without asking.'
+        }
+        onToggle={() =>
+          update.mutate(
+            { askStatusComment: !on },
+            { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error') },
+          )
+        }
+      />
+    </Section>
+  );
+}
+
 function SprintSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
   const update = useUpdateProject(project.workspaceId, project.id);
   const toast = useToast();
@@ -166,49 +250,28 @@ function SprintSection({ project, canEdit }: { project: Project; canEdit: boolea
       title="Sprints"
       hint="Run the board in sprints: plan work into a sprint from the backlog, start it, and the board shows that sprint's work until it is completed."
     >
-      <div className="flex items-center gap-3 rounded-lg border border-[var(--color-line)] px-3 py-2.5">
-        <Icon name="arrow-repeat" className={cx('text-base', on ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')} />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium">Use sprints</span>
-          <span className="block text-xs text-[var(--color-muted)]">
-            {on
-              ? running
-                ? `${running.name} is running.`
-                : `${project.sprints.filter((s) => s.state === 'planned').length} planned, none running.`
-              : 'Off: the board shows all planned work. Turning sprints off later keeps them for when they are turned back on.'}
-          </span>
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label="Use sprints"
-          disabled={disabled}
-          onClick={() =>
-            update.mutate(
-              { sprintsEnabled: !on },
-              {
-                onSuccess: () => toast(on ? 'Sprints turned off' : 'Sprints turned on. Plan the first one in the backlog.'),
-                onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error'),
-              },
-            )
-          }
-          className={cx(
-            'relative h-5 w-9 shrink-0 rounded-full transition-colors',
-            'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
-            on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-line)]',
-            disabled && 'cursor-not-allowed opacity-50',
-          )}
-        >
-          <span
-            aria-hidden
-            className={cx(
-              'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-[left] duration-150 motion-reduce:transition-none',
-              on ? 'left-[1.125rem]' : 'left-0.5',
-            )}
-          />
-        </button>
-      </div>
+      <SwitchRow
+        icon="arrow-repeat"
+        label="Use sprints"
+        on={on}
+        disabled={disabled}
+        detail={
+          on
+            ? running
+              ? `${running.name} is running.`
+              : `${project.sprints.filter((s) => s.state === 'planned').length} planned, none running.`
+            : 'Off: the board shows all planned work. Turning sprints off later keeps them for when they are turned back on.'
+        }
+        onToggle={() =>
+          update.mutate(
+            { sprintsEnabled: !on },
+            {
+              onSuccess: () => toast(on ? 'Sprints turned off' : 'Sprints turned on. Plan the first one in the backlog.'),
+              onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error'),
+            },
+          )
+        }
+      />
     </Section>
   );
 }

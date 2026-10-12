@@ -47,6 +47,7 @@ import { ConfirmDialog } from '../Modal';
 import { useToast } from '../Toast';
 import { Button, EmptyState, IconButton, Spinner } from '../ui';
 import { useMoveToBacklog } from './ProjectBoard';
+import { useStatusComment } from './StatusComment';
 import ReferenceEditor from './ReferenceEditor';
 import WorkItemAttachments from './WorkItemAttachments';
 import {
@@ -170,6 +171,7 @@ function ItemDetail({
   const remove = useDeleteWorkItem(project.id);
   const siblings = useWorkItems(project.id);
   const toBacklog = useMoveToBacklog(project);
+  const statusComment = useStatusComment(project);
   const publicOrigin = usePublicOrigin();
   const toast = useToast();
   const [title, setTitle] = useState(item.title);
@@ -189,11 +191,21 @@ function ItemDetail({
   const status = project.statuses.find((s) => s.id === item.statusId);
   const done = status?.category === 'done';
 
-  function patch(changes: UpdateWorkItemInput) {
+  function patch(changes: UpdateWorkItemInput, onSaved?: () => void) {
     update.mutate(
       { id: item.id, ...changes },
-      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the work item', 'error') },
+      {
+        onSuccess: onSaved,
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the work item', 'error'),
+      },
     );
+  }
+
+  /** Moves it to another status, saying why first when the project asks. */
+  async function changeStatus(statusId: string) {
+    const answer = await statusComment.confirm([{ key: item.key, statusId: item.statusId, toStatusId: statusId }]);
+    if (answer === false) return;
+    patch({ statusId }, () => void statusComment.comment([item.id], answer));
   }
 
   /**
@@ -257,7 +269,7 @@ function ItemDetail({
         )}
         {/* Dragging to the backlog rail needs a mouse; this is the same move by touch or keyboard. */}
         {canEdit && !done && !item.archivedAt && !isEpicType(project, item.typeId) && toBacklog.target(item) && (
-          <IconButton label="Move to backlog" onClick={() => toBacklog.move(item)}>
+          <IconButton label="Move to backlog" onClick={() => void toBacklog.move(item)}>
             <Icon name="inbox" />
           </IconButton>
         )}
@@ -304,7 +316,7 @@ function ItemDetail({
             <select
               value={item.statusId}
               disabled={!canEdit}
-              onChange={(e) => patch({ statusId: e.target.value })}
+              onChange={(e) => void changeStatus(e.target.value)}
               className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
               aria-label="Status"
             >

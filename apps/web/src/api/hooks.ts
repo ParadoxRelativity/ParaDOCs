@@ -961,6 +961,7 @@ export function useUpdateProject(workspaceId: string, projectId: string) {
       archived?: boolean;
       boardLayout?: BoardLayout;
       sprintsEnabled?: boolean;
+      askStatusComment?: boolean;
       defaultTypeId?: string;
       archiveAfterDays?: number | null;
     }) => api.patch<Project>(`/projects/${projectId}`, patch),
