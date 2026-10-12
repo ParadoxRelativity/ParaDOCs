@@ -5,6 +5,7 @@ import {
   WORK_ITEM_LINK_OPTIONS,
   canHaveEpic,
   isEpicType,
+  isOpenItem,
   itemTypeOf,
   rolesForType,
   canMoveTo,
@@ -367,11 +368,14 @@ function ItemDetail({
                 aria-label="Epic"
               >
                 <option value="">None</option>
+                {/* Open epics, and a finished one only where it already is. */}
                 {(siblings.data ?? [])
                   .filter((other) => isEpicType(project, other.typeId))
+                  .filter((epic) => isOpenItem(project, epic) || epic.id === item.epicId)
                   .map((epic) => (
                     <option key={epic.id} value={epic.id}>
                       {epic.key} {epic.title}
+                      {isOpenItem(project, epic) ? '' : ' (done)'}
                     </option>
                   ))}
               </select>

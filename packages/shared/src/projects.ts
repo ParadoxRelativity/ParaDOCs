@@ -724,6 +724,18 @@ export function isEpicType(project: Pick<Project, 'itemTypes'>, typeId: string):
 }
 
 /**
+ * Whether an item is still being worked: not in a done status, and not
+ * archived. Pickers offer only open work; the API still takes finished work.
+ */
+export function isOpenItem(
+  project: Pick<Project, 'statuses'>,
+  item: Pick<WorkItemSummary, 'statusId' | 'archivedAt'>,
+): boolean {
+  if (item.archivedAt) return false;
+  return project.statuses.find((s) => s.id === item.statusId)?.category !== 'done';
+}
+
+/**
  * Whether an item of this type can be put under an epic. Anything but an
  * epic-kind type can: epics do not nest.
  */

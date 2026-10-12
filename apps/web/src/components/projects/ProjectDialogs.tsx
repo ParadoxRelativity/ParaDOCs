@@ -3,6 +3,7 @@ import {
   WORK_ITEM_PRIORITIES,
   canHaveEpic,
   isEpicType,
+  isOpenItem,
   rolesForType,
   suggestProjectKey,
   type Project,
@@ -186,7 +187,9 @@ export function NewWorkItemDialog({
   const memberMap = useMemberMap(members);
   const [title, setTitle] = useState('');
   const items = useWorkItems(project.id);
-  const epics = (items.data ?? []).filter((item) => isEpicType(project, item.typeId));
+  const epics = (items.data ?? []).filter(
+    (item) => isEpicType(project, item.typeId) && (isOpenItem(project, item) || item.id === initialEpicId),
+  );
   const [type, setType] = useState(initialTypeId ?? project.defaultTypeId);
   const typeRoles = rolesForType(project, type);
   const [epicId, setEpicId] = useState(initialEpicId ?? '');

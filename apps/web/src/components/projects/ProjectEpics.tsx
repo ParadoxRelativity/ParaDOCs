@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import {
   isEpicType,
+  isOpenItem,
   itemTypeOf,
   usesSprints,
   type Project,
@@ -52,7 +53,6 @@ export default function ProjectEpics({
   const [folded, setFolded] = useLocalStorage<string[]>(`paradocs.epicsFolded.${project.id}`, []);
 
   const statuses = useMemo(() => new Map(project.statuses.map((s) => [s.id, s])), [project.statuses]);
-  const isDone = (item: WorkItemSummary) => statuses.get(item.statusId)?.category === 'done';
   const isEpic = (item: WorkItemSummary) => isEpicType(project, item.typeId);
   const epicType = project.itemTypes.find((t) => t.epic);
 
@@ -66,7 +66,7 @@ export default function ProjectEpics({
         const list = children.get(item.epicId);
         if (list) list.push(item);
         else children.set(item.epicId, [item]);
-      } else if (statuses.get(item.statusId)?.category !== 'done') {
+      } else if (isOpenItem(project, item)) {
         unassigned.push(item);
       }
     }
@@ -87,7 +87,7 @@ export default function ProjectEpics({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, visible, filtering, statuses, showCompleted, project.itemTypes]);
 
-  const openEpics = items.filter((item) => isEpic(item) && !isDone(item));
+  const openEpics = items.filter((item) => isEpic(item) && isOpenItem(project, item));
 
   function toggle(key: string) {
     setFolded((current) => (current.includes(key) ? current.filter((k) => k !== key) : [...current, key]));
