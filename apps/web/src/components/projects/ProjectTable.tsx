@@ -8,10 +8,11 @@ import {
   type WorkspaceMember,
 } from '@paradocs/shared';
 import { useUpdateWorkItem } from '../../api/hooks';
+import { useIsMobile } from '../../lib/mobile';
 import { cx, formatRelative } from '../../lib/util';
 import Icon from '../Icon';
 import { useToast } from '../Toast';
-import { BlockedBadge, PeopleStack, PriorityIcon, TypeIcon, formatDue, isOverdue } from './projectUi';
+import { BlockedBadge, PRIORITY, PeopleStack, PriorityIcon, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 export interface TableSort {
   key: WorkItemSort;
@@ -41,7 +42,9 @@ export interface ArchiveRows {
 
 /**
  * Work items as rows. Any column header re-sorts, and the status can be
- * changed without opening the item.
+ * changed without opening the item. On a phone the title gets the width:
+ * only the key, title, status and the first role keep a column, and the rest
+ * goes in a line under the title.
  *
  * All items passes `archive` to list archived work beneath the rest, and
  * controls the order itself, since the server orders the archive.
@@ -72,6 +75,8 @@ export default function ProjectTable({
 }) {
   const update = useUpdateWorkItem(project.id);
   const toast = useToast();
+  const mobile = useIsMobile();
+  const columns = mobile ? 4 : 8;
   const [ownSort, setOwnSort] = useState<TableSort>(() => defaultSort(project));
   const sort = controlledSort ?? ownSort;
   const setSort = onSort ?? setOwnSort;
@@ -125,6 +130,11 @@ export default function ProjectTable({
   function row(item: WorkItemSummary) {
     const status = statusOf(item);
     const done = status?.category === 'done';
+    const comments = item.commentCount > 0 && (
+      <span className={cx('text-xs text-[var(--color-muted)] no-underline', !mobile && 'ml-2')}>
+        <Icon name="chat-left-text" className="text-[10px]" /> {item.commentCount}
+      </span>
+    );
     return (
       <tr
         key={item.id}
@@ -134,24 +144,40 @@ export default function ProjectTable({
           item.id === activeItemId ? 'bg-[var(--color-accent-soft)]' : 'hover:bg-[var(--color-surface)]',
         )}
       >
-        <td className="whitespace-nowrap py-1.5 pl-4 pr-2 text-xs text-[var(--color-muted)]">
-          <span className="inline-flex items-center gap-1.5">
-            <TypeIcon type={itemTypeOf(project, item.typeId)} />
-            {item.key}
-            {!done && <BlockedBadge count={item.blockedBy} />}
-            {item.archivedAt && (
-              <span title={`Archived ${formatRelative(item.archivedAt)}`} className="inline-flex items-center">
-                <Icon name="archive" className="text-[10px]" />
-                <span className="sr-only">Archived</span>
-              </span>
-            )}
+        <td
+          className={cx('whitespace-nowrap py-1.5 text-xs text-[var(--color-muted)]', mobile ? 'overflow-hidden pl-3 pr-1 align-top' : 'pl-4 pr-2')}
+        >
+          {/* On a phone the key goes under its type and badges, to leave the title the width. */}
+          <span className={cx('inline-flex gap-1.5', mobile ? 'flex-col-reverse items-start gap-0.5' : 'items-center')}>
+            {mobile && <span>{item.key}</span>}
+            <span className="inline-flex items-center gap-1.5">
+              <TypeIcon type={itemTypeOf(project, item.typeId)} />
+              {!mobile && item.key}
+              {!done && <BlockedBadge count={item.blockedBy} />}
+              {item.archivedAt && (
+                <span title={`Archived ${formatRelative(item.archivedAt)}`} className="inline-flex items-center">
+                  <Icon name="archive" className="text-[10px]" />
+                  <span className="sr-only">Archived</span>
+                </span>
+              )}
+            </span>
           </span>
         </td>
-        <td className={cx('max-w-0 truncate px-2 py-1.5', done && 'text-[var(--color-muted)] line-through')}>
-          {item.title}
-          {item.commentCount > 0 && (
-            <span className="ml-2 text-xs text-[var(--color-muted)] no-underline">
-              <Icon name="chat-left-text" className="text-[10px]" /> {item.commentCount}
+        <td className={cx('px-2 py-1.5', mobile ? 'break-words' : 'max-w-0 truncate')}>
+          <span className={cx(mobile && 'line-clamp-3', done && 'text-[var(--color-muted)] line-through')}>{item.title}</span>
+          {!mobile && comments}
+          {mobile && (
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-[var(--color-muted)]">
+              {item.priority !== 'none' && (
+                <span className="inline-flex items-center gap-1">
+                  <PriorityIcon priority={item.priority} />
+                  {PRIORITY[item.priority].label}
+                </span>
+              )}
+              {item.dueDate && <span className={cx(isOverdue(item.dueDate, done) && 'text-red-500')}>Due {formatDue(item.dueDate)}</span>}
+              {item.estimate !== null && <span className="tabular-nums">Est. {item.estimate}</span>}
+              <span>{formatRelative(project.kind === 'queue' ? item.createdAt : item.updatedAt)}</span>
+              {comments}
             </span>
           )}
         </td>
@@ -176,23 +202,29 @@ export default function ProjectTable({
             ))}
           </select>
         </td>
-        <td className="px-2 py-1.5">
-          <PriorityIcon priority={item.priority} />
-        </td>
-        <td className="px-2 py-1.5">
+        {!mobile && (
+          <td className="px-2 py-1.5">
+            <PriorityIcon priority={item.priority} />
+          </td>
+        )}
+        <td className={cx('py-1.5', mobile ? 'pl-1 pr-3' : 'px-2')}>
           <PeopleStack
             userIds={primaryRole ? (item.roles[primaryRole.id] ?? []) : []}
             names={primaryRole?.freeForm ? (item.roleNames[primaryRole.id] ?? []) : []}
             members={memberMap}
           />
         </td>
-        <td className={cx('whitespace-nowrap px-2 py-1.5 text-xs', isOverdue(item.dueDate, done) ? 'text-red-500' : 'text-[var(--color-muted)]')}>
-          {item.dueDate ? formatDue(item.dueDate) : ''}
-        </td>
-        <td className="px-2 py-1.5 text-xs tabular-nums text-[var(--color-muted)]">{item.estimate ?? ''}</td>
-        <td className="whitespace-nowrap py-1.5 pl-2 pr-4 text-xs text-[var(--color-muted)]">
-          {formatRelative(project.kind === 'queue' ? item.createdAt : item.updatedAt)}
-        </td>
+        {!mobile && (
+          <>
+            <td className={cx('whitespace-nowrap px-2 py-1.5 text-xs', isOverdue(item.dueDate, done) ? 'text-red-500' : 'text-[var(--color-muted)]')}>
+              {item.dueDate ? formatDue(item.dueDate) : ''}
+            </td>
+            <td className="px-2 py-1.5 text-xs tabular-nums text-[var(--color-muted)]">{item.estimate ?? ''}</td>
+            <td className="whitespace-nowrap py-1.5 pl-2 pr-4 text-xs text-[var(--color-muted)]">
+              {formatRelative(project.kind === 'queue' ? item.createdAt : item.updatedAt)}
+            </td>
+          </>
+        )}
       </tr>
     );
   }
@@ -202,18 +234,29 @@ export default function ProjectTable({
 
   return (
     <div className="scroll-thin h-full overflow-auto">
-      <table className="w-full min-w-[760px] border-collapse text-sm">
+      <table className={cx('w-full border-collapse text-sm', mobile ? 'table-fixed' : 'min-w-[760px]')}>
         <thead className="sticky top-0 z-10 bg-[var(--color-canvas)] text-left text-xs text-[var(--color-muted)] shadow-[inset_0_-1px_0_var(--color-line)]">
-          <tr>
-            {header('key', 'Key', 'w-24 pl-4')}
-            {header('title', 'Title')}
-            {header('status', 'Status', 'w-40')}
-            {header('priority', 'Priority', 'w-24')}
-            <th className="w-32 px-2 py-1.5 font-medium">{primaryRole?.name ?? ''}</th>
-            {header('due', 'Due', 'w-24')}
-            {header('estimate', 'Est.', 'w-16')}
-            {header(project.kind === 'queue' ? 'created' : 'updated', project.kind === 'queue' ? 'Opened' : 'Updated', 'w-28 pr-4')}
-          </tr>
+          {mobile ? (
+            <tr>
+              {header('key', 'Key', 'w-[4.5rem] pl-3')}
+              {header('title', 'Title')}
+              {header('status', 'Status', 'w-20')}
+              <th className="w-10 py-1.5 pl-1 pr-3 font-medium">
+                <span className="sr-only">{primaryRole?.name ?? ''}</span>
+              </th>
+            </tr>
+          ) : (
+            <tr>
+              {header('key', 'Key', 'w-24 pl-4')}
+              {header('title', 'Title')}
+              {header('status', 'Status', 'w-40')}
+              {header('priority', 'Priority', 'w-24')}
+              <th className="w-32 px-2 py-1.5 font-medium">{primaryRole?.name ?? ''}</th>
+              {header('due', 'Due', 'w-24')}
+              {header('estimate', 'Est.', 'w-16')}
+              {header(project.kind === 'queue' ? 'created' : 'updated', project.kind === 'queue' ? 'Opened' : 'Updated', 'w-28 pr-4')}
+            </tr>
+          )}
         </thead>
         <tbody>
           {rows.map(row)}
@@ -221,7 +264,7 @@ export default function ProjectTable({
             <>
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={columns}
                   className="bg-[var(--color-surface)] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]"
                 >
                   <Icon name="archive" /> Archived{' '}
@@ -229,7 +272,7 @@ export default function ProjectTable({
                 </td>
               </tr>
               {archive.items.map(row)}
-              <ArchiveFooter archive={archive} />
+              <ArchiveFooter archive={archive} columns={columns} />
             </>
           )}
         </tbody>
@@ -261,7 +304,7 @@ export default function ProjectTable({
  * The end of the archived rows: the next page is fetched as this comes into
  * view, with a button for doing it by hand, and what went wrong if it failed.
  */
-function ArchiveFooter({ archive }: { archive: ArchiveRows }) {
+function ArchiveFooter({ archive, columns }: { archive: ArchiveRows; columns: number }) {
   const ref = useRef<HTMLTableRowElement>(null);
   const { hasMore, loadingMore, failed, onLoadMore } = archive;
 
@@ -279,7 +322,7 @@ function ArchiveFooter({ archive }: { archive: ArchiveRows }) {
   if (!archive.loading && !hasMore && !failed) return null;
   return (
     <tr ref={ref}>
-      <td colSpan={8} className="px-4 py-3 text-center text-xs text-[var(--color-muted)]">
+      <td colSpan={columns} className="px-4 py-3 text-center text-xs text-[var(--color-muted)]">
         {archive.loading || loadingMore ? (
           <span className="inline-flex items-center gap-1.5">
             <Icon name="hourglass-split" /> Loading archived work…
