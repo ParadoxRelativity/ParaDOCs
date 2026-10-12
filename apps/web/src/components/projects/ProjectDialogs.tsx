@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
   canHaveEpic,
+  defaultTemplateId,
   isEpicType,
   isOpenItem,
   rolesForType,
@@ -11,7 +12,7 @@ import {
   type WorkItemPriority,
   type WorkspaceMember,
 } from '@paradocs/shared';
-import { useCreateProject, useCreateWorkItem, useWorkItems } from '../../api/hooks';
+import { useCreateProject, useCreateWorkItem, useProjectTemplates, useWorkItems } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import { Modal } from '../Modal';
@@ -53,6 +54,10 @@ export function NewProjectDialog({
   const [keyEdited, setKeyEdited] = useState(false);
   const [icon, setIcon] = useState('');
   const [description, setDescription] = useState('');
+  const templates = (useProjectTemplates(workspaceId).data ?? []).filter((t) => t.kind === kind);
+  // Each kind starts on its basic template; a choice for one kind is not kept for the other.
+  const [chosen, setChosen] = useState<Partial<Record<ProjectKind, string>>>({});
+  const templateId = chosen[kind] ?? defaultTemplateId(kind);
 
   const shownKey = keyEdited ? key : name.trim() ? suggestProjectKey(name) : '';
   const validKey = /^[A-Z][A-Z0-9]{1,9}$/.test(shownKey);
@@ -61,7 +66,7 @@ export function NewProjectDialog({
     e?.preventDefault();
     if (!name.trim() || !validKey) return;
     try {
-      const project = await create.mutateAsync({ name: name.trim(), key: shownKey, kind, icon: icon.trim() || null, description });
+      const project = await create.mutateAsync({ name: name.trim(), key: shownKey, kind, icon: icon.trim() || null, description, templateId });
       onCreated(project);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not create it', 'error');
@@ -142,6 +147,34 @@ export function NewProjectDialog({
         <p className="text-xs text-[var(--color-muted)]">
           Work items are numbered after the key: {validKey ? `${shownKey}-1, ${shownKey}-2` : 'two to ten letters or digits, starting with a letter'}.
         </p>
+        {templates.length > 1 && (
+          <label className="block text-xs text-[var(--color-muted)]">
+            Start from
+            <select value={templateId} onChange={(e) => setChosen({ ...chosen, [kind]: e.target.value })} className={cx(FIELD, 'mt-1')}>
+              <optgroup label="Built in">
+                {templates
+                  .filter((t) => t.builtIn)
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+              </optgroup>
+              {templates.some((t) => !t.builtIn) && (
+                <optgroup label="Saved in this workspace">
+                  {templates
+                    .filter((t) => !t.builtIn)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                </optgroup>
+              )}
+            </select>
+            <span className="mt-1 block">{templates.find((t) => t.id === templateId)?.description}</span>
+          </label>
+        )}
         <label className="block text-xs text-[var(--color-muted)]">
           Description
           <textarea value={description} rows={2} onChange={(e) => setDescription(e.target.value)} className={cx(FIELD, 'mt-1 resize-y')} />

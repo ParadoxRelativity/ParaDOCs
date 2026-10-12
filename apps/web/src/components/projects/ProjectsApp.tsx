@@ -39,6 +39,7 @@ import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
 import { FilterBar, useFilterMatcher, useProjectFilter } from './ProjectFilters';
 import ProjectSettings from './ProjectSettings';
 import { StatusCommentProvider } from './StatusComment';
+import { TemplateList } from './ProjectTemplates';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
 import ProjectTable, { defaultListSettings, type ListSettings } from './ProjectTable';
 import ProjectWorkload from './ProjectWorkload';
@@ -727,6 +728,7 @@ function MyWork({
             </div>
           </>
         )}
+        <TemplateList workspaceId={workspace.id} />
       </div>
 
       {creating && (

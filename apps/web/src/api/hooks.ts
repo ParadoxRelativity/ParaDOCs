@@ -71,6 +71,7 @@ import type {
   Project,
   ProjectRole,
   ProjectRule,
+  ProjectTemplateSummary,
   ProjectSprint,
   ProjectStatus,
   ProjectSummary,
@@ -949,6 +950,36 @@ export function useCreateProject(workspaceId: string) {
       invalidateProject(qc, workspaceId, project.id);
     },
   });
+}
+
+/** The templates a project can start from: the built-ins, then those the workspace saved. */
+export function useProjectTemplates(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['projectTemplates', workspaceId] as const,
+    queryFn: () => api.get<ProjectTemplateSummary[]>(`/workspaces/${workspaceId}/project-templates`),
+    enabled: !!workspaceId,
+  });
+}
+
+/** Saving a project's setup as a template, and renaming or deleting saved ones. */
+export function useTemplateActions(workspaceId: string) {
+  const qc = useQueryClient();
+  const settle = () => void qc.invalidateQueries({ queryKey: ['projectTemplates', workspaceId] });
+  return {
+    save: useMutation({
+      mutationFn: ({ projectId, ...input }: { projectId: string; name: string; description: string }) =>
+        api.post<{ id: string }>(`/projects/${projectId}/template`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; description?: string }) => api.patch(`/project-templates/${id}`, patch),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-templates/${id}`),
+      onSuccess: settle,
+    }),
+  };
 }
 
 export function useUpdateProject(workspaceId: string, projectId: string) {

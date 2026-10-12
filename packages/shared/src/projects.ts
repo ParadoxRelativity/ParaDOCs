@@ -932,6 +932,8 @@ export const createProjectSchema = z.object({
   kind: z.enum(['project', 'queue']).default('project'),
   description: z.string().max(4000).default(''),
   icon: z.string().trim().max(8).nullish(),
+  /** A built-in template (`builtin:scrum`) or a saved one's id. Left out: the basic project or queue. */
+  templateId: z.string().max(64).optional(),
 });
 
 /**

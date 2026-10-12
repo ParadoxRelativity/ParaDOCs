@@ -1,8 +1,6 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
-  DEFAULT_ARCHIVE_DAYS,
-  STANDARD_ITEM_TYPES,
   WORK_ITEM_LINK_LABELS,
   canMoveTo,
   completeSprintSchema,
@@ -23,6 +21,14 @@ import {
   MAX_RULES,
   type RuleAction,
   type WorkItemPriority,
+  BUILT_IN_TEMPLATES,
+  defaultTemplateId,
+  projectTemplateConfigSchema,
+  saveTemplateSchema,
+  templateFromProject,
+  updateTemplateSchema,
+  type ProjectTemplateConfig,
+  type ProjectTemplateSummary,
   type WorkItemFilter,
   isSymmetricLink,
   ARCHIVE_PAGE_SIZE,
@@ -122,46 +128,6 @@ import { grants } from '../lib/roles.js';
  */
 
 type Queryable = Pick<DbClient, 'query'>;
-
-const DEFAULTS: Record<
-  ProjectKind,
-  {
-    statuses: { name: string; category: StatusCategory; color: string }[];
-    roles: { name: string; multiple: boolean; freeForm?: boolean; fillWithCreator?: boolean }[];
-  }
-> = {
-  // New work lands in the backlog, and goes on the board once someone plans it.
-  project: {
-    statuses: [
-      { name: 'Backlog', category: 'backlog', color: '#8f8f9c' },
-      { name: 'To do', category: 'todo', color: '#6366f1' },
-      { name: 'In progress', category: 'active', color: '#0ea5e9' },
-      { name: 'In review', category: 'active', color: '#8b5cf6' },
-      { name: 'Done', category: 'done', color: '#10b981' },
-    ],
-    roles: [
-      { name: 'Assignee', multiple: false },
-      { name: 'Reviewer', multiple: true },
-      { name: 'Reporter', multiple: false, fillWithCreator: true },
-      { name: 'Watcher', multiple: true, fillWithCreator: true },
-    ],
-  },
-  queue: {
-    statuses: [
-      { name: 'Open', category: 'todo', color: '#f59e0b' },
-      { name: 'In progress', category: 'active', color: '#0ea5e9' },
-      { name: 'Waiting', category: 'active', color: '#8f8f9c' },
-      { name: 'Resolved', category: 'done', color: '#10b981' },
-    ],
-    roles: [
-      { name: 'Assignee', multiple: false },
-      // Whoever asked is often a customer rather than a colleague, so the name
-      // can be typed in when there is no account to point at.
-      { name: 'Requester', multiple: false, freeForm: true, fillWithCreator: true },
-      { name: 'Watcher', multiple: true, fillWithCreator: true },
-    ],
-  },
-};
 
 /** A project as `user`, with `role`, sees it. The table must be aliased `p`. */
 function projectColumns(user: string, role: string): string {
@@ -594,6 +560,158 @@ function assertRoleFits(
   }
 }
 
+/**
+ * Makes a project from a template, inside the transaction it is given: the
+ * project, then each part of its setup, every key the template uses turned
+ * into the new part's id. A rule naming someone who is no longer a member
+ * loses that action. Every project is made here, from the basic project or
+ * queue when no other template was chosen.
+ */
+async function createFromTemplate(
+  client: Queryable,
+  workspaceId: string,
+  input: { key: string; name: string; description: string; icon: string | null },
+  config: ProjectTemplateConfig,
+  userId: string,
+): Promise<string> {
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO projects (workspace_id, kind, key, name, description, icon, created_by, archive_after_days,
+                           sprints_enabled, ask_status_comment)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+    [
+      workspaceId,
+      config.kind,
+      input.key,
+      input.name,
+      input.description,
+      input.icon,
+      userId,
+      config.archiveAfterDays,
+      config.kind === 'project' && config.sprintsEnabled,
+      config.askStatusComment,
+    ],
+  );
+  const projectId = rows[0].id;
+
+  /** Inserts rows in order and maps each one's key to its new id. */
+  async function insertKeyed(keys: string[], sql: string, params: unknown[]): Promise<Map<string, string>> {
+    if (keys.length === 0) return new Map();
+    const { rows: made } = await client.query<{ id: string; ord: string }>(sql, params);
+    return new Map(made.map((row) => [keys[Number(row.ord) - 1], row.id]));
+  }
+
+  const statusIds = await insertKeyed(
+    config.statuses.map((s) => s.key),
+    `INSERT INTO project_statuses (project_id, name, category, color, position)
+     SELECT $1, s.name, s.category, s.color, s.ord
+       FROM unnest($2::text[], $3::text[], $4::text[]) WITH ORDINALITY AS s(name, category, color, ord)
+     RETURNING id, position::text AS ord`,
+    [projectId, config.statuses.map((s) => s.name), config.statuses.map((s) => s.category), config.statuses.map((s) => s.color)],
+  );
+  const roleIds = await insertKeyed(
+    config.roles.map((r) => r.key),
+    `INSERT INTO project_roles (project_id, name, multiple, free_form, fill_with_creator, position)
+     SELECT $1, r.name, r.multiple, r.free_form, r.fill_with_creator, r.ord
+       FROM unnest($2::text[], $3::boolean[], $4::boolean[], $5::boolean[]) WITH ORDINALITY AS r(name, multiple, free_form, fill_with_creator, ord)
+     RETURNING id, position::text AS ord`,
+    [
+      projectId,
+      config.roles.map((r) => r.name),
+      config.roles.map((r) => r.multiple),
+      config.roles.map((r) => r.freeForm),
+      config.roles.map((r) => r.fillWithCreator),
+    ],
+  );
+  const workflowIds = await insertKeyed(
+    config.workflows.map((w) => w.key),
+    `INSERT INTO project_workflows (project_id, name, position)
+     SELECT $1, w.name, w.ord FROM unnest($2::text[]) WITH ORDINALITY AS w(name, ord)
+     RETURNING id, position::text AS ord`,
+    [projectId, config.workflows.map((w) => w.name)],
+  );
+  const transitions = config.workflows.flatMap((w) =>
+    Object.entries(w.transitions).flatMap(([from, tos]) =>
+      tos.map((to) => [workflowIds.get(w.key)!, statusIds.get(from)!, statusIds.get(to)!] as const),
+    ),
+  );
+  if (transitions.length > 0) {
+    await client.query(
+      `INSERT INTO project_workflow_transitions (workflow_id, from_status, to_status)
+       SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[]) ON CONFLICT DO NOTHING`,
+      [transitions.map((t) => t[0]), transitions.map((t) => t[1]), transitions.map((t) => t[2])],
+    );
+  }
+  const typeIds = await insertKeyed(
+    config.itemTypes.map((t) => t.key),
+    `INSERT INTO project_item_types (project_id, name, icon, color, epic, workflow_id, position)
+     SELECT $1, t.name, t.icon, t.color, t.epic, t.workflow_id, t.ord
+       FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::uuid[]) WITH ORDINALITY AS t(name, icon, color, epic, workflow_id, ord)
+     RETURNING id, position::text AS ord`,
+    [
+      projectId,
+      config.itemTypes.map((t) => t.name),
+      config.itemTypes.map((t) => t.icon),
+      config.itemTypes.map((t) => t.color),
+      config.itemTypes.map((t) => t.epic),
+      config.itemTypes.map((t) => (t.workflow ? workflowIds.get(t.workflow)! : null)),
+    ],
+  );
+  const typeRoles = config.itemTypes.flatMap((t) => t.roles.map((r) => [typeIds.get(t.key)!, roleIds.get(r)!] as const));
+  if (typeRoles.length > 0) {
+    await client.query(
+      `INSERT INTO project_item_type_roles (type_id, role_id) SELECT * FROM unnest($1::uuid[], $2::uuid[]) ON CONFLICT DO NOTHING`,
+      [typeRoles.map((t) => t[0]), typeRoles.map((t) => t[1])],
+    );
+  }
+  const boardLayout = {
+    lanes: config.boardLayout.lanes.map((lane) => ({
+      cells: lane.cells.map((cell) => ({ statusIds: cell.statusIds.map((k) => statusIds.get(k)!), name: cell.name })),
+    })),
+  };
+  await client.query('UPDATE projects SET default_type_id = $2, board_layout = $3 WHERE id = $1', [
+    projectId,
+    typeIds.get(config.defaultType)!,
+    JSON.stringify(boardLayout),
+  ]);
+
+  const { rows: memberRows } = await client.query<{ user_id: string }>('SELECT user_id FROM workspace_members WHERE workspace_id = $1', [
+    workspaceId,
+  ]);
+  const members = new Set(memberRows.map((m) => m.user_id));
+  const rules = config.rules
+    .map((rule) => ({
+      ...rule,
+      actions: rule.actions
+        .filter((a) => a.kind !== 'role' || a.source?.kind !== 'member' || members.has(a.source.userId))
+        .map((a): RuleAction =>
+          a.kind === 'priority'
+            ? a
+            : {
+                ...a,
+                roleId: roleIds.get(a.roleId)!,
+                source: a.source?.kind === 'role' ? { kind: 'role', roleId: roleIds.get(a.source.roleId)! } : a.source,
+              },
+        ),
+    }))
+    .filter((rule) => rule.actions.length > 0);
+  for (const [index, rule] of rules.entries()) {
+    await client.query(
+      `INSERT INTO project_rules (project_id, name, enabled, position, status_id, type_ids, actions)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        projectId,
+        rule.name,
+        rule.enabled,
+        index + 1,
+        statusIds.get(rule.status)!,
+        rule.types ? rule.types.map((k) => typeIds.get(k)!) : null,
+        JSON.stringify(rule.actions),
+      ],
+    );
+  }
+  return projectId;
+}
+
 /** Who a rule's changes put in a role, to be told once the move is saved. */
 interface RuleNotice {
   itemId: string;
@@ -973,75 +1091,18 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const kind = input.kind ?? 'project';
     await assertWorkspaceAccess(req, req.params.id, projectPermission(kind, 'create'), 'projects');
     await assertKeyFree(req.params.id, input.key);
-    const defaults = DEFAULTS[kind];
+    const config = await templateConfig(req.params.id, input.templateId ?? defaultTemplateId(kind));
+    if (config.kind !== kind) throw badRequest(`That template is for a ${config.kind}`);
 
-    const id = await transaction(async (client) => {
-      const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO projects (workspace_id, kind, key, name, description, icon, created_by, archive_after_days)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [
-          req.params.id,
-          kind,
-          input.key,
-          input.name,
-          input.description ?? '',
-          input.icon ?? null,
-          req.user!.id,
-          DEFAULT_ARCHIVE_DAYS[kind],
-        ],
-      );
-      const projectId = rows[0].id;
-      await client.query(
-        `INSERT INTO project_statuses (project_id, name, category, color, position)
-         SELECT $1, s.name, s.category, s.color, s.position
-           FROM unnest($2::text[], $3::text[], $4::text[]) WITH ORDINALITY AS s(name, category, color, position)`,
-        [
-          projectId,
-          defaults.statuses.map((s) => s.name),
-          defaults.statuses.map((s) => s.category),
-          defaults.statuses.map((s) => s.color),
-        ],
-      );
-      await client.query(
-        `INSERT INTO project_roles (project_id, name, multiple, free_form, fill_with_creator, position)
-         SELECT $1, r.name, r.multiple, r.free_form, r.fill_with_creator, r.position
-           FROM unnest($2::text[], $3::boolean[], $4::boolean[], $5::boolean[])
-                WITH ORDINALITY AS r(name, multiple, free_form, fill_with_creator, position)`,
-        [
-          projectId,
-          defaults.roles.map((r) => r.name),
-          defaults.roles.map((r) => r.multiple),
-          defaults.roles.map((r) => r.freeForm ?? false),
-          defaults.roles.map((r) => r.fillWithCreator ?? false),
-        ],
-      );
-      // The five standard types, each taking every role.
-      const { rows: types } = await client.query<{ id: string; name: string }>(
-        `INSERT INTO project_item_types (project_id, name, icon, color, epic, position)
-         SELECT $1, t.name, t.icon, t.color, t.epic, t.position
-           FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS t(name, icon, color, epic, position)
-         RETURNING id, name`,
-        [
-          projectId,
-          STANDARD_ITEM_TYPES.map((t) => t.name),
-          STANDARD_ITEM_TYPES.map((t) => t.icon),
-          STANDARD_ITEM_TYPES.map((t) => t.color),
-          STANDARD_ITEM_TYPES.map((t) => t.epic),
-        ],
-      );
-      await client.query(
-        `INSERT INTO project_item_type_roles (type_id, role_id)
-         SELECT t.id, r.id FROM project_item_types t JOIN project_roles r ON r.project_id = t.project_id
-          WHERE t.project_id = $1`,
-        [projectId],
-      );
-      const defaultName = kind === 'queue' ? 'Request' : 'Task';
-      await client.query('UPDATE projects SET default_type_id = $2 WHERE id = $1', [
-        projectId,
-        types.find((t) => t.name === defaultName)!.id,
-      ]);
-      return projectId;
-    });
+    const id = await transaction((client) =>
+      createFromTemplate(
+        client,
+        req.params.id,
+        { key: input.key, name: input.name, description: input.description ?? '', icon: input.icon ?? null },
+        config,
+        req.user!.id,
+      ),
+    );
 
     projectChanged(req.params.id, id);
     reply.status(201);
@@ -1535,6 +1596,94 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       await client.query('DELETE FROM project_item_types WHERE id = $1', [req.params.id]);
     });
     projectChanged(workspaceId, type.projectId);
+    reply.status(204);
+  });
+
+  // --- templates -------------------------------------------------------------
+
+  /** A template's setup, built-in or saved in this workspace. */
+  async function templateConfig(workspaceId: string, templateId: string): Promise<ProjectTemplateConfig> {
+    const builtIn = BUILT_IN_TEMPLATES.find((t) => t.id === templateId);
+    if (builtIn) return builtIn.config;
+    if (!UUID.test(templateId)) throw badRequest('That template does not exist');
+    const { rows } = await query<{ config: unknown }>('SELECT config FROM project_templates WHERE id = $1 AND workspace_id = $2', [
+      templateId,
+      workspaceId,
+    ]);
+    if (!rows[0]) throw badRequest('That template does not exist');
+    const parsed = projectTemplateConfigSchema.safeParse(rows[0].config);
+    if (!parsed.success) throw badRequest('That template could not be read');
+    return parsed.data as ProjectTemplateConfig;
+  }
+
+  /** A saved template, checked to be one the reader may rename or delete: theirs, or any for an owner or admin. */
+  async function manageableTemplate(req: FastifyRequest, templateId: string): Promise<{ workspaceId: string }> {
+    if (!UUID.test(templateId)) throw notFound('Template not found');
+    const { rows } = await query<{ workspace_id: string; created_by: string | null }>(
+      'SELECT workspace_id, created_by FROM project_templates WHERE id = $1',
+      [templateId],
+    );
+    if (!rows[0]) throw notFound('Template not found');
+    const member = await assertWorkspaceAccess(req, rows[0].workspace_id, undefined, 'projects');
+    if (rows[0].created_by !== req.user!.id && member.role !== 'owner' && member.role !== 'admin') {
+      throw forbidden('Only whoever saved a template, an owner or an admin can change it');
+    }
+    return { workspaceId: rows[0].workspace_id };
+  }
+
+  app.get<{ Params: { id: string } }>('/workspaces/:id/project-templates', async (req): Promise<ProjectTemplateSummary[]> => {
+    const member = await assertWorkspaceAccess(req, req.params.id, undefined, 'projects');
+    const { rows } = await query<Omit<ProjectTemplateSummary, 'builtIn' | 'canManage'>>(
+      `SELECT id, name, description, kind, created_by AS "createdBy", created_at AS "createdAt"
+         FROM project_templates WHERE workspace_id = $1 ORDER BY kind, lower(name)`,
+      [req.params.id],
+    );
+    const manager = member.role === 'owner' || member.role === 'admin';
+    return [
+      ...BUILT_IN_TEMPLATES.map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        kind: t.config.kind,
+        builtIn: true,
+        createdBy: null,
+        createdAt: null,
+        canManage: false,
+      })),
+      ...rows.map((t) => ({ ...t, builtIn: false, canManage: manager || t.createdBy === req.user!.id })),
+    ];
+  });
+
+  /** Saves a project's setup as a template: not its work, sprints or who can reach it. */
+  app.post<{ Params: { id: string } }>('/projects/:id/template', async (req, reply) => {
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
+    const input = parse(saveTemplateSchema, req.body ?? {});
+    const project = await fetchProject(req.params.id, req.user!.id);
+    await assertWorkspaceAccess(req, workspaceId, projectPermission(project.kind, 'create'), 'projects');
+    const config = templateFromProject(project);
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO project_templates (workspace_id, name, description, kind, config, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [workspaceId, input.name, input.description ?? '', project.kind, JSON.stringify(config), req.user!.id],
+    );
+    reply.status(201);
+    return { id: rows[0].id };
+  });
+
+  app.patch<{ Params: { id: string } }>('/project-templates/:id', async (req) => {
+    await manageableTemplate(req, req.params.id);
+    const input = parse(updateTemplateSchema, req.body ?? {});
+    await query('UPDATE project_templates SET name = COALESCE($2, name), description = COALESCE($3, description) WHERE id = $1', [
+      req.params.id,
+      input.name ?? null,
+      input.description ?? null,
+    ]);
+    return { ok: true };
+  });
+
+  app.delete<{ Params: { id: string } }>('/project-templates/:id', async (req, reply) => {
+    await manageableTemplate(req, req.params.id);
+    await query('DELETE FROM project_templates WHERE id = $1', [req.params.id]);
     reply.status(204);
   });
 

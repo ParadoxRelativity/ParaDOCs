@@ -28,6 +28,7 @@ import { CATEGORY_ICON, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
 import IntakeSection from './ProjectIntake';
 import { RuleSection } from './ProjectRules';
+import { SaveTemplateSection } from './ProjectTemplates';
 
 /**
  * How a project is set up: its name and key, the statuses its work moves
@@ -67,6 +68,7 @@ export default function ProjectSettings({
         {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
         <ArchiveSection project={project} canEdit={canEdit} />
         {project.kind === 'queue' && canEdit && <IntakeSection project={project} />}
+        {canEdit && <SaveTemplateSection project={project} />}
 
         <Section
           title="Permissions"
