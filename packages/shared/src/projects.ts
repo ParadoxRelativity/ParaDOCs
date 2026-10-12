@@ -1131,6 +1131,8 @@ export const archivePageQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   /** Only items this person holds any role on. */
   person: uuid.optional(),
+  /** Only items under this epic. */
+  epic: uuid.optional(),
   /** Only items finished since this moment. */
   completedSince: z.string().datetime({ offset: true }).optional(),
   /** From the page before; opaque. */
