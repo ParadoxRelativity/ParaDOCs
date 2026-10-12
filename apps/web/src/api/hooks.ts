@@ -70,6 +70,7 @@ import type {
   WorkItemLink,
   Project,
   ProjectRole,
+  ProjectRule,
   ProjectSprint,
   ProjectStatus,
   ProjectSummary,
@@ -1101,6 +1102,19 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
     }),
     deleteRole: useMutation({
       mutationFn: (id: string) => api.delete(`/project-roles/${id}`),
+      onSuccess: settle,
+    }),
+    addRule: useMutation({
+      mutationFn: (input: Omit<ProjectRule, 'id' | 'position'>) => api.post<ProjectRule>(`/projects/${projectId}/rules`, input),
+      onSuccess: settle,
+    }),
+    updateRule: useMutation({
+      mutationFn: ({ id, ...patch }: Partial<Omit<ProjectRule, 'id'>> & { id: string }) =>
+        api.patch<ProjectRule>(`/project-rules/${id}`, patch),
+      onSuccess: settle,
+    }),
+    deleteRule: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-rules/${id}`),
       onSuccess: settle,
     }),
     addWorkflow: useMutation({

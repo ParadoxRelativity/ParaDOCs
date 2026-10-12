@@ -27,6 +27,7 @@ import { Button, IconButton } from '../ui';
 import { CATEGORY_ICON, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
 import IntakeSection from './ProjectIntake';
+import { RuleSection } from './ProjectRules';
 
 /**
  * How a project is set up: its name and key, the statuses its work moves
@@ -61,6 +62,7 @@ export default function ProjectSettings({
         <StatusSection project={project} items={items} canEdit={canEdit} />
         <WorkflowSection project={project} canEdit={canEdit} />
         <StatusCommentSection project={project} canEdit={canEdit} />
+        <RuleSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
         {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
         <ArchiveSection project={project} canEdit={canEdit} />

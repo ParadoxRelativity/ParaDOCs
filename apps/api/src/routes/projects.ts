@@ -17,6 +17,12 @@ import {
   isEpicType,
   dateBounds,
   decodeFilter,
+  applyRules,
+  createRuleSchema,
+  updateRuleSchema,
+  MAX_RULES,
+  type RuleAction,
+  type WorkItemPriority,
   type WorkItemFilter,
   isSymmetricLink,
   ARCHIVE_PAGE_SIZE,
@@ -299,6 +305,11 @@ export async function fetchProject(id: string, userId: string): Promise<Project>
             p.kind = 'project' AND p.sprints_enabled AS "sprintsEnabled",
             p.archive_after_days AS "archiveAfterDays",
             p.ask_status_comment AS "askStatusComment",
+            COALESCE((SELECT json_agg(json_build_object('id', ru.id, 'name', ru.name, 'enabled', ru.enabled,
+                                                        'position', ru.position, 'statusId', ru.status_id,
+                                                        'typeIds', ru.type_ids, 'actions', ru.actions)
+                                      ORDER BY ru.position, ru.created_at)
+                        FROM project_rules ru WHERE ru.project_id = p.id), '[]'::json) AS rules,
             json_build_object(
               'count', (SELECT count(*)::int FROM work_items a WHERE a.project_id = p.id AND a.archived_at IS NOT NULL),
               'epics', ${archivedBy('epic_id')},
@@ -581,6 +592,82 @@ function assertRoleFits(
   if (!role.multiple && userIds.length + names.length > 1) {
     throw badRequest(role.freeForm ? `Only one can be ${role.name}` : `Only one person can be ${role.name}`);
   }
+}
+
+/** Who a rule's changes put in a role, to be told once the move is saved. */
+interface RuleNotice {
+  itemId: string;
+  userIds: string[];
+  role: string;
+}
+
+/**
+ * Runs the project's rules on items that have just moved into `toStatusId`,
+ * inside the move's transaction: writes what they change, and each change to
+ * the item's history under the rule that made it. Returns who was newly put
+ * in a role, to be told after the move is saved, as anyone given a role is.
+ */
+async function runRules(
+  db: Queryable,
+  project: Project,
+  itemIds: string[],
+  toStatusId: string,
+  moverId: string,
+): Promise<RuleNotice[]> {
+  const rules = project.rules.filter((rule) => rule.enabled && rule.statusId === toStatusId);
+  if (rules.length === 0 || itemIds.length === 0) return [];
+
+  const { rows: items } = await db.query<{ id: string; type_id: string; priority: WorkItemPriority }>(
+    'SELECT id, type_id, priority FROM work_items WHERE id = ANY($1::uuid[])',
+    [itemIds],
+  );
+  const { rows: held } = await db.query<{ work_item_id: string; role_id: string; user_id: string | null; name: string | null }>(
+    'SELECT work_item_id, role_id, user_id, name FROM work_item_roles WHERE work_item_id = ANY($1::uuid[]) ORDER BY created_at',
+    [itemIds],
+  );
+  const { rows: memberRows } = await db.query<{ user_id: string }>(
+    'SELECT user_id FROM workspace_members WHERE workspace_id = $1',
+    [project.workspaceId],
+  );
+  const members = new Set(memberRows.map((m) => m.user_id));
+  const roleName = (id: string) => project.roles.find((r) => r.id === id)?.name ?? 'A role';
+
+  const notices: RuleNotice[] = [];
+  for (const row of items) {
+    const roles: Record<string, string[]> = {};
+    const roleNames: Record<string, string[]> = {};
+    for (const h of held.filter((h) => h.work_item_id === row.id)) {
+      if (h.user_id) (roles[h.role_id] ??= []).push(h.user_id);
+      else if (h.name) (roleNames[h.role_id] ??= []).push(h.name);
+    }
+    const offered = new Set(itemTypeOf(project, row.type_id)?.roleIds ?? []);
+    const changes = applyRules(rules, { typeId: row.type_id, priority: row.priority, roles, roleNames }, toStatusId, {
+      moverId,
+      members,
+      roles: new Map(project.roles.filter((r) => offered.has(r.id)).map((r) => [r.id, { multiple: r.multiple }])),
+    });
+    for (const change of changes) {
+      if (change.kind === 'priority') {
+        await db.query('UPDATE work_items SET priority = $2, updated_at = now() WHERE id = $1', [row.id, change.priority]);
+        await logActivity(db, row.id, moverId, { kind: 'priority', from: row.priority, to: change.priority, rule: change.rule });
+        continue;
+      }
+      const hadUsers = roles[change.roleId] ?? [];
+      const hadNames = roleNames[change.roleId] ?? [];
+      await db.query('DELETE FROM work_item_roles WHERE work_item_id = $1 AND role_id = $2', [row.id, change.roleId]);
+      await insertRoleHolders(db, row.id, change.roleId, change.userIds, change.names);
+      const added = change.userIds.filter((id) => !hadUsers.includes(id));
+      await logActivity(db, row.id, moverId, {
+        kind: 'role',
+        role: roleName(change.roleId),
+        added: [...added, ...change.names.filter((n) => !hadNames.includes(n))],
+        removed: [...hadUsers.filter((id) => !change.userIds.includes(id)), ...hadNames.filter((n) => !change.names.includes(n))],
+        rule: change.rule,
+      });
+      if (added.length > 0) notices.push({ itemId: row.id, userIds: added, role: roleName(change.roleId) });
+    }
+  }
+  return notices;
 }
 
 /**
@@ -1203,7 +1290,19 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   app.delete<{ Params: { id: string } }>('/project-roles/:id', async (req, reply) => {
     const projectId = await projectOfRole(req.params.id);
     const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
-    await query('DELETE FROM project_roles WHERE id = $1', [req.params.id]);
+    await transaction(async (client) => {
+      // Rules lose the actions that fill the role, or fill another from it; a
+      // rule left with nothing to do goes too.
+      await client.query(
+        `UPDATE project_rules
+            SET actions = COALESCE((SELECT jsonb_agg(a) FROM jsonb_array_elements(actions) a
+                                     WHERE a->>'roleId' IS DISTINCT FROM $1 AND a->'source'->>'roleId' IS DISTINCT FROM $1), '[]'::jsonb)
+          WHERE project_id = $2`,
+        [req.params.id, projectId],
+      );
+      await client.query(`DELETE FROM project_rules WHERE project_id = $1 AND actions = '[]'::jsonb`, [projectId]);
+      await client.query('DELETE FROM project_roles WHERE id = $1', [req.params.id]);
+    });
     projectChanged(workspaceId, projectId);
     reply.status(204);
   });
@@ -1427,9 +1526,92 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         fallback.id,
         req.params.id,
       ]);
+      // A rule for only this type has nothing left to apply to.
+      await client.query('UPDATE project_rules SET type_ids = array_remove(type_ids, $1) WHERE project_id = $2', [
+        req.params.id,
+        type.projectId,
+      ]);
+      await client.query(`DELETE FROM project_rules WHERE project_id = $1 AND type_ids = '{}'`, [type.projectId]);
       await client.query('DELETE FROM project_item_types WHERE id = $1', [req.params.id]);
     });
     projectChanged(workspaceId, type.projectId);
+    reply.status(204);
+  });
+
+  // --- rules -----------------------------------------------------------------
+
+  /** Checks that what a rule names is this project's: its status, its types, its roles, and members. */
+  async function assertRuleFits(
+    project: Project,
+    rule: { statusId?: string; typeIds?: string[] | null; actions?: RuleAction[] },
+  ): Promise<void> {
+    if (rule.statusId && !project.statuses.some((s) => s.id === rule.statusId)) throw badRequest('That status is not in this project');
+    if (rule.typeIds?.some((id) => !project.itemTypes.some((t) => t.id === id))) throw badRequest('That type is not in this project');
+    for (const action of rule.actions ?? []) {
+      if (action.kind !== 'role') continue;
+      const roles = [action.roleId, ...(action.source?.kind === 'role' ? [action.source.roleId] : [])];
+      if (roles.some((id) => !project.roles.some((r) => r.id === id))) throw badRequest('That role is not in this project');
+    }
+    const members = (rule.actions ?? []).flatMap((a) => (a.kind === 'role' && a.source?.kind === 'member' ? [a.source.userId] : []));
+    await assertMembers(project.workspaceId, [...new Set(members)]);
+  }
+
+  async function projectOfRule(ruleId: string): Promise<string> {
+    if (!UUID.test(ruleId)) throw notFound('Rule not found');
+    const { rows } = await query<{ project_id: string }>('SELECT project_id FROM project_rules WHERE id = $1', [ruleId]);
+    if (!rows[0]) throw notFound('Rule not found');
+    return rows[0].project_id;
+  }
+
+  app.post<{ Params: { id: string } }>('/projects/:id/rules', async (req, reply) => {
+    const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
+    const input = parse(createRuleSchema, req.body ?? {});
+    const project = await fetchProject(req.params.id, req.user!.id);
+    if (project.rules.length >= MAX_RULES) throw badRequest(`A project can have at most ${MAX_RULES} rules`);
+    await assertRuleFits(project, input);
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO project_rules (project_id, name, enabled, position, status_id, type_ids, actions)
+       VALUES ($1, $2, $3, (SELECT COALESCE(max(position), 0) + 1 FROM project_rules WHERE project_id = $1), $4, $5, $6)
+       RETURNING id`,
+      [req.params.id, input.name, input.enabled, input.statusId, input.typeIds, JSON.stringify(input.actions)],
+    );
+    projectChanged(workspaceId, req.params.id);
+    reply.status(201);
+    return (await fetchProject(req.params.id, req.user!.id)).rules.find((r) => r.id === rows[0].id);
+  });
+
+  app.patch<{ Params: { id: string } }>('/project-rules/:id', async (req) => {
+    const projectId = await projectOfRule(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
+    const input = parse(updateRuleSchema, req.body ?? {});
+    const project = await fetchProject(projectId, req.user!.id);
+    await assertRuleFits(project, input);
+    await query(
+      `UPDATE project_rules
+          SET name = COALESCE($2, name), enabled = COALESCE($3, enabled), status_id = COALESCE($4, status_id),
+              type_ids = CASE WHEN $5::boolean THEN $6::uuid[] ELSE type_ids END,
+              actions = COALESCE($7::jsonb, actions), position = COALESCE($8, position)
+        WHERE id = $1`,
+      [
+        req.params.id,
+        input.name ?? null,
+        input.enabled ?? null,
+        input.statusId ?? null,
+        input.typeIds !== undefined,
+        input.typeIds ?? null,
+        input.actions ? JSON.stringify(input.actions) : null,
+        input.position ?? null,
+      ],
+    );
+    projectChanged(workspaceId, projectId);
+    return (await fetchProject(projectId, req.user!.id)).rules.find((r) => r.id === req.params.id);
+  });
+
+  app.delete<{ Params: { id: string } }>('/project-rules/:id', async (req, reply) => {
+    const projectId = await projectOfRule(req.params.id);
+    const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
+    await query('DELETE FROM project_rules WHERE id = $1', [req.params.id]);
+    projectChanged(workspaceId, projectId);
     reply.status(204);
   });
 
@@ -1841,6 +2023,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       moving.map((item) => ({ key: item.key, typeId: item.type_id, from: item.status_id, to: target.id })),
     );
 
+    let notices: RuleNotice[] = [];
     const moved = await transaction(async (client) => {
       const { rows } = await client.query<{ id: string; from_name: string }>(
         `SELECT i.id, st.name AS from_name
@@ -1870,9 +2053,11 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
            FROM unnest($1::uuid[], $2::text[]) AS m(id, from_name)`,
         [rows.map((r) => r.id), rows.map((r) => r.from_name), req.user!.id, target.name],
       );
+      notices = await runRules(client, project, rows.map((r) => r.id), target.id, req.user!.id);
       return rows.map((r) => r.id);
     });
 
+    for (const notice of notices) await tell(req, notice.itemId, notice.userIds, 'role', notice.role);
     await tellHolders(req, moved, 'status', target.name);
     projectChanged(workspaceId, req.params.id);
     return { moved: moved.length };
@@ -1952,6 +2137,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       (becomingEpic && current.sprint_id !== null);
     const sprint = changingSprint && input.sprintId ? await openSprintOf(projectId, input.sprintId) : null;
     const sprintProject = changingSprint ? project : null;
+    let ruleNotices: RuleNotice[] = [];
 
     await transaction(async (client) => {
       // Moved into another status with nowhere in particular to go: the end of it.
@@ -1997,6 +2183,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       );
       const actor = req.user!.id;
       if (target) await logActivity(client, req.params.id, actor, { kind: 'status', from: current.status_name, to: target.name });
+      // The project's rules for the status it moved into, with the type it now has.
+      if (target) ruleNotices = await runRules(client, project, [req.params.id], target.id, actor);
       if (archiving) await logActivity(client, req.params.id, actor, { kind: 'archived' });
       if (restoring && !reopening) await logActivity(client, req.params.id, actor, { kind: 'restored' });
       if (input.priority && input.priority !== current.priority) {
@@ -2034,6 +2222,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       const already = new Set(textMembers([current.description]));
       await tell(req, req.params.id, textMembers([input.description]).filter((id) => !already.has(id)), 'mention');
     }
+    for (const notice of ruleNotices) await tell(req, notice.itemId, notice.userIds, 'role', notice.role);
     if (target) await tellHolders(req, [req.params.id], 'status', target.name);
     projectChanged(workspaceId, projectId, req.params.id);
     // Its status and title are shown on every item linked to it.

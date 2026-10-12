@@ -34,6 +34,7 @@
 import { z } from 'zod';
 import { parseMessage, type MessageAttachment, type MessageAuthor, type MessageReferences } from './chat.js';
 import type { CanvasElement } from './canvas.js';
+import type { ProjectRule } from './projectRules.js';
 import { canvasTextOf, walkInlineNodes } from './mentions.js';
 import type { AccessMode, NotificationWorkspace, Permission } from './types.js';
 
@@ -315,6 +316,8 @@ export interface Project extends ProjectSummary {
    * why. Only the app asks; the API and AI connections never do.
    */
   askStatusComment: boolean;
+  /** What it fills in when work reaches a status, in the order they run. */
+  rules: ProjectRule[];
   /** What has been archived, totalled, since archived items are not loaded with the rest. */
   archive: ArchiveTotals;
   /** Running first, then planned in the order they were made, then completed, newest first. */
@@ -399,8 +402,9 @@ export type WorkItemActivityData =
   /** `via`: the intake token it came in through, by the name it had, when it was sent in from outside. */
   | { kind: 'created'; via?: string }
   | { kind: 'status'; from: string; to: string }
-  | { kind: 'role'; role: string; added: string[]; removed: string[] }
-  | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority }
+  /** `rule`: the project rule that made the change, by the name it had, when one did. */
+  | { kind: 'role'; role: string; added: string[]; removed: string[]; rule?: string }
+  | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority; rule?: string }
   | { kind: 'title'; from: string; to: string }
   /** Sprint names as they were at the time; null is the backlog. */
   | { kind: 'sprint'; from: string | null; to: string | null }

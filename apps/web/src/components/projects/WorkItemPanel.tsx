@@ -1176,7 +1176,7 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
     case 'status':
       return `moved this from ${activity.from} to ${activity.to}`;
     case 'priority':
-      return `changed the priority from ${PRIORITY[activity.from].label.toLowerCase()} to ${PRIORITY[activity.to].label.toLowerCase()}`;
+      return `changed the priority from ${PRIORITY[activity.from].label.toLowerCase()} to ${PRIORITY[activity.to].label.toLowerCase()}${byRule(activity.rule)}`;
     case 'title':
       return `renamed this from "${activity.from}"`;
     case 'link':
@@ -1199,7 +1199,12 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
       const parts: string[] = [];
       if (activity.added.length) parts.push(`made ${activity.added.map(name).join(', ')} ${activity.role}`);
       if (activity.removed.length) parts.push(`removed ${activity.removed.map(name).join(', ')} as ${activity.role}`);
-      return parts.join(' and ');
+      return parts.join(' and ') + byRule(activity.rule);
     }
   }
+}
+
+/** How a change a project rule made is told apart from one made by hand. */
+function byRule(rule: string | undefined): string {
+  return rule ? `, by the rule "${rule}"` : '';
 }
