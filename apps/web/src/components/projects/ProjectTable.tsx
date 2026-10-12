@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   WORK_ITEM_PRIORITIES,
+  groupItems,
+  isEpicType,
   itemTypeOf,
   type Project,
+  type WorkItemGroupBy,
   type WorkItemSort,
   type WorkItemSummary,
   type WorkspaceMember,
 } from '@paradocs/shared';
-import { useUpdateWorkItem } from '../../api/hooks';
+import { useUpdateWorkItem, useWorkItems } from '../../api/hooks';
 import { useIsMobile } from '../../lib/mobile';
 import { cx, formatRelative } from '../../lib/util';
 import Icon from '../Icon';
@@ -19,9 +22,19 @@ export interface TableSort {
   descending: boolean;
 }
 
-/** A queue is worked through oldest first, so that is how it starts; a project starts by status. */
+/** A queue is worked through oldest first, so that is how it starts; a project starts by number. */
 export function defaultSort(project: Pick<Project, 'kind'>): TableSort {
-  return project.kind === 'queue' ? { key: 'created', descending: false } : { key: 'status', descending: false };
+  return project.kind === 'queue' ? { key: 'created', descending: false } : { key: 'key', descending: false };
+}
+
+/** How a project's List and All items are ordered and grouped, which each reader keeps for themselves. */
+export interface ListSettings {
+  sort: TableSort;
+  groupBy: WorkItemGroupBy;
+}
+
+export function defaultListSettings(project: Pick<Project, 'kind'>): ListSettings {
+  return { sort: defaultSort(project), groupBy: 'none' };
 }
 
 /**
@@ -41,8 +54,9 @@ export interface ArchiveRows {
 }
 
 /**
- * Work items as rows. Any column header re-sorts, and the status can be
- * changed without opening the item. On a phone the title gets the width:
+ * Work items as rows, grouped if asked, each group folding away under its
+ * heading. Any column header re-sorts, and the status can be changed without
+ * opening the item. On a phone the title gets the width:
  * only the key, title, status and the first role keep a column, and the rest
  * goes in a line under the title.
  *
@@ -58,6 +72,7 @@ export default function ProjectTable({
   onOpenItem,
   sort: controlledSort,
   onSort,
+  groupBy = 'none',
   showEverything = false,
   archive,
 }: {
@@ -69,6 +84,7 @@ export default function ProjectTable({
   onOpenItem: (itemId: string) => void;
   sort?: TableSort;
   onSort?: (sort: TableSort) => void;
+  groupBy?: WorkItemGroupBy;
   /** Start with done and backlog work showing, as All items does. */
   showEverything?: boolean;
   archive?: ArchiveRows;
@@ -83,6 +99,9 @@ export default function ProjectTable({
   const [showDone, setShowDone] = useState(showEverything || project.kind !== 'queue');
   // Unplanned work stays out of the way unless asked for.
   const [showBacklog, setShowBacklog] = useState(showEverything);
+  const [folded, setFolded] = useState<Set<string>>(new Set());
+  // Epics are named in their groups' headings, whether or not they are in the list.
+  const all = useWorkItems(project.id);
 
   const statusIndex = useMemo(() => new Map(project.statuses.map((s, index) => [s.id, index])), [project.statuses]);
   const statusOf = (item: WorkItemSummary) => project.statuses[statusIndex.get(item.statusId) ?? 0];
@@ -111,6 +130,47 @@ export default function ProjectTable({
     // statusOf reads statusIndex, which is listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, sort, showDone, showBacklog, statusIndex]);
+
+  const grouping = useMemo(() => {
+    const epics = (all.data ?? []).filter((item) => isEpicType(project, item.typeId));
+    const nameOf = (userId: string) => memberMap.get(userId)?.name ?? 'Former member';
+    return (list: WorkItemSummary[]) => groupItems(project, list, groupBy, { epics, nameOf });
+  }, [all.data, project, groupBy, memberMap]);
+
+  /** Rows as they are drawn: grouped under folding headings, unless nothing is grouped. */
+  function grouped(list: WorkItemSummary[], prefix: string) {
+    if (groupBy === 'none') return list.map(row);
+    return grouping(list).map((group) => {
+      const key = `${prefix}${group.key ?? 'none'}`;
+      const closed = folded.has(key);
+      return (
+        <Fragment key={key}>
+          <tr>
+            <td colSpan={columns} className="sticky top-8 z-[5] bg-[var(--color-canvas)] p-0">
+              <button
+                onClick={() =>
+                  setFolded((current) => {
+                    const next = new Set(current);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  })
+                }
+                aria-expanded={!closed}
+                className="flex w-full items-center gap-2 border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-1.5 text-left text-xs font-semibold"
+              >
+                <Icon name={closed ? 'chevron-right' : 'chevron-down'} className="text-[10px] text-[var(--color-muted)]" />
+                {group.color && <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: group.color }} />}
+                <span className={cx('min-w-0 truncate', group.key === null && 'text-[var(--color-muted)]')}>{group.label}</span>
+                <span className="font-normal tabular-nums text-[var(--color-muted)]">{group.items.length}</span>
+              </button>
+            </td>
+          </tr>
+          {!closed && group.items.map(row)}
+        </Fragment>
+      );
+    });
+  }
 
   function header(key: WorkItemSort, label: string, className?: string) {
     const active = sort.key === key;
@@ -237,7 +297,7 @@ export default function ProjectTable({
       <table className={cx('w-full border-collapse text-sm', mobile ? 'table-fixed' : 'min-w-[760px]')}>
         <thead className="sticky top-0 z-10 bg-[var(--color-canvas)] text-left text-xs text-[var(--color-muted)] shadow-[inset_0_-1px_0_var(--color-line)]">
           {mobile ? (
-            <tr>
+            <tr className="h-8">
               {header('key', 'Key', 'w-[4.5rem] pl-3')}
               {header('title', 'Title')}
               {header('status', 'Status', 'w-20')}
@@ -246,7 +306,7 @@ export default function ProjectTable({
               </th>
             </tr>
           ) : (
-            <tr>
+            <tr className="h-8">
               {header('key', 'Key', 'w-24 pl-4')}
               {header('title', 'Title')}
               {header('status', 'Status', 'w-40')}
@@ -259,7 +319,7 @@ export default function ProjectTable({
           )}
         </thead>
         <tbody>
-          {rows.map(row)}
+          {grouped(rows, '')}
           {archive && !archiveEmpty && (
             <>
               <tr>
@@ -271,7 +331,7 @@ export default function ProjectTable({
                   {archive.total !== null && <span className="font-normal normal-case">{archive.total.toLocaleString()}</span>}
                 </td>
               </tr>
-              {archive.items.map(row)}
+              {grouped(archive.items, 'archive:')}
               <ArchiveFooter archive={archive} columns={columns} />
             </>
           )}

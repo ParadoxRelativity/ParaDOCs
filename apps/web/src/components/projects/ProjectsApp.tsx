@@ -5,7 +5,10 @@ import {
   usesSprints,
   type User,
   isEpicType,
+  type Project,
+  type WorkItemGroupBy,
   type WorkItemListing,
+  type WorkItemSort,
   type WorkItemSummary,
   type WorkspaceMember,
   projectPermission,
@@ -34,10 +37,10 @@ import ProjectInsights from './ProjectInsights';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
 import ProjectSettings from './ProjectSettings';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
-import ProjectTable from './ProjectTable';
+import ProjectTable, { defaultListSettings, type ListSettings } from './ProjectTable';
 import ProjectWorkload from './ProjectWorkload';
 import WorkItemPanel, { type ProjectNavigation } from './WorkItemPanel';
-import { PriorityIcon, ProjectIcon, StatusPill, TypeIcon, formatDue, isOverdue, useMemberMap } from './projectUi';
+import { MenuSheet, PriorityIcon, ProjectIcon, StatusPill, TypeIcon, formatDue, isOverdue, useMemberMap } from './projectUi';
 
 type View = 'epics' | 'backlog' | 'board' | 'list' | 'all' | 'workload' | 'insights' | 'settings';
 
@@ -149,6 +152,8 @@ function ProjectView({
     // Only when a link brings a view in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedView]);
+  // How the List and All items are ordered and grouped, kept per project for this reader.
+  const [storedList, setListSettings] = useLocalStorage<ListSettings | null>(`paradocs.projectList.${projectId}`, null);
   const [text, setText] = useState('');
   const [person, setPerson] = useState('');
   const [creating, setCreating] = useState<{ typeId?: string; epicId?: string } | null>(null);
@@ -228,6 +233,7 @@ function ProjectView({
       ? data.statuses.find((s) => s.category === 'backlog')
       : data.statuses.find((s) => s.category !== 'backlog'))?.id ?? data.statuses[0]?.id;
   const filtering = text.trim() !== '' || person !== '';
+  const listSettings = storedList ?? defaultListSettings(data);
   const newButton = (
     <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
       <Icon name="plus-lg" /> New
@@ -281,6 +287,9 @@ function ProjectView({
               )}
             </>
           )}
+          {(view === 'list' || view === 'all') && (
+            <ViewMenu project={data} settings={listSettings} onChange={setListSettings} />
+          )}
           {!mobile && canEdit && !data.archivedAt && newButton}
         </div>
 
@@ -313,6 +322,8 @@ function ProjectView({
               canEdit={canEdit}
               activeItemId={itemId}
               onOpenItem={onOpenItem}
+              settings={listSettings}
+              onSettings={setListSettings}
             />
           ) : view === 'epics' && epicType ? (
             <ProjectEpics
@@ -385,6 +396,9 @@ function ProjectView({
               canEdit={canEdit}
               activeItemId={itemId}
               onOpenItem={onOpenItem}
+              sort={listSettings.sort}
+              onSort={(sort) => setListSettings({ ...listSettings, sort })}
+              groupBy={listSettings.groupBy}
             />
           ) : (
             <ProjectWorkload
@@ -440,6 +454,107 @@ function ProjectView({
         />
       )}
     </div>
+  );
+}
+
+const SORT_LABELS: Record<WorkItemSort, string> = {
+  key: 'Key',
+  title: 'Title',
+  status: 'Status',
+  priority: 'Priority',
+  due: 'Due date',
+  estimate: 'Estimate',
+  created: 'Created',
+  updated: 'Updated',
+};
+
+/** How the List and All items are ordered and grouped: by any field, and by any of the project's roles. */
+function ViewMenu({
+  project,
+  settings,
+  onChange,
+}: {
+  project: Project;
+  settings: ListSettings;
+  onChange: (settings: ListSettings) => void;
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const groupings: { id: WorkItemGroupBy; label: string }[] = [
+    { id: 'none', label: 'None' },
+    { id: 'status', label: 'Status' },
+    { id: 'type', label: 'Type' },
+    { id: 'priority', label: 'Priority' },
+    ...(project.kind === 'project' && project.itemTypes.some((t) => t.epic) ? [{ id: 'epic' as const, label: 'Epic' }] : []),
+    ...(usesSprints(project) ? [{ id: 'sprint' as const, label: 'Sprint' }] : []),
+    ...project.roles.map((role) => ({ id: `role:${role.id}` as const, label: role.name })),
+  ];
+  // A role since deleted groups nothing.
+  const groupBy = groupings.some((g) => g.id === settings.groupBy) ? settings.groupBy : 'none';
+  const field = 'w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]';
+
+  return (
+    <>
+      <button
+        onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}
+        aria-expanded={anchor !== null}
+        className={cx(
+          'flex items-center gap-1 rounded-md border border-[var(--color-line)] px-2 py-1 text-xs',
+          groupBy !== 'none' ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
+        )}
+      >
+        <Icon name="sliders" /> View
+      </button>
+      {anchor && (
+        <MenuSheet anchor={anchor} title="View" onClose={() => setAnchor(null)} className="w-64">
+          <div className="space-y-3 p-1 text-xs text-[var(--color-muted)]">
+            <label className="block">
+              Sort by
+              <div className="mt-1 flex gap-1.5">
+                <select
+                  value={settings.sort.key}
+                  onChange={(e) => onChange({ ...settings, sort: { ...settings.sort, key: e.target.value as WorkItemSort } })}
+                  className={field}
+                >
+                  {(Object.keys(SORT_LABELS) as WorkItemSort[]).map((key) => (
+                    <option key={key} value={key}>
+                      {SORT_LABELS[key]}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => onChange({ ...settings, sort: { ...settings.sort, descending: !settings.sort.descending } })}
+                  title={settings.sort.descending ? 'Descending' : 'Ascending'}
+                  aria-label={settings.sort.descending ? 'Descending; switch to ascending' : 'Ascending; switch to descending'}
+                  className="shrink-0 rounded-md border border-[var(--color-line)] px-2 text-[var(--color-ink)] hover:bg-[var(--color-surface)]"
+                >
+                  <Icon name={settings.sort.descending ? 'sort-down' : 'sort-up'} />
+                </button>
+              </div>
+            </label>
+            <label className="block">
+              Group by
+              <select
+                value={groupBy}
+                onChange={(e) => onChange({ ...settings, groupBy: e.target.value as WorkItemGroupBy })}
+                className={cx(field, 'mt-1')}
+              >
+                {groupings.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              onClick={() => onChange(defaultListSettings(project))}
+              className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              Reset to {project.kind === 'queue' ? 'oldest first' : 'by number'}, ungrouped
+            </button>
+          </div>
+        </MenuSheet>
+      )}
+    </>
   );
 }
 

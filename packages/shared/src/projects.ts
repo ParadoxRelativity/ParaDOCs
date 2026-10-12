@@ -1143,6 +1143,109 @@ export const MAX_LISTED_ITEMS = 5000;
 export type WorkItemSort = 'key' | 'title' | 'status' | 'priority' | 'due' | 'estimate' | 'updated' | 'created';
 export const WORK_ITEM_SORTS: WorkItemSort[] = ['key', 'title', 'status', 'priority', 'due', 'estimate', 'updated', 'created'];
 
+/**
+ * What a list of work can be grouped by: a field, or one of the project's
+ * roles as `role:<id>`.
+ */
+export type WorkItemGroupBy = 'none' | 'status' | 'type' | 'priority' | 'epic' | 'sprint' | `role:${string}`;
+
+/** One group of a grouped list. `key` is null for the group of work with nothing in the field. */
+export interface WorkItemGroup<T> {
+  key: string | null;
+  label: string;
+  /** A status's or type's colour, where the group has one. */
+  color?: string;
+  items: T[];
+}
+
+/**
+ * Splits work into groups, in the project's own order: statuses as the board
+ * has them, types as they are offered, priorities most urgent first, epics and
+ * sprints as the project lists them, and people by name. Work with nothing in
+ * the field goes in a last group called None. Groups with nothing in them are
+ * left out. Work held by several people is listed under each of them.
+ *
+ * `epics` names the epics the work is under; `nameOf` names a member.
+ */
+export function groupItems<T extends WorkItemSummary>(
+  project: Pick<Project, 'statuses' | 'itemTypes' | 'roles' | 'sprints'>,
+  items: T[],
+  groupBy: WorkItemGroupBy,
+  { epics = [], nameOf = () => 'Someone' }: { epics?: Pick<WorkItemSummary, 'id' | 'key' | 'title'>[]; nameOf?: (userId: string) => string } = {},
+): WorkItemGroup<T>[] {
+  if (groupBy === 'none') return [{ key: 'all', label: 'All', items }];
+
+  const groups = new Map<string, WorkItemGroup<T>>();
+  const none: T[] = [];
+  /** Where each group sits, which is not always the order work turns up in. */
+  const rank = new Map<string, number | string>();
+  const add = (key: string, label: string, item: T, order: number | string, color?: string) => {
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, color, items: [] };
+      groups.set(key, group);
+      rank.set(key, order);
+    }
+    group.items.push(item);
+  };
+
+  const role = groupBy.startsWith('role:') ? project.roles.find((r) => `role:${r.id}` === groupBy) : undefined;
+  const epicById = new Map(epics.map((epic) => [epic.id, epic]));
+
+  for (const item of items) {
+    if (groupBy === 'status') {
+      const index = project.statuses.findIndex((s) => s.id === item.statusId);
+      const status = project.statuses[index];
+      if (status) add(status.id, status.name, item, index, status.color);
+      else none.push(item);
+    } else if (groupBy === 'type') {
+      const index = project.itemTypes.findIndex((t) => t.id === item.typeId);
+      const type = project.itemTypes[index];
+      if (type) add(type.id, type.name, item, index, type.color);
+      else none.push(item);
+    } else if (groupBy === 'priority') {
+      if (item.priority === 'none') none.push(item);
+      else add(item.priority, item.priority[0].toUpperCase() + item.priority.slice(1), item, WORK_ITEM_PRIORITIES.indexOf(item.priority));
+    } else if (groupBy === 'epic') {
+      const epic = item.epicId ? epicById.get(item.epicId) : undefined;
+      if (epic) add(epic.id, `${epic.key} ${epic.title}`, item, Number(epic.key.split('-').pop()) || 0);
+      else none.push(item);
+    } else if (groupBy === 'sprint') {
+      const index = project.sprints.findIndex((s) => s.id === item.sprintId);
+      const sprint = project.sprints[index];
+      if (sprint) add(sprint.id, sprint.name, item, index);
+      else none.push(item);
+    } else if (role) {
+      const holders = item.roles[role.id] ?? [];
+      const names = item.roleNames[role.id] ?? [];
+      for (const userId of holders) {
+        const name = nameOf(userId);
+        add(`user:${userId}`, name, item, name.toLowerCase());
+      }
+      for (const name of names) add(`name:${name.toLowerCase()}`, name, item, name.toLowerCase());
+      if (holders.length + names.length === 0) none.push(item);
+    } else {
+      none.push(item);
+    }
+  }
+
+  const ordered = [...groups.values()].sort((a, b) => {
+    const x = rank.get(a.key!)!;
+    const y = rank.get(b.key!)!;
+    return typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+  });
+  if (none.length > 0) {
+    const field: Partial<Record<WorkItemGroupBy, string>> = { priority: 'No priority', epic: 'No epic', sprint: 'No sprint' };
+    const label = role
+      ? role.name.toLowerCase() === 'assignee'
+        ? 'Unassigned'
+        : `No ${role.name.toLowerCase()}`
+      : (field[groupBy] ?? 'None');
+    ordered.push({ key: null, label, items: none });
+  }
+  return ordered;
+}
+
 /** How many archived items a page holds unless asked otherwise, and the most it can. */
 export const ARCHIVE_PAGE_SIZE = 100;
 export const MAX_ARCHIVE_PAGE_SIZE = 500;

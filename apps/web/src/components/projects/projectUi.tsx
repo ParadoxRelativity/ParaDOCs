@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   type ArchivedTotal,
   UNKNOWN_ITEM_TYPE,
@@ -12,6 +13,8 @@ import {
   type WorkItemSummary,
   type WorkspaceMember,
 } from '@paradocs/shared';
+import { useBackHandler } from '../../lib/back';
+import { useIsMobile } from '../../lib/mobile';
 import { cx, todayISO, toISODate } from '../../lib/util';
 import Avatar from '../Avatar';
 import Icon, { type IconName } from '../Icon';
@@ -498,5 +501,60 @@ function MonthCalendar({ value, onPick }: { value: string | null; onPick: (date:
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A menu of choices, such as how a list is sorted or what it is filtered by:
+ * a popover under the control that opened it, or on a phone a sheet up from
+ * the bottom of the screen, which back closes.
+ */
+export function MenuSheet({
+  anchor,
+  title,
+  onClose,
+  className,
+  children,
+}: {
+  anchor: HTMLElement;
+  /** What the sheet is for, shown at its top on a phone. */
+  title: string;
+  onClose: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  const mobile = useIsMobile();
+  if (!mobile) {
+    return (
+      <Popover anchor={anchor} placement="below" onClose={onClose} className={cx('p-2', className)}>
+        {children}
+      </Popover>
+    );
+  }
+  return <BottomSheet title={title} onClose={onClose}>{children}</BottomSheet>;
+}
+
+function BottomSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useBackHandler(onClose);
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+        className="scroll-thin max-h-[80vh] overflow-y-auto rounded-t-2xl border-t border-[var(--color-line)] bg-[var(--color-raised)] px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-2 shadow-2xl"
+      >
+        <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-[var(--color-line)]" />
+        <div className="mb-2 flex items-center">
+          <p className="flex-1 text-sm font-semibold">{title}</p>
+          <button onClick={onClose} className="rounded px-2 py-1 text-xs text-[var(--color-accent)]">
+            Done
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body,
   );
 }

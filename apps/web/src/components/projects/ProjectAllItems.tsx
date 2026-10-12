@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { Project, WorkItemSummary, WorkspaceMember } from '@paradocs/shared';
 import { useArchivePages } from '../../api/hooks';
 import { cx, useDebounced } from '../../lib/util';
-import ProjectTable, { defaultSort, type ArchiveRows, type TableSort } from './ProjectTable';
+import ProjectTable, { type ArchiveRows, type ListSettings } from './ProjectTable';
 
 /**
  * Every work item in a project: the current work, already loaded for the
@@ -20,6 +20,8 @@ export default function ProjectAllItems({
   canEdit,
   activeItemId,
   onOpenItem,
+  settings,
+  onSettings,
 }: {
   project: Project;
   /** Current work, already filtered. */
@@ -31,8 +33,11 @@ export default function ProjectAllItems({
   canEdit: boolean;
   activeItemId: string | null;
   onOpenItem: (itemId: string) => void;
+  /** The order and grouping, which the List shares. */
+  settings: ListSettings;
+  onSettings: (settings: ListSettings) => void;
 }) {
-  const [sort, setSort] = useState<TableSort>(() => defaultSort(project));
+  const sort = settings.sort;
   const [archivedOnly, setArchivedOnly] = useState(false);
   // Typing asks the server again, so it waits for a pause.
   const q = useDebounced(text.trim(), 300);
@@ -95,7 +100,8 @@ export default function ProjectAllItems({
           activeItemId={activeItemId}
           onOpenItem={onOpenItem}
           sort={sort}
-          onSort={setSort}
+          onSort={(next) => onSettings({ ...settings, sort: next })}
+          groupBy={settings.groupBy}
           showEverything
           archive={archive}
         />
