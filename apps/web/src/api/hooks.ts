@@ -1080,7 +1080,7 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
       onSuccess: settle,
     }),
     addRole: useMutation({
-      mutationFn: (input: { name: string; multiple: boolean; freeForm: boolean }) =>
+      mutationFn: (input: { name: string; multiple: boolean; freeForm: boolean; fillWithCreator: boolean }) =>
         api.post<ProjectRole>(`/projects/${projectId}/roles`, input),
       onSuccess: settle,
     }),
@@ -1093,6 +1093,7 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
         name?: string;
         multiple?: boolean;
         freeForm?: boolean;
+        fillWithCreator?: boolean;
         position?: number;
       }) => api.patch<ProjectRole>(`/project-roles/${id}`, patch),
       onSuccess: settle,

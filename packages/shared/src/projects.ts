@@ -260,6 +260,11 @@ export interface ProjectRole {
    * whoever the item is about but has no account here — a queue's customer.
    */
   freeForm: boolean;
+  /**
+   * Whether whoever creates an item is put in it, as a project's reporter and
+   * a watcher are, unless the item is created with the role already filled.
+   */
+  fillWithCreator: boolean;
   position: number;
 }
 
@@ -950,12 +955,14 @@ export const createRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40),
   multiple: z.boolean().default(false),
   freeForm: z.boolean().default(false),
+  fillWithCreator: z.boolean().default(false),
 });
 
 export const updateRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40).optional(),
   multiple: z.boolean().optional(),
   freeForm: z.boolean().optional(),
+  fillWithCreator: z.boolean().optional(),
   position: z.number().finite().optional(),
 });
 

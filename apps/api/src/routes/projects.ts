@@ -118,7 +118,7 @@ const DEFAULTS: Record<
   ProjectKind,
   {
     statuses: { name: string; category: StatusCategory; color: string }[];
-    roles: { name: string; multiple: boolean; freeForm?: boolean }[];
+    roles: { name: string; multiple: boolean; freeForm?: boolean; fillWithCreator?: boolean }[];
   }
 > = {
   // New work lands in the backlog, and goes on the board once someone plans it.
@@ -133,7 +133,8 @@ const DEFAULTS: Record<
     roles: [
       { name: 'Assignee', multiple: false },
       { name: 'Reviewer', multiple: true },
-      { name: 'Reporter', multiple: false },
+      { name: 'Reporter', multiple: false, fillWithCreator: true },
+      { name: 'Watcher', multiple: true, fillWithCreator: true },
     ],
   },
   queue: {
@@ -147,8 +148,8 @@ const DEFAULTS: Record<
       { name: 'Assignee', multiple: false },
       // Whoever asked is often a customer rather than a colleague, so the name
       // can be typed in when there is no account to point at.
-      { name: 'Requester', multiple: false, freeForm: true },
-      { name: 'Watcher', multiple: true },
+      { name: 'Requester', multiple: false, freeForm: true, fillWithCreator: true },
+      { name: 'Watcher', multiple: true, fillWithCreator: true },
     ],
   },
 };
@@ -281,7 +282,8 @@ export async function fetchProject(id: string, userId: string): Promise<Project>
                                       ORDER BY st.position, st.created_at)
                         FROM project_statuses st WHERE st.project_id = p.id), '[]'::json) AS statuses,
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'name', r.name, 'multiple', r.multiple,
-                                                        'freeForm', r.free_form, 'position', r.position)
+                                                        'freeForm', r.free_form, 'fillWithCreator', r.fill_with_creator,
+                                                        'position', r.position)
                                       ORDER BY r.position, r.created_at)
                         FROM project_roles r WHERE r.project_id = p.id), '[]'::json) AS roles,
             COALESCE((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'position', w.position,
@@ -831,15 +833,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         ],
       );
       await client.query(
-        `INSERT INTO project_roles (project_id, name, multiple, free_form, position)
-         SELECT $1, r.name, r.multiple, r.free_form, r.position
-           FROM unnest($2::text[], $3::boolean[], $4::boolean[])
-                WITH ORDINALITY AS r(name, multiple, free_form, position)`,
+        `INSERT INTO project_roles (project_id, name, multiple, free_form, fill_with_creator, position)
+         SELECT $1, r.name, r.multiple, r.free_form, r.fill_with_creator, r.position
+           FROM unnest($2::text[], $3::boolean[], $4::boolean[], $5::boolean[])
+                WITH ORDINALITY AS r(name, multiple, free_form, fill_with_creator, position)`,
         [
           projectId,
           defaults.roles.map((r) => r.name),
           defaults.roles.map((r) => r.multiple),
           defaults.roles.map((r) => r.freeForm ?? false),
+          defaults.roles.map((r) => r.fillWithCreator ?? false),
         ],
       );
       // The five standard types, each taking every role.
@@ -1050,10 +1053,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const input = parse(createRoleSchema, req.body ?? {});
     await assertRoleNameFree(req.params.id, input.name);
     const { rows } = await query<ProjectRole>(
-      `INSERT INTO project_roles (project_id, name, multiple, free_form, position)
-       VALUES ($1, $2, $3, $4, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
-       RETURNING id, name, multiple, free_form AS "freeForm", position`,
-      [req.params.id, input.name, input.multiple, input.freeForm],
+      `INSERT INTO project_roles (project_id, name, multiple, free_form, fill_with_creator, position)
+       VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
+       RETURNING id, name, multiple, free_form AS "freeForm", fill_with_creator AS "fillWithCreator", position`,
+      [req.params.id, input.name, input.multiple, input.freeForm, input.fillWithCreator],
     );
     // A new role applies to every type until someone says otherwise.
     await query(
@@ -1076,10 +1079,18 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       const result = await client.query<ProjectRole>(
         `UPDATE project_roles
             SET name = COALESCE($2, name), multiple = COALESCE($3, multiple),
-                free_form = COALESCE($5, free_form), position = COALESCE($4, position)
+                free_form = COALESCE($5, free_form), fill_with_creator = COALESCE($6, fill_with_creator),
+                position = COALESCE($4, position)
           WHERE id = $1
-          RETURNING id, name, multiple, free_form AS "freeForm", position`,
-        [req.params.id, input.name ?? null, input.multiple ?? null, input.position ?? null, input.freeForm ?? null],
+          RETURNING id, name, multiple, free_form AS "freeForm", fill_with_creator AS "fillWithCreator", position`,
+        [
+          req.params.id,
+          input.name ?? null,
+          input.multiple ?? null,
+          input.position ?? null,
+          input.freeForm ?? null,
+          input.fillWithCreator ?? null,
+        ],
       );
       // A role that no longer takes typed names lets go of the ones it has;
       // there is nowhere left in the app to read or clear them from.
@@ -1659,6 +1670,13 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       assertRoleFits(role, userIds, names);
       return { role, userIds, names };
     });
+    // Whoever files it fills the roles set to take them, unless the request
+    // said who holds the role; an empty list given for it means nobody.
+    for (const role of project.roles) {
+      if (role.fillWithCreator && type.roleIds.includes(role.id) && !roleIds.has(role.id)) {
+        roles.push({ role, userIds: [req.user!.id], names: [] });
+      }
+    }
     await assertMembers(workspaceId, [...new Set(roles.flatMap((r) => r.userIds))]);
 
     const id = await transaction(async (client) => {

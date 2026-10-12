@@ -1113,6 +1113,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   const [newName, setNewName] = useState('');
   const [newMultiple, setNewMultiple] = useState(false);
   const [newFreeForm, setNewFreeForm] = useState(false);
+  const [newFillWithCreator, setNewFillWithCreator] = useState(false);
   const fail = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
   const roles = project.roles;
 
@@ -1128,12 +1129,13 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
     const name = newName.trim();
     if (!name) return;
     setup.addRole.mutate(
-      { name, multiple: newMultiple, freeForm: newFreeForm },
+      { name, multiple: newMultiple, freeForm: newFreeForm, fillWithCreator: newFillWithCreator },
       {
         onSuccess: () => {
           setNewName('');
           setNewMultiple(false);
           setNewFreeForm(false);
+          setNewFillWithCreator(false);
         },
         onError: fail('Could not add the role'),
       },
@@ -1143,11 +1145,11 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   return (
     <Section
       title="Roles"
-      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. Which types each role applies to is set under Work item types; a new role applies to every type."
+      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. A role filled by its creator gets whoever files the item, in the app, through the API or through an AI connection, unless they say who holds it. Which types each role applies to is set under Work item types; a new role applies to every type."
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {roles.map((role, index) => (
-          <li key={role.id} className="flex items-center gap-2 px-2 py-1.5">
+          <li key={role.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon
               name={role.freeForm ? 'person-vcard' : role.multiple ? 'people' : 'person'}
               className="w-5 text-center text-[var(--color-muted)]"
@@ -1182,6 +1184,20 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
               />
               Free-form
             </label>
+            <label
+              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+              title={`Puts whoever creates an item in ${role.name}, unless they say who holds it when they create it.`}
+            >
+              <input
+                type="checkbox"
+                checked={role.fillWithCreator}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  setup.updateRole.mutate({ id: role.id, fillWithCreator: e.target.checked }, { onError: fail('Could not change the role') })
+                }
+              />
+              Filled by creator
+            </label>
             {canEdit && (
               <>
                 <IconButton label="Move earlier" disabled={index === 0} onClick={() => move(index, -1)}>
@@ -1199,7 +1215,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
         ))}
         {roles.length === 0 && <li className="px-3 py-2 text-xs text-[var(--color-muted)]">No roles yet.</li>}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name="person-plus" className="w-5 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
@@ -1218,6 +1234,13 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
             >
               <input type="checkbox" checked={newFreeForm} onChange={(e) => setNewFreeForm(e.target.checked)} />
               Free-form
+            </label>
+            <label
+              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+              title="Puts whoever creates an item in the role, unless they say who holds it when they create it."
+            >
+              <input type="checkbox" checked={newFillWithCreator} onChange={(e) => setNewFillWithCreator(e.target.checked)} />
+              Filled by creator
             </label>
             <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
               Add

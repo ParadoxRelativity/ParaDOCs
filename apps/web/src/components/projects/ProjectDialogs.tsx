@@ -194,12 +194,11 @@ export function NewWorkItemDialog({
   const [statusId, setStatusId] = useState(initialStatusId ?? project.statuses[0]?.id ?? '');
   const [dueDate, setDueDate] = useState('');
   const [estimate, setEstimate] = useState('');
-  // Whoever files something reported or requested it, when the project has
-  // such a role; they can take themselves off before creating it.
-  const [roles, setRoles] = useState<Record<string, string[]>>(() => {
-    const filer = project.roles.find((role) => /report|request/i.test(role.name));
-    return filer ? { [filer.id]: [selfId] } : {};
-  });
+  // Whoever files something fills the roles set to take them, as the server
+  // would; they can take themselves off before creating it.
+  const [roles, setRoles] = useState<Record<string, string[]>>(() =>
+    Object.fromEntries(project.roles.filter((role) => role.fillWithCreator).map((role) => [role.id, [selfId]])),
+  );
   // Names typed into free-form roles, beside the members chosen for them.
   const [roleNames, setRoleNames] = useState<Record<string, string[]>>({});
   const [picking, setPicking] = useState<{ roleId: string; anchor: HTMLElement } | null>(null);
@@ -215,8 +214,10 @@ export function NewWorkItemDialog({
         statusId,
         dueDate: dueDate || null,
         estimate: parsedEstimate !== null && Number.isFinite(parsedEstimate) ? parsedEstimate : null,
-        // Only the roles its type offers; one filled in and then hidden by a type change is dropped.
-        roles: Object.fromEntries(Object.entries(roles).filter(([id]) => typeRoles.some((r) => r.id === id))),
+        // Every role its type offers, empty ones included, so the server does not
+        // fill a role the creator took themselves off. One filled in and then
+        // hidden by a type change is dropped.
+        roles: Object.fromEntries(typeRoles.map((role) => [role.id, roles[role.id] ?? []])),
         roleNames: Object.fromEntries(Object.entries(roleNames).filter(([id]) => typeRoles.some((r) => r.id === id))),
         typeId: type,
         // Epics sit above sprints and other epics.

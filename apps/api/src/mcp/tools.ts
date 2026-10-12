@@ -803,7 +803,7 @@ export const TOOLS: Tool[] = [
         `Link: ${ctx.origin}/w/${p.workspaceId}/p/${p.id}`,
         `Statuses, in order: ${p.statuses.map((s) => `${s.name} [${s.category}]`).join(', ')}`,
         `Types: ${p.itemTypes.map((t) => `${t.name}${t.epic ? ' (epic)' : ''}${t.id === p.defaultTypeId ? ' (default)' : ''}`).join(', ')}`,
-        `Roles: ${p.roles.map((r) => `${r.name}${r.multiple ? ' (several)' : ''}${r.freeForm ? ' (any name)' : ''}`).join(', ')}`,
+        `Roles: ${p.roles.map((r) => `${r.name}${r.multiple ? ' (several)' : ''}${r.freeForm ? ' (any name)' : ''}${r.fillWithCreator ? ' (filled by creator)' : ''}`).join(', ')}`,
         p.sprintsEnabled
           ? `Sprints: ${sprints.map((s) => `${s.name} [${s.state}${s.endDate ? `, ends ${s.endDate}` : ''}]${s.goal ? ` — ${s.goal}` : ''}`).join('; ') || 'none planned'}`
           : '',
@@ -938,7 +938,7 @@ export const TOOLS: Tool[] = [
     name: 'create_work_item',
     title: 'Create a work item',
     description:
-      "Adds work to a project or queue. Type and status are by name, as get_project lists them; left out, the project's default type and first status are used.",
+      "Adds work to a project or queue. Type and status are by name, as get_project lists them; left out, the project's default type and first status are used. Whoever creates it fills the roles set to be filled by the creator, such as Reporter and Watcher.",
     params: {
       project: { type: 'string', description: 'Project key (such as ENG), name or id', required: true },
       title: { type: 'string', description: 'The title', required: true },
