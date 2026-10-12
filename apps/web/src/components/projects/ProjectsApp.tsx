@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   activeSprint,
@@ -228,45 +228,37 @@ function ProjectView({
       ? data.statuses.find((s) => s.category === 'backlog')
       : data.statuses.find((s) => s.category !== 'backlog'))?.id ?? data.statuses[0]?.id;
   const filtering = text.trim() !== '' || person !== '';
+  const newButton = (
+    <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
+      <Icon name="plus-lg" /> New
+    </Button>
+  );
 
   return (
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-2">
           <ProjectIcon project={data} className="text-lg" />
-          <h1 className="min-w-0 truncate text-base font-semibold">{data.name}</h1>
+          <h1 className={cx('min-w-0 truncate text-base font-semibold', mobile && 'flex-1 basis-0')}>{data.name}</h1>
           <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
             {data.key}
           </span>
-          <div role="tablist" className="ml-2 flex rounded-md border border-[var(--color-line)] p-0.5">
-            {views.map((option) => (
-              <button
-                key={option.id}
-                role="tab"
-                aria-selected={view === option.id}
-                onClick={() => setView(option.id)}
-                className={cx(
-                  'flex items-center gap-1 rounded px-2 py-0.5 text-xs',
-                  view === option.id
-                    ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
-                )}
-              >
-                <Icon name={option.icon} />
-                {option.label}
-              </button>
-            ))}
-          </div>
-          <span className="flex-1" />
+          {!mobile && <ViewTabs views={views} view={view} onChange={setView} />}
+          {!mobile && <span className="flex-1" />}
+          {mobile && canEdit && !data.archivedAt && newButton}
+          {mobile && <ViewTabs views={views} view={view} onChange={setView} mobile />}
           {view !== 'settings' && view !== 'insights' && (
             <>
-              <div className="relative">
+              <div className={cx('relative', mobile && 'min-w-0 flex-1')}>
                 <Icon name="funnel" className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[var(--color-muted)]" />
                 <input
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   placeholder="Filter"
-                  className="w-40 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] py-1 pl-6 pr-2 text-xs outline-none focus:border-[var(--color-accent)]"
+                  className={cx(
+                    'rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] py-1 pl-6 pr-2 text-xs outline-none focus:border-[var(--color-accent)]',
+                    mobile ? 'w-full' : 'w-40',
+                  )}
                 />
               </div>
               {view !== 'workload' && (
@@ -289,11 +281,7 @@ function ProjectView({
               )}
             </>
           )}
-          {canEdit && !data.archivedAt && (
-            <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
-              <Icon name="plus-lg" /> New
-            </Button>
-          )}
+          {!mobile && canEdit && !data.archivedAt && newButton}
         </div>
 
         {data.archivedAt && (
@@ -452,6 +440,88 @@ function ProjectView({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The project's views as tabs. On a phone they take a row of their own and
+ * scroll sideways, so every view down to Settings can be reached in portrait;
+ * the chosen one is kept in sight. Arrow keys move between them.
+ */
+function ViewTabs({
+  views,
+  view,
+  onChange,
+  mobile = false,
+}: {
+  views: { id: View; label: string; icon: IconName }[];
+  view: View;
+  onChange: (view: View) => void;
+  mobile?: boolean;
+}) {
+  const list = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!mobile) return;
+    const reveal = () => {
+      const row = list.current;
+      const tab = row?.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (!tab || !row) return;
+      // Scrolls the row alone; scrollIntoView would move the page as well. The
+      // row is positioned, so a tab's offset is measured from it.
+      const left = tab.offsetLeft;
+      if (left < row.scrollLeft || left + tab.offsetWidth > row.scrollLeft + row.clientWidth) {
+        row.scrollTo({ left: left - (row.clientWidth - tab.offsetWidth) / 2 });
+      }
+    };
+    reveal();
+    // Again once the icons' font is in, which widens the tabs.
+    void document.fonts?.ready.then(reveal);
+  }, [view, mobile]);
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    const index = views.findIndex((v) => v.id === view);
+    const next =
+      e.key === 'ArrowRight' ? index + 1 : e.key === 'ArrowLeft' ? index - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? views.length - 1 : null;
+    if (next === null) return;
+    e.preventDefault();
+    const target = views[(next + views.length) % views.length];
+    onChange(target.id);
+    list.current?.querySelector<HTMLElement>(`[data-view="${target.id}"]`)?.focus();
+  }
+
+  return (
+    <div
+      ref={list}
+      role="tablist"
+      aria-label="Views"
+      onKeyDown={onKeyDown}
+      className={cx(
+        'flex rounded-md border border-[var(--color-line)] p-0.5',
+        mobile ? 'scroll-none relative w-full snap-x overflow-x-auto' : 'ml-2',
+      )}
+    >
+      {views.map((option) => (
+        <button
+          key={option.id}
+          role="tab"
+          data-view={option.id}
+          aria-selected={view === option.id}
+          tabIndex={view === option.id ? 0 : -1}
+          onClick={() => onChange(option.id)}
+          className={cx(
+            'flex shrink-0 snap-start items-center gap-1 whitespace-nowrap rounded px-2 text-xs',
+            mobile ? 'py-1.5' : 'py-0.5',
+            view === option.id
+              ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
+              : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
+          )}
+        >
+          <Icon name={option.icon} />
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }

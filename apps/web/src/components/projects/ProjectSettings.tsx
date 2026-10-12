@@ -365,7 +365,7 @@ function ItemTypeSection({ project, items, canEdit }: { project: Project; items:
           const roleCount = project.roles.filter((role) => type.roleIds.includes(role.id)).length;
           return (
             <li key={type.id}>
-              <div className="flex items-center gap-2 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
                 <IconPicker
                   icon={type.icon}
                   color={type.color}
@@ -437,14 +437,14 @@ function ItemTypeSection({ project, items, canEdit }: { project: Project; items:
           );
         })}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name="plus-circle" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder={newEpic ? 'New epic-kind type, such as Initiative' : 'New type, such as Spike'}
-              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 basis-32 py-1')}
             />
             <label
               className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
@@ -748,7 +748,7 @@ function StatusSection({ project, items, canEdit }: { project: Project; items: W
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {statuses.map((status, index) => (
-          <li key={status.id} className="flex items-center gap-2 px-2 py-1.5">
+          <li key={status.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <ColorSwatch
               color={status.color}
               disabled={!canEdit}
@@ -803,14 +803,14 @@ function StatusSection({ project, items, canEdit }: { project: Project; items: W
           </li>
         ))}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name={CATEGORY_ICON[newCategory]} className="w-5 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New status"
-              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 basis-32 py-1')}
             />
             <select
               value={newCategory}
@@ -941,7 +941,7 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
           const expanded = open === workflow.id;
           return (
             <li key={workflow.id}>
-              <div className="flex items-center gap-2 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
                 <Icon name="diagram-2" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
                 <RenameField
                   value={workflow.name}
@@ -972,14 +972,14 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
           </li>
         )}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name="plus-circle" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New workflow, such as Standard"
-              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 basis-32 py-1')}
             />
             <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
               Add
@@ -993,7 +993,7 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
           <h4 className="text-xs font-semibold">What each type follows</h4>
           <ul className="mt-1 divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
             {project.itemTypes.map((type) => (
-              <li key={type.id} className="flex items-center gap-2 px-2 py-1.5">
+              <li key={type.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
                 <TypeIcon type={type} className="w-5 shrink-0 justify-center" />
                 <span className="min-w-0 flex-1 text-sm">{type.name}</span>
                 <select
@@ -1159,47 +1159,49 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
               disabled={!canEdit}
               onCommit={(name) => setup.updateRole.mutate({ id: role.id, name }, { onError: fail('Could not rename the role') })}
             />
-            <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
-              <input
-                type="checkbox"
-                checked={role.multiple}
-                disabled={!canEdit}
-                onChange={(e) =>
-                  setup.updateRole.mutate({ id: role.id, multiple: e.target.checked }, { onError: fail('Could not change the role') })
-                }
-              />
-              Several
-            </label>
-            <label
-              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
-              title={`Lets a name be typed into ${role.name} as well as someone picked, for a customer or anyone else without an account here. Turning it off again drops the names already typed in.`}
-            >
-              <input
-                type="checkbox"
-                checked={role.freeForm}
-                disabled={!canEdit}
-                onChange={(e) =>
-                  setup.updateRole.mutate({ id: role.id, freeForm: e.target.checked }, { onError: fail('Could not change the role') })
-                }
-              />
-              Free-form
-            </label>
-            <label
-              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
-              title={`Puts whoever creates an item in ${role.name}, unless they say who holds it when they create it.`}
-            >
-              <input
-                type="checkbox"
-                checked={role.fillWithCreator}
-                disabled={!canEdit}
-                onChange={(e) =>
-                  setup.updateRole.mutate({ id: role.id, fillWithCreator: e.target.checked }, { onError: fail('Could not change the role') })
-                }
-              />
-              Filled by creator
-            </label>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
+                <input
+                  type="checkbox"
+                  checked={role.multiple}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.updateRole.mutate({ id: role.id, multiple: e.target.checked }, { onError: fail('Could not change the role') })
+                  }
+                />
+                Several
+              </label>
+              <label
+                className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                title={`Lets a name be typed into ${role.name} as well as someone picked, for a customer or anyone else without an account here. Turning it off again drops the names already typed in.`}
+              >
+                <input
+                  type="checkbox"
+                  checked={role.freeForm}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.updateRole.mutate({ id: role.id, freeForm: e.target.checked }, { onError: fail('Could not change the role') })
+                  }
+                />
+                Free-form
+              </label>
+              <label
+                className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                title={`Puts whoever creates an item in ${role.name}, unless they say who holds it when they create it.`}
+              >
+                <input
+                  type="checkbox"
+                  checked={role.fillWithCreator}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.updateRole.mutate({ id: role.id, fillWithCreator: e.target.checked }, { onError: fail('Could not change the role') })
+                  }
+                />
+                Filled by creator
+              </label>
+            </div>
             {canEdit && (
-              <>
+              <div className="ml-auto flex">
                 <IconButton label="Move earlier" disabled={index === 0} onClick={() => move(index, -1)}>
                   <Icon name="chevron-up" />
                 </IconButton>
@@ -1209,7 +1211,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
                 <IconButton label="Delete role" onClick={() => setRemoving(role)}>
                   <Icon name="trash3" />
                 </IconButton>
-              </>
+              </div>
             )}
           </li>
         ))}
@@ -1222,7 +1224,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New role, such as Approver"
-              className={cx(FIELD, 'min-w-0 flex-1 py-1')}
+              className={cx(FIELD, 'min-w-0 flex-1 basis-32 py-1')}
             />
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
               <input type="checkbox" checked={newMultiple} onChange={(e) => setNewMultiple(e.target.checked)} />
@@ -1285,7 +1287,7 @@ function RenameField({ value, disabled, onCommit }: { value: string; disabled: b
           e.currentTarget.blur();
         }
       }}
-      className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm outline-none hover:border-[var(--color-line)] focus:border-[var(--color-accent)] disabled:hover:border-transparent"
+      className="min-w-0 flex-1 basis-32 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm outline-none hover:border-[var(--color-line)] focus:border-[var(--color-accent)] disabled:hover:border-transparent"
     />
   );
 }
