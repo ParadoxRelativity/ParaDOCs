@@ -71,10 +71,11 @@ const KIND_NOUN = {
   spreadsheet: 'spreadsheet',
   channel: 'channel',
   project: 'project',
+  schedule: 'schedule',
 } as const;
 
-/** Channels and projects are not filed in folders, so there is nothing for them to follow. */
-const inherits = (kind: NamedAccessTarget['kind']) => kind !== 'channel' && kind !== 'project';
+/** Channels, projects and schedules are not filed in folders, so there is nothing for them to follow. */
+const inherits = (kind: NamedAccessTarget['kind']) => kind !== 'channel' && kind !== 'project' && kind !== 'schedule';
 
 /**
  * Who can reach a folder, document, spreadsheet, channel or project. Owners and admins set it here;

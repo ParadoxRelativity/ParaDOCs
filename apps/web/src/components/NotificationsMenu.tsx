@@ -9,15 +9,18 @@ import type {
   MessageReportNotification,
   Notifications,
   OwnAccountRequestNotification,
+  ScheduleNotification,
   ServerUpdateNotification,
   WorkItemNotification,
   WorkspaceSuspensionNotification,
 } from '@paradocs/shared';
+import { scheduleNotificationText } from '@paradocs/shared';
 import {
   useAcceptInvite,
   useDeclineInvite,
   useMarkMentionsRead,
   useMarkNotificationsRead,
+  useMarkScheduleNotificationsRead,
   useMarkWorkItemsRead,
   useNotifications,
   useResolveReport,
@@ -59,6 +62,8 @@ interface Actions {
   openMention: (mention: MentionNotification, newTab: boolean) => void;
   /** Opens a work item you were given a role on or named in. */
   openWorkItem: (item: WorkItemNotification, newTab: boolean) => void;
+  /** Opens the schedule a shift notification is about, and clears it. */
+  openSchedule?: (notification: ScheduleNotification, newTab: boolean) => void;
   accept: (invite: InviteNotification) => Promise<void>;
   decline: (invite: InviteNotification) => Promise<void>;
   markAllRead: () => Promise<void>;
@@ -85,6 +90,7 @@ function countOf(notifications: Notifications): number {
     notifications.messages.length +
     (notifications.mentions?.length ?? 0) +
     (notifications.workItems?.length ?? 0) +
+    (notifications.schedules?.length ?? 0) +
     (notifications.serverUpdate ? 1 : 0) +
     (notifications.accountRequests?.length ?? 0) +
     (notifications.ownAccountRequest ? 1 : 0) +
@@ -180,6 +186,7 @@ export default function NotificationsMenu() {
   const markRead = useMarkNotificationsRead();
   const markMentionsRead = useMarkMentionsRead();
   const markWorkItemsRead = useMarkWorkItemsRead();
+  const markSchedulesRead = useMarkScheduleNotificationsRead();
   const resolveReport = useResolveReport();
   const dismissed = useDismissedUpdates();
   const update = useClientUpdate();
@@ -251,6 +258,13 @@ export default function NotificationsMenu() {
           else navigate(path);
           markWorkItemsRead.mutate([item.workItemId]);
         },
+        openSchedule: (notification, newTab) => {
+          close();
+          const path = `/w/${notification.workspace.id}/sc/${notification.scheduleId}`;
+          if (newTab) openTab(path, notification.scheduleName);
+          else navigate(path);
+          markSchedulesRead.mutate([notification.id]);
+        },
         openReport: (flagged, newTab) => {
           close();
           const path = reportPath(flagged);
@@ -289,6 +303,7 @@ export default function NotificationsMenu() {
               markRead.mutateAsync(undefined),
               markMentionsRead.mutateAsync(undefined),
               markWorkItemsRead.mutateAsync(undefined),
+              markSchedulesRead.mutateAsync(undefined),
             ]);
           } catch (err) {
             report(err, 'Could not mark everything as read');
@@ -364,6 +379,7 @@ export default function NotificationsMenu() {
       group.notifications.invites.length > 0 ||
       (group.notifications.mentions?.length ?? 0) > 0 ||
       (group.notifications.workItems?.length ?? 0) > 0 ||
+      (group.notifications.schedules ?? []).some((n) => n.reason === 'request' || n.reason === 'approval') ||
       group.notifications.messages.some((m) => m.mentions > 0 || m.direct) ||
       (group.notifications.messageReports?.length ?? 0) > 0,
   );
@@ -426,13 +442,14 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
   const { invites, messages } = group.notifications;
   const mentions = group.notifications.mentions ?? [];
   const workItems = group.notifications.workItems ?? [];
+  const schedules = group.notifications.schedules ?? [];
   const serverUpdate = group.notifications.serverUpdate ?? null;
   const accountRequests = group.notifications.accountRequests ?? [];
   const ownAccountRequest = group.notifications.ownAccountRequest ?? null;
   const suspensions = group.notifications.suspensions ?? [];
   const messageReports = group.notifications.messageReports ?? [];
   if (countOf(group.notifications) === 0) return null;
-  const unread = messages.length > 0 || mentions.length > 0 || workItems.length > 0;
+  const unread = messages.length > 0 || mentions.length > 0 || workItems.length > 0 || schedules.length > 0;
   const heading = labelled && group.connection ? group.connection.label : unread ? 'Unread' : null;
 
   return (
@@ -484,6 +501,13 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
           key={item.workItemId}
           item={item}
           onOpen={(newTab) => group.actions.openWorkItem(item, newTab)}
+        />
+      ))}
+      {schedules.map((notification) => (
+        <ScheduleRow
+          key={notification.id}
+          notification={notification}
+          onOpen={group.actions.openSchedule && ((newTab) => group.actions.openSchedule!(notification, newTab))}
         />
       ))}
       {messages.map((message) => (
@@ -825,6 +849,39 @@ function WorkItemRow({ item, onOpen }: { item: WorkItemNotification; onOpen: (ne
             {workItemBadge(item)}
           </span>
         </p>
+      </div>
+    </button>
+  );
+}
+
+/** A change to your shifts: asked to cover, a swap taken or decided, an override, a reminder. */
+function ScheduleRow({ notification, onOpen }: { notification: ScheduleNotification; onOpen?: (newTab: boolean) => void }) {
+  const when = notification.startsAt
+    ? new Date(notification.startsAt).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : null;
+  return (
+    <button
+      onClick={(event) => onOpen?.(wantsNewTab(event))}
+      disabled={!onOpen}
+      className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]"
+    >
+      {notification.by ? (
+        <Avatar name={notification.by.name} url={notification.by.avatarUrl} seed={notification.by.id} size="lg" />
+      ) : (
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+          <Icon name={notification.reason === 'on_call' ? 'telephone' : 'alarm'} />
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
+          <span className="truncate font-medium text-[var(--color-ink)]">
+            <Icon name="calendar-week" /> {notification.scheduleName}
+          </span>
+          <span className="truncate">{notification.workspace.name}</span>
+          <span className="ml-auto shrink-0">{formatRelative(notification.createdAt)}</span>
+        </div>
+        <p className="mt-0.5 line-clamp-2 text-sm">{scheduleNotificationText(notification)}</p>
+        {when && <p className="mt-0.5 text-xs text-[var(--color-muted)]">{when}</p>}
       </div>
     </button>
   );

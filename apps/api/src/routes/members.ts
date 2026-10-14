@@ -9,6 +9,7 @@ import { assertMayGrant, loadRole, type RoleRow } from '../lib/workspaceRoles.js
 import { managesAccess, permissionList, type Membership } from '../lib/roles.js';
 import { publishToUser, publishToWorkspace } from '../chat/hub.js';
 import { accessChanged } from '../lib/accessEvents.js';
+import { leaveSchedules } from '../lib/schedules.js';
 
 /** Everyone with the workspace open refreshes who is in it. */
 function membersChanged(workspaceId: string): void {
@@ -169,9 +170,11 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
                 OR e.document_id IN (SELECT id FROM documents WHERE workspace_id = $1)
                 OR e.spreadsheet_id IN (SELECT id FROM spreadsheets WHERE workspace_id = $1)
                 OR e.channel_id IN (SELECT id FROM channels WHERE workspace_id = $1)
-                OR e.project_id IN (SELECT id FROM projects WHERE workspace_id = $1))`,
+                OR e.project_id IN (SELECT id FROM projects WHERE workspace_id = $1)
+                OR e.schedule_id IN (SELECT id FROM schedules WHERE workspace_id = $1))`,
           [req.params.id, req.params.userId],
         );
+        await leaveSchedules(client, req.params.id, req.params.userId);
       });
       membersChanged(req.params.id);
       accessChanged(req.params.id);

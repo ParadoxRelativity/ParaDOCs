@@ -5,11 +5,12 @@ import {
   type MemberReference,
   type MessageReferences,
   type ProjectReference,
+  type ScheduleReference,
   type SpreadsheetReference,
   type WorkItemReference,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql, roleIdSql, spreadsheetLevelSql } from './access.js';
+import { channelLevelSql, documentLevelSql, projectLevelSql, roleIdSql, scheduleLevelSql, spreadsheetLevelSql } from './access.js';
 import { appEnabledSql } from './apps.js';
 
 export type {
@@ -43,13 +44,14 @@ export async function resolveReferences(
   workspaceId: string,
   viewerId: string | null,
 ): Promise<MessageReferences> {
-  const { documentIds, spreadsheetIds, workItemIds, projectIds, channelIds, userIds } = collectReferences(bodies);
-  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [], projects: [] };
+  const { documentIds, spreadsheetIds, workItemIds, projectIds, scheduleIds, channelIds, userIds } = collectReferences(bodies);
+  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [], projects: [], schedules: [] };
   if (
     documentIds.length === 0 &&
     spreadsheetIds.length === 0 &&
     workItemIds.length === 0 &&
     projectIds.length === 0 &&
+    scheduleIds.length === 0 &&
     channelIds.length === 0 &&
     userIds.length === 0
   ) {
@@ -59,7 +61,7 @@ export async function resolveReferences(
   const viewerRole = roleIdSql('$3', '$2');
   const viewer = viewerId ? [viewerId] : [];
 
-  const [documents, spreadsheets, channels, members, workItems, projects] = await Promise.all([
+  const [documents, spreadsheets, channels, members, workItems, projects, schedules] = await Promise.all([
     documentIds.length
       ? query<DocumentReference>(
           `SELECT d.id, d.title, d.icon, d.mode FROM documents d
@@ -110,9 +112,18 @@ export async function resolveReferences(
           [projectIds, workspaceId, ...viewer],
         ).then((r) => r.rows)
       : Promise.resolve([]),
+    scheduleIds.length
+      ? // Held to what the reader may see, and gone with the app.
+        query<ScheduleReference>(
+          `SELECT s.id, s.name, s.color FROM schedules s
+            WHERE s.id = ANY($1::uuid[]) AND s.workspace_id = $2 AND ${appEnabledSql('$2', 'schedules')}
+              AND ${viewerId ? `${scheduleLevelSql('$3', viewerRole)} > 0` : `s.access = 'open'`}`,
+          [scheduleIds, workspaceId, ...viewer],
+        ).then((r) => r.rows)
+      : Promise.resolve([]),
   ]);
 
-  return { documents, spreadsheets, channels, members, workItems, projects };
+  return { documents, spreadsheets, channels, members, workItems, projects, schedules };
 }
 
 /**

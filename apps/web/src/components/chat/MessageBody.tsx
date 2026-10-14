@@ -1,10 +1,16 @@
-import { parseMessage, type MessageReferences, type ProjectReference, type WorkItemReference } from '@paradocs/shared';
+import {
+  parseMessage,
+  type MessageReferences,
+  type ProjectReference,
+  type ScheduleReference,
+  type WorkItemReference,
+} from '@paradocs/shared';
 import { emojiOnly } from '../../lib/emoji';
 import { cx } from '../../lib/util';
 import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
 
 /**
- * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>` and `<#…>`
+ * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>`, `<sched:…>` and `<#…>`
  * tokens into links, and `<@…>` and `<!here>` into mentions. Work item
  * descriptions and comments are written the same way and drawn with this too.
  *
@@ -24,6 +30,7 @@ export function MessageBody({
   onOpenChannel,
   onOpenWorkItem,
   onOpenProject,
+  onOpenSchedule,
 }: {
   body: string;
   references: MessageReferences;
@@ -36,6 +43,8 @@ export function MessageBody({
   onOpenWorkItem?: (item: WorkItemReference) => void;
   /** Where a board or queue opens. Without it, one is shown but not clickable. */
   onOpenProject?: (project: ProjectReference) => void;
+  /** Where a schedule opens. Without it, one is shown but not clickable. */
+  onOpenSchedule?: (schedule: ScheduleReference) => void;
 }) {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
@@ -43,6 +52,7 @@ export function MessageBody({
   const members = new Map(references.members.map((m) => [m.id, m]));
   const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
   const projects = new Map((references.projects ?? []).map((p) => [p.id, p]));
+  const schedules = new Map((references.schedules ?? []).map((s) => [s.id, s]));
   // A message that is just a few emoji is shown large.
   const emojiCount = emojiOnly(body);
   const jumbo = emojiCount > 0 && emojiCount <= 6;
@@ -95,6 +105,12 @@ export function MessageBody({
           const project = projects.get(segment.id);
           if (!project) return <UnknownRef key={index} label="unknown board" />;
           return <ProjectChip key={index} project={project} onClick={onOpenProject && (() => onOpenProject(project))} />;
+        }
+        if (segment.type === 'schedule') {
+          const schedule = schedules.get(segment.id);
+          // Unresolved once access or the app is gone.
+          if (!schedule) return <UnknownRef key={index} label="unknown schedule" />;
+          return <ScheduleChip key={index} schedule={schedule} onClick={onOpenSchedule && (() => onOpenSchedule(schedule))} />;
         }
 
         if (segment.type === 'channel') {
@@ -185,6 +201,25 @@ export function ProjectChip({ project, onClick }: { project: ProjectReference; o
     >
       <Icon name={project.kind === 'queue' ? 'inboxes' : 'kanban'} className="self-center text-[11px]" />
       <span className="truncate">{project.name}</span>
+    </button>
+  );
+}
+
+/** A schedule, in its color. */
+export function ScheduleChip({ schedule, onClick }: { schedule: ScheduleReference; onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title="Schedule"
+      className={cx(
+        'mx-0.5 inline-flex max-w-full items-baseline gap-1 rounded px-1.5 py-0.5 align-baseline text-[13px] font-medium',
+        'bg-[var(--color-accent)]/15 text-[var(--color-accent)] enabled:hover:bg-[var(--color-accent)]/25',
+      )}
+    >
+      <span className="h-2 w-2 shrink-0 self-center rounded-full" style={{ background: schedule.color }} />
+      <span className="truncate">{schedule.name}</span>
     </button>
   );
 }

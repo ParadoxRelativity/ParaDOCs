@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useActivity, useCreateEvent, useDeleteEvent, useEvents } from '../../api/hooks';
-import { cx, toISODate, todayISO } from '../../lib/util';
+import { useActivity, useCreateEvent, useDeleteEvent, useEvents, useMyShifts, useWorkspaces } from '../../api/hooks';
+import { cx, toISODate, todayISO, useLocalStorage } from '../../lib/util';
 import { IconButton } from '../ui';
 import Icon from '../Icon';
 
@@ -28,6 +28,15 @@ export default function CalendarPanel({ workspaceId, documentId, canEdit }: Prop
   const events = useEvents(workspaceId, from, to);
   const activity = useActivity(workspaceId, from, to);
   const createEvent = useCreateEvent(workspaceId);
+  // Your shifts, read only and colored by schedule, where Schedules is on and your role reaches it.
+  const workspace = useWorkspaces().data?.find((w) => w.id === workspaceId);
+  const shiftsAvailable = workspace?.visibleApps.includes('schedules') ?? false;
+  const [showShifts, setShowShifts] = useLocalStorage('paradocs.calendarShifts', true);
+  const myShifts = useMyShifts(
+    shiftsAvailable && showShifts ? workspaceId : undefined,
+    monthStart.toISOString(),
+    new Date(monthEnd.getFullYear(), monthEnd.getMonth(), monthEnd.getDate() + 1).toISOString(),
+  );
   const deleteEvent = useDeleteEvent(workspaceId);
 
   const activityByDay = useMemo(
@@ -52,7 +61,20 @@ export default function CalendarPanel({ workspaceId, documentId, canEdit }: Prop
     return date;
   });
 
+  const shiftsByDay = useMemo(() => {
+    const map = new Map<string, NonNullable<typeof myShifts.data>['shifts']>();
+    for (const shift of myShifts.data?.shifts ?? []) {
+      // On every day it reaches into.
+      for (let d = new Date(shift.start); d < new Date(shift.end); d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+        const day = toISODate(d);
+        map.set(day, [...(map.get(day) ?? []), shift]);
+      }
+    }
+    return map;
+  }, [myShifts.data]);
+
   const selectedEvents = eventsByDay.get(selected) ?? [];
+  const selectedShifts = shiftsAvailable && showShifts ? (shiftsByDay.get(selected) ?? []) : [];
   const today = todayISO();
 
   function submitEvent(e: React.FormEvent) {
@@ -101,6 +123,7 @@ export default function CalendarPanel({ workspaceId, documentId, canEdit }: Prop
           const inMonth = date.getMonth() === cursor.getMonth();
           const act = activityByDay.get(iso);
           const dayEvents = eventsByDay.get(iso);
+          const dayShift = showShifts ? shiftsByDay.get(iso)?.[0] : undefined;
           return (
             <button
               key={iso}
@@ -121,11 +144,19 @@ export default function CalendarPanel({ workspaceId, documentId, canEdit }: Prop
                   <Dot selected={iso === selected} color="var(--color-muted)" />
                 )}
                 {dayEvents?.length ? <Dot selected={iso === selected} color="#f59e0b" /> : null}
+                {dayShift ? <Dot selected={iso === selected} color={dayShift.color} /> : null}
               </span>
             </button>
           );
         })}
       </div>
+
+      {shiftsAvailable && (
+        <label className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+          <input type="checkbox" checked={showShifts} onChange={(e) => setShowShifts(e.target.checked)} />
+          Show my shifts
+        </label>
+      )}
 
       <div className="mt-3 border-t border-[var(--color-line)] pt-3">
         <div className="mb-2 flex items-center justify-between">
@@ -156,6 +187,19 @@ export default function CalendarPanel({ workspaceId, documentId, canEdit }: Prop
         )}
 
         <div className="space-y-1">
+          {selectedShifts.map((shift) => (
+            <div key={`${shift.scheduleId}-${shift.start}`} className="flex items-center gap-1.5 rounded px-1 py-1" title="A shift: change it in Schedules">
+              <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: shift.color }} />
+              <span className="min-w-0 flex-1 truncate text-xs">
+                {shift.scheduleName}
+                {shift.label && ` · ${shift.label}`}
+              </span>
+              <span className="shrink-0 text-[10px] text-[var(--color-muted)]">
+                {new Date(shift.start).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}–
+                {new Date(shift.end).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+              </span>
+            </div>
+          ))}
           {selectedEvents.map((event) => (
             <div key={event.id} className="group flex items-center gap-1.5 rounded px-1 py-1 hover:bg-[var(--color-surface)]">
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: event.color }} />
@@ -176,7 +220,7 @@ export default function CalendarPanel({ workspaceId, documentId, canEdit }: Prop
               )}
             </div>
           ))}
-          {selectedEvents.length === 0 && !adding && (
+          {selectedEvents.length === 0 && selectedShifts.length === 0 && !adding && (
             <p className="text-xs text-[var(--color-muted)]">No events.</p>
           )}
         </div>
