@@ -1,5 +1,13 @@
 import type { FastifyRequest } from 'fastify';
-import { projectPermission, type FolderApp, type Permission, type ProjectAction, type ProjectKind, type WorkspacePermission } from '@paradocs/shared';
+import {
+  projectPermission,
+  type FolderApp,
+  type Permission,
+  type ProjectAction,
+  type ProjectKind,
+  type ScheduleAbilities,
+  type WorkspacePermission,
+} from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { appEnabledSql } from './apps.js';
 import { forbidden, notFound, unauthorized } from './http.js';
@@ -59,6 +67,19 @@ export function spreadsheetLevelSql(user: string, role: string, alias = 's'): st
 /** SQL for what `user`, with `role`, may do with the project aliased `alias`. */
 export function projectLevelSql(user: string, role: string, alias = 'p'): string {
   return `project_access_level(${user}, ${role}, ${alias}.access, ${alias}.id)`;
+}
+
+/** SQL for what `user`, with `role`, may do with the schedule aliased `alias`. */
+export function scheduleLevelSql(user: string, role: string, alias = 's'): string {
+  return `schedule_access_level(${user}, ${role}, ${alias}.access, ${alias}.id)`;
+}
+
+/** SQL for whether `user` is given "Can override" on the schedule aliased `alias`, themselves or through a team. */
+export function overrideGrantSql(user: string, alias = 's'): string {
+  return `EXISTS (SELECT 1 FROM schedule_override_grants g
+                   WHERE g.schedule_id = ${alias}.id
+                     AND (g.user_id = ${user}
+                       OR g.team_id IN (SELECT tm.team_id FROM team_members tm WHERE tm.user_id = ${user})))`;
 }
 
 /** SQL for what `user`, with `role`, may do in the folder `folder`. */
@@ -160,6 +181,83 @@ export async function workItemAccess(userId: string, itemId: string): Promise<Wo
   );
   const access = resolved(rows[0]);
   return access && { ...access, projectId: rows[0].project_id, kind: rows[0].kind };
+}
+
+export interface ScheduleAccess extends ResourceAccess {
+  scheduleId: string;
+  isMember: boolean;
+  isManager: boolean;
+  can: ScheduleAbilities;
+}
+
+/**
+ * What someone may do with a schedule, or null when they may not see it or
+ * Schedules is off.
+ *
+ * Seeing it is their role and the schedule's list, as for a project. Past
+ * that, a schedule's managers run it whatever their role says: they edit it,
+ * override its shifts, approve its swaps and say who else may override it.
+ * Overriding is otherwise `schedules.override` in a role, for every schedule
+ * they can see, or "Can override" on this schedule alone. Asking for cover and
+ * taking it is only for the people on it.
+ */
+export async function scheduleAccess(userId: string, scheduleId: string): Promise<ScheduleAccess | null> {
+  if (!UUID.test(scheduleId)) return null;
+  const { rows } = await query<
+    AccessRow & { created_by: string | null; is_member: boolean; is_manager: boolean; granted: boolean }
+  >(
+    `SELECT s.workspace_id, s.created_by, ${MEMBERSHIP_COLUMNS}, ${scheduleLevelSql('$2', 'm.role_id')} AS level,
+            sm.user_id IS NOT NULL AS is_member, COALESCE(sm.manager, false) AS is_manager,
+            ${overrideGrantSql('$2')} AS granted
+       FROM schedules s
+       ${memberJoin('s.workspace_id')}
+       LEFT JOIN schedule_members sm ON sm.schedule_id = s.id AND sm.user_id = $2
+      WHERE s.id = $1 AND ${appEnabledSql('s.workspace_id', 'schedules')}`,
+    [scheduleId, userId],
+  );
+  const access = resolved(rows[0]);
+  if (!access) return null;
+  const row = rows[0];
+  const has = (p: WorkspacePermission) => access.permissions.has(p);
+  const manages = managesAccess(access.role);
+  const editor = access.level === 2;
+  const manager = row.is_manager;
+  return {
+    ...access,
+    scheduleId,
+    isMember: row.is_member,
+    isManager: manager,
+    can: {
+      edit: editor || manager,
+      override: has('schedules.override') || row.granted || manager,
+      approve: has('schedules.approve') || manager,
+      request: has('schedules.request') && row.is_member,
+      delete: manages || (editor && (has('schedules.delete') || (has('schedules.create') && row.created_by === userId))),
+      grantOverride: manages || manager,
+    },
+  };
+}
+
+const SCHEDULE_REFUSALS: Record<keyof ScheduleAbilities, string> = {
+  edit: 'You can see this schedule but not change it',
+  override: 'You cannot override shifts on this schedule',
+  approve: 'You cannot approve swaps on this schedule',
+  request: 'Only people on this schedule can ask for cover or take shifts on it',
+  delete: 'You cannot delete this schedule',
+  grantOverride: 'Only an owner, an admin or one of its managers can say who may override this schedule',
+};
+
+/** Resolves a schedule and checks the caller may do `ability` with it. One they may not see is not found. */
+export async function assertScheduleAccess(
+  req: FastifyRequest,
+  scheduleId: string,
+  ability?: keyof ScheduleAbilities,
+): Promise<ScheduleAccess> {
+  if (!req.user) throw unauthorized();
+  const access = await scheduleAccess(req.user.id, scheduleId);
+  if (!access) throw notFound('Schedule not found');
+  if (ability && !access.can[ability]) throw forbidden(SCHEDULE_REFUSALS[ability]);
+  return access;
 }
 
 export interface FolderAccess extends ResourceAccess {

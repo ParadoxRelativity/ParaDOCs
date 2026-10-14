@@ -53,6 +53,7 @@ import { useDocumentImport } from './ImportDocument';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
 import { ProjectList } from './projects/ProjectList';
+import { ScheduleList } from './schedules/ScheduleList';
 import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
 import SheetContextMenu, { type SheetMenuItem } from './sheet/SheetContextMenu';
 import DeleteFolderDialog, { DOCUMENT_NOUN } from './DeleteFolderDialog';
@@ -97,6 +98,10 @@ interface Props {
   activeProjectId: string | null;
   onSelectProject: (id: string) => void;
   onOpenMyWork: () => void;
+  /** Null while My shifts is showing. */
+  activeScheduleId: string | null;
+  onSelectSchedule: (id: string) => void;
+  onOpenMyShifts: () => void;
   /** Open work items the signed-in person holds a role on. */
   myWorkCount?: number;
   /** The page open in the Access app. */
@@ -385,7 +390,13 @@ export default function LeftSidebar(props: Props) {
           )}
         </div>
       ) : props.section === 'schedules' ? (
-        <div className="min-h-0 flex-1" />
+        <ScheduleList
+          workspaceId={workspaceId}
+          activeScheduleId={props.activeScheduleId}
+          can={props.can}
+          onOpenMine={props.onOpenMyShifts}
+          onSelect={props.onSelectSchedule}
+        />
       ) : props.section === 'projects' ? (
         <ProjectList
           workspaceId={workspaceId}

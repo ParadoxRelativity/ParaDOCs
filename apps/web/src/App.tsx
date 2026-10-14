@@ -27,6 +27,7 @@ import {
   useOpenDirect,
   usePresence,
   useProject,
+  useSchedule,
   useSpreadsheet,
   useWorkItemListing,
   usePresenceSettings,
@@ -358,6 +359,7 @@ function Workspace({
             ? 'access'
             : 'docs';
   const openProject = useProject(projects ? projectId : undefined);
+  const openSchedule = useSchedule(schedules ? scheduleId : undefined);
   // Counted for the sidebar while Projects is open, and only then.
   const myWork = useWorkItemListing(projects && appOn('projects') ? workspaceId : undefined, { mine: true, open: true, limit: 200 });
   const channels = useChannels(appOn('chat') ? workspaceId : undefined);
@@ -567,7 +569,9 @@ function Workspace({
           ? (openProject.data?.name ?? '')
           : 'My work'
         : schedules
-          ? 'Schedules'
+          ? scheduleId
+            ? (openSchedule.data?.name ?? '')
+            : 'My shifts'
         : access
           ? 'Access'
           : allDocuments
@@ -789,6 +793,9 @@ function Workspace({
             activeProjectId={projects ? (projectId ?? null) : null}
             onSelectProject={(id) => show(`/w/${workspaceId}/p/${id}`)}
             onOpenMyWork={() => show(`/w/${workspaceId}/p`)}
+            activeScheduleId={schedules ? (scheduleId ?? null) : null}
+            onSelectSchedule={(id) => show(`/w/${workspaceId}/sc/${id}`)}
+            onOpenMyShifts={() => show(`/w/${workspaceId}/sc`)}
             myWorkCount={myWork.data?.length}
             activeAccessSection={accessSection}
             onSelectAccessSection={(next) => show(`/w/${workspaceId}/access/${next}`)}
@@ -883,7 +890,9 @@ function Workspace({
                     ? `Projects / ${openProject.data?.name ?? ''}`
                     : 'Projects'
                   : schedules
-                    ? 'Schedules'
+                    ? scheduleId
+                      ? `Schedules / ${openSchedule.data?.name ?? ''}`
+                      : 'Schedules'
                   : access
                   ? 'Access'
                   : allDocuments
@@ -1036,7 +1045,13 @@ function Workspace({
             )
           ) : schedules ? (
             workspace ? (
-              <SchedulesApp workspace={workspace} user={user} scheduleId={scheduleId ?? null} />
+              <SchedulesApp
+                workspace={workspace}
+                user={user}
+                scheduleId={scheduleId ?? null}
+                onOpenSchedule={(id) => navigate(`/w/${workspaceId}/sc/${id}`)}
+                onScheduleDeleted={() => navigate(`/w/${workspaceId}/sc`)}
+              />
             ) : (
               <Spinner />
             )

@@ -36,6 +36,7 @@ import { directRoutes } from './routes/direct.js';
 import { presenceRoutes } from './routes/presence.js';
 import { accessRoutes } from './routes/access.js';
 import { projectRoutes } from './routes/projects.js';
+import { scheduleRoutes } from './routes/schedules.js';
 import { intakeRoutes } from './routes/intake.js';
 import { aiConnectionRoutes } from './routes/aiConnections.js';
 import { oauthDiscoveryRoutes, oauthRoutes } from './routes/oauth.js';
@@ -134,6 +135,7 @@ export async function buildApp() {
     documentRoutes,
     spreadsheetRoutes,
     projectRoutes,
+    scheduleRoutes,
     intakeRoutes,
     searchRoutes,
     tagRoutes,

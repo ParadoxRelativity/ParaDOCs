@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon';
 import type { LayerConfig, LayerMember, RecurringConfig, ScheduleLayerKind } from '@paradocs/shared';
 import type { DbClient } from '../db/pool.js';
+import { publishToWorkspace } from '../chat/hub.js';
 
 /**
  * Changing schedules without rewriting their past.
@@ -93,21 +94,33 @@ export async function reviseLineage(
 }
 
 
+/** Tells everyone with the workspace open that a schedule, or anything on it, changed. */
+export function scheduleChanged(workspaceId: string, scheduleId: string): void {
+  publishToWorkspace(workspaceId, { type: 'schedules.changed', workspaceId, scheduleId });
+}
+
 /**
- * Takes someone off every schedule in a workspace from now on: out of its
- * rotations, crews and regular hours, off its member list and its override
- * grants, with their open requests cancelled and their place on others'
- * dropped. Their past shifts stay where they were.
+ * Takes someone off every schedule in a workspace, or only `scheduleId`, from
+ * now on: out of its rotations, crews and regular hours, off its member list
+ * and its override grants, with their open requests cancelled and their place
+ * on others' dropped. Their past shifts stay where they were.
  */
-export async function leaveSchedules(client: DbClient, workspaceId: string, userId: string): Promise<void> {
+export async function leaveSchedules(
+  client: DbClient,
+  workspaceId: string,
+  userId: string,
+  scheduleId?: string,
+): Promise<void> {
   const now = new Date();
+  const only = scheduleId ?? null;
   const { rows: lineages } = await client.query<{ lineage_id: string; time_zone: string }>(
     `SELECT DISTINCT l.lineage_id, s.time_zone
        FROM schedule_layers l JOIN schedules s ON s.id = l.schedule_id
-      WHERE s.workspace_id = $1 AND (l.effective_until IS NULL OR l.effective_until > $3)
+      WHERE s.workspace_id = $1 AND ($4::uuid IS NULL OR s.id = $4)
+        AND (l.effective_until IS NULL OR l.effective_until > $3)
         AND (EXISTS (SELECT 1 FROM schedule_layer_members m WHERE m.layer_id = l.id AND m.user_id = $2)
           OR l.config::text LIKE '%' || $2::text || '%')`,
-    [workspaceId, userId, now],
+    [workspaceId, userId, now, only],
   );
   for (const { lineage_id, time_zone } of lineages) {
     await reviseLineage(
@@ -135,34 +148,36 @@ export async function leaveSchedules(client: DbClient, workspaceId: string, user
       null,
     );
   }
-  const inWorkspace = 'SELECT id FROM schedules WHERE workspace_id = $1';
+  const inWorkspace = 'SELECT id FROM schedules WHERE workspace_id = $1 AND ($3::uuid IS NULL OR id = $3)';
   await client.query(`DELETE FROM schedule_members WHERE user_id = $2 AND schedule_id IN (${inWorkspace})`, [
     workspaceId,
     userId,
+    only,
   ]);
   await client.query(`DELETE FROM schedule_override_grants WHERE user_id = $2 AND schedule_id IN (${inWorkspace})`, [
     workspaceId,
     userId,
+    only,
   ]);
   await client.query(
     `DELETE FROM schedule_overrides WHERE user_id = $2 AND starts_at > now() AND schedule_id IN (${inWorkspace})`,
-    [workspaceId, userId],
+    [workspaceId, userId, only],
   );
   await client.query(
     `UPDATE schedule_requests SET status = 'cancelled', updated_at = now()
       WHERE requester_id = $2 AND status IN ('open', 'accepted') AND schedule_id IN (${inWorkspace})`,
-    [workspaceId, userId],
+    [workspaceId, userId, only],
   );
   await client.query(
     `DELETE FROM schedule_request_candidates c USING schedule_requests r
       WHERE r.id = c.request_id AND c.user_id = $2 AND r.schedule_id IN (${inWorkspace})`,
-    [workspaceId, userId],
+    [workspaceId, userId, only],
   );
   // A request they took but that still waits for approval goes back to open.
   await client.query(
     `UPDATE schedule_requests SET status = 'open', accepted_by = NULL, accepted_at = NULL,
             swap_starts_at = NULL, swap_ends_at = NULL, updated_at = now()
       WHERE accepted_by = $2 AND status = 'accepted' AND schedule_id IN (${inWorkspace})`,
-    [workspaceId, userId],
+    [workspaceId, userId, only],
   );
 }

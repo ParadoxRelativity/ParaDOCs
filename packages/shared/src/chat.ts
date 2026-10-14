@@ -335,6 +335,8 @@ export type WorkspaceEvent =
    * in the workspace; whoever cares asks for what they are allowed to see.
    */
   | { type: 'projects.changed'; workspaceId: string; projectId: string; itemId?: string }
+  /** A schedule, its layers, overrides or requests changed. Ids only. */
+  | { type: 'schedules.changed'; workspaceId: string; scheduleId: string }
   /**
    * Something in the Docs or Sheets tree was added, renamed, moved or removed:
    * a folder, or what is filed in one. Ids only, like `projects.changed`;

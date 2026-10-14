@@ -461,3 +461,100 @@ export function coverageGaps(shifts: Shift[], from: string, to: string): { start
 export function isTimeZone(zone: string): boolean {
   return DateTime.local().setZone(zone).isValid;
 }
+
+// --- the API ------------------------------------------------------------------
+
+export const SCHEDULE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'] as const;
+
+const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a color like #3b82f6');
+const timeZoneSchema = z.string().min(1).max(64).refine(isTimeZone, 'Choose a time zone such as Europe/London');
+
+export const scheduleMemberInputSchema = z.object({ userId: z.string().uuid(), manager: z.boolean().default(false) });
+
+export const createScheduleSchema = z.object({
+  name: z.string().trim().min(1, 'Give it a name').max(100),
+  description: z.string().max(2000).optional(),
+  timeZone: timeZoneSchema,
+  color: colorSchema.optional(),
+  /** Off unless asked for: a replacement someone takes applies straight away. */
+  requiresApproval: z.boolean().optional(),
+  members: z.array(scheduleMemberInputSchema).max(500).optional(),
+});
+export type CreateScheduleInput = z.infer<typeof createScheduleSchema>;
+
+export const updateScheduleSchema = createScheduleSchema.omit({ members: true }).partial();
+export type UpdateScheduleInput = z.infer<typeof updateScheduleSchema>;
+
+export const setScheduleMembersSchema = z.object({ members: z.array(scheduleMemberInputSchema).max(500) });
+
+/** Teams and people who may override this schedule's shifts. */
+export const setOverrideGrantsSchema = z.object({
+  entries: z
+    .array(
+      z
+        .object({ teamId: z.string().uuid().optional(), userId: z.string().uuid().optional() })
+        .refine((e) => Boolean(e.teamId) !== Boolean(e.userId), 'Each line names a team or a person'),
+    )
+    .max(200),
+});
+
+/** What the viewer may do with one schedule, worked out by the server. */
+export interface ScheduleAbilities {
+  edit: boolean;
+  override: boolean;
+  approve: boolean;
+  /** Ask for cover on their own shifts, and take others'. Only for people on it. */
+  request: boolean;
+  delete: boolean;
+  /** Change who may override it. */
+  grantOverride: boolean;
+}
+
+export interface ScheduleSummary {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string;
+  timeZone: string;
+  color: string;
+  requiresApproval: boolean;
+  access: 'open' | 'allow' | 'deny';
+  memberCount: number;
+  /** Whether the viewer is on it. */
+  isMember: boolean;
+  isManager: boolean;
+}
+
+export interface ScheduleMember {
+  userId: string;
+  name: string;
+  avatarUrl: string | null;
+  manager: boolean;
+}
+
+export interface ScheduleLayer {
+  id: string;
+  lineageId: string;
+  kind: ScheduleLayerKind;
+  name: string;
+  position: number;
+  config: LayerConfig;
+  effectiveFrom: string;
+  effectiveUntil: string | null;
+  members: LayerMember[];
+}
+
+export interface OverrideGrant {
+  kind: 'team' | 'user';
+  id: string;
+  name: string;
+}
+
+export interface Schedule extends ScheduleSummary {
+  createdBy: string | null;
+  members: ScheduleMember[];
+  /** Every version of every layer; the resolver picks what is in effect when. */
+  layers: ScheduleLayer[];
+  overrideGrants: OverrideGrant[];
+  can: ScheduleAbilities;
+}

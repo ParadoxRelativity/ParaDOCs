@@ -85,6 +85,10 @@ import type {
   WorkItemSearchHit,
   WorkItemSummary,
   WorkItemTimeline,
+  CreateScheduleInput,
+  Schedule,
+  ScheduleSummary,
+  UpdateScheduleInput,
 } from '@paradocs/shared';
 import { WORKSPACE_APPS } from '@paradocs/shared';
 import { canFrom, roleName, seesApp, withPermissions } from '../lib/permissions';
@@ -506,7 +510,7 @@ export function useDeleteFolder(workspaceId: string, app: FolderApp = 'docs') {
 
 /** Something that can be locked. */
 export interface AccessTarget {
-  kind: 'folder' | 'document' | 'spreadsheet' | 'channel' | 'project';
+  kind: 'folder' | 'document' | 'spreadsheet' | 'channel' | 'project' | 'schedule';
   id: string;
 }
 
@@ -516,6 +520,7 @@ const ACCESS_PATHS = {
   spreadsheet: 'spreadsheets',
   channel: 'channels',
   project: 'projects',
+  schedule: 'schedules',
 } as const;
 
 /**
@@ -2219,5 +2224,86 @@ export function useVoiceParticipants(workspaceId: string | undefined, enabled: b
 export function useJoinCall() {
   return useMutation({
     mutationFn: (channelId: string) => api.post<CallCredentials>(`/channels/${channelId}/call`),
+  });
+}
+
+// --- schedules -----------------------------------------------------------------
+//
+// Everything about one schedule is keyed under ['schedule', id], and everyone's
+// own shifts under ['myShifts', workspace], so a `schedules.changed` event
+// refreshes it all at once.
+
+export function useSchedules(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['schedules', workspaceId ?? ''] as const,
+    queryFn: () => api.get<ScheduleSummary[]>(`/workspaces/${workspaceId}/schedules`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useSchedule(id: string | undefined) {
+  return useQuery({
+    queryKey: ['schedule', id ?? ''] as const,
+    queryFn: () => api.get<Schedule>(`/schedules/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+function invalidateSchedule(qc: QueryClient, workspaceId: string, scheduleId: string) {
+  void qc.invalidateQueries({ queryKey: ['schedules', workspaceId] });
+  void qc.invalidateQueries({ queryKey: ['schedule', scheduleId] });
+  void qc.invalidateQueries({ queryKey: ['myShifts', workspaceId] });
+}
+
+export function useCreateSchedule(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateScheduleInput) => api.post<Schedule>(`/workspaces/${workspaceId}/schedules`, input),
+    onSuccess: (schedule) => {
+      qc.setQueryData(['schedule', schedule.id], schedule);
+      invalidateSchedule(qc, workspaceId, schedule.id);
+    },
+  });
+}
+
+/** Changes a schedule, replacing it in the cache with what the server answers. */
+function useScheduleWrite<I>(workspaceId: string, scheduleId: string, send: (input: I) => Promise<Schedule>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: send,
+    onSuccess: (schedule) => {
+      qc.setQueryData(['schedule', scheduleId], schedule);
+      invalidateSchedule(qc, workspaceId, scheduleId);
+    },
+  });
+}
+
+export function useUpdateSchedule(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (input: UpdateScheduleInput) =>
+    api.patch<Schedule>(`/schedules/${scheduleId}`, input),
+  );
+}
+
+export function useSetScheduleMembers(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (members: { userId: string; manager: boolean }[]) =>
+    api.put<Schedule>(`/schedules/${scheduleId}/members`, { members }),
+  );
+}
+
+export function useSetOverrideGrants(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (entries: { teamId?: string; userId?: string }[]) =>
+    api.put<Schedule>(`/schedules/${scheduleId}/override-grants`, { entries }),
+  );
+}
+
+export function useDeleteSchedule(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (scheduleId: string) => api.delete(`/schedules/${scheduleId}`),
+    onSuccess: (_result, scheduleId) => {
+      qc.removeQueries({ queryKey: ['schedule', scheduleId] });
+      void qc.invalidateQueries({ queryKey: ['schedules', workspaceId] });
+      void qc.invalidateQueries({ queryKey: ['myShifts', workspaceId] });
+    },
   });
 }

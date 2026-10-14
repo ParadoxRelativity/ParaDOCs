@@ -20,7 +20,7 @@ import { assertWorkspaceAccess, type Membership } from '../plugins/session.js';
 import { managesAccess } from '../lib/roles.js';
 
 /**
- * Teams, and the locks on folders, documents, spreadsheets, channels and projects.
+ * Teams, and the locks on folders, documents, spreadsheets, channels, projects and schedules.
  *
  * Anyone in a workspace can see its teams, since they are how access is
  * described. Making, renaming and deleting a team, and changing a lock, is for
@@ -38,6 +38,8 @@ const TARGETS = {
   channels: { table: 'channels', column: 'channel_id', parent: null, label: 'Channel' },
   // Nor does a project.
   projects: { table: 'projects', column: 'project_id', parent: null, label: 'Project' },
+  // Nor a schedule.
+  schedules: { table: 'schedules', column: 'schedule_id', parent: null, label: 'Schedule' },
 } as const;
 
 type TargetKind = keyof typeof TARGETS;

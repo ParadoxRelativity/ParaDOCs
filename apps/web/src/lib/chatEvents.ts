@@ -304,6 +304,13 @@ export function useChatEvents({
           }
           void qc.invalidateQueries({ queryKey: keys.notifications });
           return;
+        case 'schedules.changed':
+          // Ids only, as with projects: whatever shows the schedule, its shifts
+          // or anyone's own shifts asks again.
+          void qc.invalidateQueries({ queryKey: ['schedules', event.workspaceId] });
+          void qc.invalidateQueries({ queryKey: ['schedule', event.scheduleId] });
+          void qc.invalidateQueries({ queryKey: ['myShifts', event.workspaceId] });
+          return;
         case 'tree.changed':
           // Ids only, as with projects: the sidebar and listings ask again.
           if (event.app === 'sheets') {
