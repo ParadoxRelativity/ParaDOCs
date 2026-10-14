@@ -250,3 +250,15 @@ export async function scheduleShifts(
       .map((layer) => ({ lineageId: layer.lineageId, name: layer.name, kind: layer.kind, shifts: rows.get(layer.lineageId) ?? [] })),
   };
 }
+
+/**
+ * Requests nobody answered in time expire when the shift starts. Done when
+ * requests are read, and by the reminder sweep, so nothing waits on a timer.
+ */
+export async function expireRequests(scheduleId?: string): Promise<void> {
+  await query(
+    `UPDATE schedule_requests SET status = 'expired', updated_at = now()
+      WHERE status IN ('open', 'accepted') AND starts_at <= now() AND ($1::uuid IS NULL OR schedule_id = $1)`,
+    [scheduleId ?? null],
+  );
+}

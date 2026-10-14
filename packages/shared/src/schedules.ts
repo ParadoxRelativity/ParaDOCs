@@ -677,3 +677,62 @@ export interface ScheduleOverride {
   createdByName: string | null;
   createdAt: string;
 }
+
+export const SCHEDULE_REQUEST_STATUSES = ['open', 'accepted', 'approved', 'declined', 'cancelled', 'expired'] as const;
+export type ScheduleRequestStatus = (typeof SCHEDULE_REQUEST_STATUSES)[number];
+
+/**
+ * Asking the rest of a schedule to cover some of your time, or to swap it for
+ * some of theirs. Only people on the same schedule can be asked.
+ */
+export const createRequestSchema = z
+  .object({
+    kind: z.enum(['cover', 'swap']),
+    startsAt: z.string().datetime({ offset: true }),
+    endsAt: z.string().datetime({ offset: true }),
+    note: z.string().trim().max(500).optional(),
+    /** Specific people on the schedule; everyone else on it when left out or empty. */
+    askUserIds: z.array(z.string().uuid()).max(200).optional(),
+  })
+  .refine((r) => Date.parse(r.endsAt) > Date.parse(r.startsAt), 'A request must end after it starts');
+export type CreateRequestInput = z.input<typeof createRequestSchema>;
+
+/** Taking a request. For a swap, the shift given in return. */
+export const acceptRequestSchema = z.object({
+  swapStartsAt: z.string().datetime({ offset: true }).optional(),
+  swapEndsAt: z.string().datetime({ offset: true }).optional(),
+});
+
+export const decideRequestSchema = z.object({
+  note: z.string().trim().max(500).optional(),
+  /** On a decline: open it to others again, or close it. */
+  reopen: z.boolean().optional(),
+});
+
+export interface ScheduleRequest {
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  requesterId: string;
+  requesterName: string;
+  kind: 'cover' | 'swap';
+  startsAt: string;
+  endsAt: string;
+  note: string;
+  askEveryone: boolean;
+  /** Who was asked, when not everyone. */
+  candidates: { userId: string; name: string }[];
+  status: ScheduleRequestStatus;
+  acceptedBy: string | null;
+  acceptedByName: string | null;
+  acceptedAt: string | null;
+  swapStartsAt: string | null;
+  swapEndsAt: string | null;
+  decidedBy: string | null;
+  decidedByName: string | null;
+  decidedAt: string | null;
+  decisionNote: string;
+  createdAt: string;
+  /** Whether the viewer was asked and may take it now. */
+  canAccept: boolean;
+}

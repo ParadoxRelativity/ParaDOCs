@@ -87,6 +87,8 @@ import type {
   WorkItemTimeline,
   CreateLayerInput,
   CreateOverrideInput,
+  CreateRequestInput,
+  ScheduleRequest,
   ScheduleOverride,
   MyShift,
   CreateScheduleInput,
@@ -2386,5 +2388,40 @@ export function useDeleteOverride(workspaceId: string, scheduleId: string) {
   return useMutation({
     mutationFn: (overrideId: string) => api.delete(`/schedules/${scheduleId}/overrides/${overrideId}`),
     onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+export function useScheduleRequests(scheduleId: string | undefined, all = false) {
+  return useQuery({
+    queryKey: ['schedule', scheduleId ?? '', 'requests', all] as const,
+    queryFn: () => api.get<ScheduleRequest[]>(`/schedules/${scheduleId}/requests${all ? '?all=true' : ''}`),
+    enabled: Boolean(scheduleId),
+  });
+}
+
+/** Requests the viewer made or was asked on, across every schedule. */
+export function useMyRequests(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['myShifts', workspaceId ?? '', 'requests'] as const,
+    queryFn: () => api.get<ScheduleRequest[]>(`/workspaces/${workspaceId}/my-requests`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useCreateRequest(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateRequestInput) => api.post<ScheduleRequest>(`/schedules/${scheduleId}/requests`, input),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+/** Something done to a request: cancel it, and later take, approve or decline it. */
+export function useRequestAction(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ request, action, body }: { request: ScheduleRequest; action: string; body?: object }) =>
+      api.post<ScheduleRequest>(`/schedules/${request.scheduleId}/requests/${request.id}/${action}`, body ?? {}),
+    onSuccess: (request) => invalidateSchedule(qc, workspaceId, request.scheduleId),
   });
 }
