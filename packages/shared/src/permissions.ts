@@ -45,6 +45,13 @@ export const WORKSPACE_PERMISSIONS = [
   'queues.create',
   'queues.configure',
   'queues.delete',
+  'schedules.view',
+  'schedules.request',
+  'schedules.edit',
+  'schedules.override',
+  'schedules.approve',
+  'schedules.create',
+  'schedules.delete',
   'members.invite',
   'teams.members',
   'teams.accounts',
@@ -62,7 +69,7 @@ export interface PermissionInfo {
 }
 
 export interface PermissionGroup {
-  id: 'docs' | 'sheets' | 'chat' | 'projects' | 'queues' | 'workspace';
+  id: 'docs' | 'sheets' | 'chat' | 'projects' | 'queues' | 'schedules' | 'workspace';
   label: string;
   permissions: PermissionInfo[];
 }
@@ -178,6 +185,49 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     ],
   },
   {
+    id: 'schedules',
+    label: 'Schedules',
+    permissions: [
+      { id: 'schedules.view', label: 'See schedules', description: 'See schedules and who is on them.', requires: [] },
+      {
+        id: 'schedules.request',
+        label: 'Swap shifts',
+        description: 'Ask for cover on their own shifts, and take shifts from schedules they are on.',
+        requires: ['schedules.view'],
+      },
+      {
+        id: 'schedules.edit',
+        label: 'Edit schedules',
+        description: 'Change rotations, shifts and who is on a schedule.',
+        requires: ['schedules.view'],
+      },
+      {
+        id: 'schedules.override',
+        label: 'Override shifts',
+        description: 'Put any workspace member onto a shift directly, including people who are not on the schedule.',
+        requires: ['schedules.view'],
+      },
+      {
+        id: 'schedules.approve',
+        label: 'Approve swaps',
+        description: 'Approve or decline replacements on schedules that require approval.',
+        requires: ['schedules.view'],
+      },
+      {
+        id: 'schedules.create',
+        label: 'Create schedules',
+        description: 'Start new schedules, and delete the ones they started.',
+        requires: ['schedules.edit'],
+      },
+      {
+        id: 'schedules.delete',
+        label: 'Delete any schedule',
+        description: 'Delete schedules someone else started.',
+        requires: ['schedules.edit'],
+      },
+    ],
+  },
+  {
     id: 'workspace',
     label: 'Workspace',
     permissions: [
@@ -246,6 +296,8 @@ export const EDITOR_PERMISSIONS: WorkspacePermission[] = WORKSPACE_PERMISSIONS.f
       'chat.moderate',
       'projects.delete',
       'queues.delete',
+      'schedules.override',
+      'schedules.delete',
       'members.invite',
       'teams.members',
       'teams.accounts',
@@ -263,6 +315,8 @@ export const VIEWER_PERMISSIONS: WorkspacePermission[] = [
   'chat.direct',
   'projects.view',
   'queues.view',
+  'schedules.view',
+  'schedules.request',
 ];
 
 /** Something done in a project or a queue. */

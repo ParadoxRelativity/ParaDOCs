@@ -26,6 +26,11 @@ const APPS: Record<WorkspaceApp, { label: string; icon: IconName; hint: string }
     icon: 'kanban',
     hint: 'Projects and queues of work items, with boards, workload and roles.',
   },
+  schedules: {
+    label: 'Schedules',
+    icon: 'calendar-week',
+    hint: 'On-call rotations, rotating shifts and work schedules, with shift swaps.',
+  },
 };
 
 /**

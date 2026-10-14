@@ -15,7 +15,13 @@ import { forbidden } from './http.js';
  * a workspace say which app they belong to when they check membership.
  */
 
-const LABELS: Record<WorkspaceApp, string> = { docs: 'Docs', sheets: 'Sheets', chat: 'Chat', projects: 'Projects' };
+const LABELS: Record<WorkspaceApp, string> = {
+  docs: 'Docs',
+  sheets: 'Sheets',
+  chat: 'Chat',
+  projects: 'Projects',
+  schedules: 'Schedules',
+};
 
 /** SQL for whether the workspace `workspace` has `app` turned on. */
 export function appEnabledSql(workspace: string, app: WorkspaceApp): string {

@@ -97,7 +97,7 @@ export interface AccessSettings {
  * The apps a workspace can turn on and off. Access is not among them: it is
  * where membership is managed, so every workspace has it.
  */
-export const WORKSPACE_APPS = ['docs', 'sheets', 'chat', 'projects'] as const;
+export const WORKSPACE_APPS = ['docs', 'sheets', 'chat', 'projects', 'schedules'] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 /** Which app a folder belongs to. Each app that files things has a tree of its own. */
