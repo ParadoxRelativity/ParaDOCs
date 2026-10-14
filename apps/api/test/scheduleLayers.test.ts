@@ -109,7 +109,7 @@ describe('rotations', () => {
       config: { start: 'tomorrow', length: { unit: 'weeks', count: 1 } },
     });
     expect(bad.status).toBe(400);
-    expect(bad.body.error ?? bad.body.message).toMatch(/start/);
+    expect(bad.body.error ?? bad.body.message).toMatch(/date and time/);
   });
 
   it('lets a higher layer win, and reorders layers', async () => {
@@ -164,5 +164,34 @@ describe('rotations', () => {
       members: [{ userId: people[0].id, crew: 'a' }],
     });
     expect(ok.status).toBe(201);
+  });
+
+  it('holds regular hours and one-off shifts, putting their people on the schedule', async () => {
+    const { body: made } = await api.call(owner, 'POST', `/workspaces/${owner.workspaceId}/schedules`, { name: 'Front desk', timeZone: 'UTC' });
+    const created = await api.call(owner, 'POST', `/schedules/${made.id}/layers`, {
+      kind: 'recurring',
+      name: 'Regular hours',
+      config: {
+        entries: [{ id: 'e1', userId: people[1].id, days: [1, 2, 3, 4, 5, 6, 7], start: '09:00', end: '17:00', label: 'Front desk' }],
+        oneOffs: [{ id: 'o1', userId: people[2].id, start: '2030-01-01T10:00', end: '2030-01-01T14:00' }],
+      },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.members.map((m: { userId: string }) => m.userId).sort()).toEqual([people[1].id, people[2].id].sort());
+
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    tomorrow.setUTCHours(12, 0, 0, 0);
+    const from = new Date(tomorrow.getTime() - 3_600_000).toISOString();
+    const to = new Date(tomorrow.getTime() + 3_600_000).toISOString();
+    const { body } = await api.call(owner, 'GET', `/schedules/${made.id}/shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    expect(body.shifts).toEqual([expect.objectContaining({ userId: people[1].id, label: 'Front desk' })]);
+
+    const missing = await api.call(owner, 'POST', `/schedules/${made.id}/layers`, {
+      kind: 'recurring',
+      name: 'Broken',
+      config: { entries: [{ id: 'e1', userId: '', days: [1], start: '09:00', end: '17:00' }] },
+    });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error ?? missing.body.message).toMatch(/Choose who works/);
   });
 });

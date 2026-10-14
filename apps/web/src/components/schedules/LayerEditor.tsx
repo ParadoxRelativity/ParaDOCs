@@ -20,6 +20,7 @@ import { FIELD, FIELD_BASE } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
 import { PatternFields } from './PatternFields';
+import { RecurringFields } from './RecurringFields';
 import { DayPicker, formatRange, fromLocalInput, toLocalInput, zoneDiffers } from './scheduleUi';
 
 export interface LayerDraft {
@@ -77,6 +78,7 @@ export interface KindFieldsProps {
 export const KIND_FIELDS: Partial<Record<ScheduleLayerKind, (props: KindFieldsProps) => React.ReactNode>> = {
   rotation: (props) => <RotationFields {...props} />,
   pattern: (props) => <PatternFields {...props} />,
+  recurring: (props) => <RecurringFields {...props} />,
 };
 
 /**

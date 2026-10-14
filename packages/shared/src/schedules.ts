@@ -78,7 +78,7 @@ export type PatternConfig = z.infer<typeof patternConfigSchema>;
 /** Someone's regular hours: on each of `days`, from `start` to `end`, between `from` and `until` inclusive. */
 export const recurringEntrySchema = scheduleWindowSchema.extend({
   id: idSchema,
-  userId: z.string().uuid(),
+  userId: z.string().uuid('Choose who works these hours'),
   label: z.string().trim().max(60).optional(),
   from: localDateSchema.optional(),
   until: localDateSchema.optional(),
@@ -88,7 +88,7 @@ export type RecurringEntry = z.infer<typeof recurringEntrySchema>;
 /** A single shift for someone. */
 export const oneOffShiftSchema = z.object({
   id: idSchema,
-  userId: z.string().uuid(),
+  userId: z.string().uuid('Choose who works this shift'),
   start: localDateTimeSchema,
   end: localDateTimeSchema,
   label: z.string().trim().max(60).optional(),
@@ -595,7 +595,9 @@ export function parseLayerConfig(
   const result = LAYER_CONFIG_SCHEMAS[kind].safeParse(config);
   if (!result.success) {
     const issue = result.error.issues[0];
-    return { ok: false, error: `${issue.path.join('.') || 'config'}: ${issue.message}` };
+    // Messages written for people stand alone; zod's own need the field named.
+    const generic = /^(Required|Invalid|Expected|Number must|String must|Array must)/.test(issue.message);
+    return { ok: false, error: generic ? `${issue.path.join('.') || 'config'}: ${issue.message}` : issue.message };
   }
   if (kind === 'pattern') {
     const pattern = result.data as PatternConfig;
