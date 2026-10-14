@@ -86,6 +86,8 @@ import type {
   WorkItemSummary,
   WorkItemTimeline,
   CreateLayerInput,
+  CreateOverrideInput,
+  ScheduleOverride,
   MyShift,
   CreateScheduleInput,
   Schedule,
@@ -2359,5 +2361,30 @@ export function useMyShifts(workspaceId: string | undefined, from: string, to: s
       ),
     enabled: Boolean(workspaceId),
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useScheduleOverrides(scheduleId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ['schedule', scheduleId ?? '', 'overrides', from, to] as const,
+    queryFn: () =>
+      api.get<ScheduleOverride[]>(`/schedules/${scheduleId}/overrides?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    enabled: Boolean(scheduleId),
+  });
+}
+
+export function useCreateOverride(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateOverrideInput) => api.post<ScheduleOverride>(`/schedules/${scheduleId}/overrides`, input),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+export function useDeleteOverride(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (overrideId: string) => api.delete(`/schedules/${scheduleId}/overrides/${overrideId}`),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
   });
 }

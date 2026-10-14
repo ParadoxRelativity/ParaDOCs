@@ -1,22 +1,25 @@
 import { useEffect, useState } from 'react';
-import type { User } from '@paradocs/shared';
+import type { Shift, User } from '@paradocs/shared';
 import { useSchedule, type WorkspaceSummary } from '../../api/hooks';
 import { useIsMobile } from '../../lib/mobile';
 import { ApiError } from '../../api/client';
 import { cx } from '../../lib/util';
-import type { IconName } from '../Icon';
-import { EmptyState, Spinner } from '../ui';
+import Icon, { type IconName } from '../Icon';
+import { Button, EmptyState, Spinner } from '../ui';
 import MyShifts from './MyShifts';
+import { OverrideDialog } from './OverrideDialog';
+import ScheduleOverrides from './ScheduleOverrides';
 import ScheduleLayers from './ScheduleLayers';
 import ScheduleSettings from './ScheduleSettings';
-import ScheduleView from './ScheduleView';
+import ScheduleView, { type ShiftActions } from './ScheduleView';
 import { ScheduleDot, ViewTabs } from './scheduleUi';
 
-type View = 'schedule' | 'layers' | 'settings';
+type View = 'schedule' | 'layers' | 'overrides' | 'settings';
 
 const VIEWS: { id: View; label: string; icon: IconName }[] = [
   { id: 'schedule', label: 'Schedule', icon: 'calendar-week' },
   { id: 'layers', label: 'Layers', icon: 'layers' },
+  { id: 'overrides', label: 'Overrides', icon: 'arrow-left-right' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ];
 
@@ -40,6 +43,7 @@ export default function SchedulesApp({
   const mobile = useIsMobile();
   const schedule = useSchedule(scheduleId ?? undefined);
   const [view, setView] = useState<View>(VIEWS[0].id);
+  const [overriding, setOverriding] = useState<Shift | null>(null);
   // Each schedule opens on its first view.
   useEffect(() => setView(VIEWS[0].id), [scheduleId]);
 
@@ -57,6 +61,22 @@ export default function SchedulesApp({
   }
 
   const data = schedule.data;
+  // What can be done with a shift picked in the views.
+  const shiftActions: ShiftActions = {
+    render: (shift, close) =>
+      data.can.override ? (
+        <Button
+          variant="subtle"
+          className="text-xs"
+          onClick={() => {
+            close();
+            setOverriding(shift);
+          }}
+        >
+          <Icon name="arrow-left-right" /> Override
+        </Button>
+      ) : null,
+  };
   const canManageAccess = workspace.role === 'owner' || workspace.role === 'admin';
 
   return (
@@ -69,12 +89,14 @@ export default function SchedulesApp({
         {mobile && <ViewTabs views={VIEWS} view={view} onChange={setView} mobile />}
       </div>
       <div className="min-h-0 flex-1">
-        {view === 'schedule' && <ScheduleView schedule={data} />}
+        {view === 'schedule' && <ScheduleView schedule={data} actions={shiftActions} />}
+        {view === 'overrides' && <ScheduleOverrides schedule={data} />}
         {view === 'layers' && <ScheduleLayers schedule={data} />}
         {view === 'settings' && (
           <ScheduleSettings schedule={data} canManageAccess={canManageAccess} onDeleted={onScheduleDeleted} />
         )}
       </div>
+      {overriding && <OverrideDialog schedule={data} shift={overriding} onClose={() => setOverriding(null)} />}
     </div>
   );
 }

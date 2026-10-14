@@ -647,3 +647,33 @@ export interface MyShift extends Shift {
   color: string;
   timeZone: string;
 }
+
+/** Putting someone onto a stretch of a schedule directly, in place of `replacedUserId` or as extra cover. */
+export const createOverrideSchema = z
+  .object({
+    userId: z.string().uuid(),
+    replacedUserId: z.string().uuid().nullable().default(null),
+    startsAt: z.string().datetime({ offset: true }),
+    endsAt: z.string().datetime({ offset: true }),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((o) => Date.parse(o.endsAt) > Date.parse(o.startsAt), 'An override must end after it starts')
+  .refine((o) => o.userId !== o.replacedUserId, 'Someone cannot cover for themselves');
+export type CreateOverrideInput = z.input<typeof createOverrideSchema>;
+
+export interface ScheduleOverride {
+  id: string;
+  scheduleId: string;
+  userId: string;
+  userName: string;
+  replacedUserId: string | null;
+  replacedUserName: string | null;
+  startsAt: string;
+  endsAt: string;
+  source: 'manual' | 'request';
+  requestId: string | null;
+  note: string;
+  createdBy: string | null;
+  createdByName: string | null;
+  createdAt: string;
+}

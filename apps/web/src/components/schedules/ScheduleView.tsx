@@ -228,7 +228,7 @@ function barStyle(shift: Shift): React.CSSProperties {
   const color = personColor(shift.userId);
   return shift.overrideId
     ? {
-        background: `repeating-linear-gradient(135deg, ${color}, ${color} 6px, color-mix(in srgb, ${color} 70%, white) 6px, color-mix(in srgb, ${color} 70%, white) 12px)`,
+        background: `repeating-linear-gradient(135deg, ${color}, ${color} 6px, color-mix(in srgb, ${color} 75%, black) 6px, color-mix(in srgb, ${color} 75%, black) 12px)`,
         outline: '2px dashed var(--color-ink)',
         outlineOffset: '-2px',
       }

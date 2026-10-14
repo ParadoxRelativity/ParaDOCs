@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
   createLayerSchema,
+  createOverrideSchema,
   orderLayersSchema,
   parseLayerConfig,
   updateLayerSchema,
@@ -13,6 +14,7 @@ import {
   type MyShift,
   type LayerMember,
   type OverrideGrant,
+  type ScheduleOverride,
   type PatternConfig,
   type RecurringConfig,
   type ScheduleLayerKind,
@@ -22,9 +24,10 @@ import {
   type ScheduleSummary,
 } from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
-import { assertScheduleAccess, scheduleLevelSql, type ScheduleAccess } from '../lib/access.js';
+import { assertScheduleAccess, roleIdSql, scheduleLevelSql, type ScheduleAccess } from '../lib/access.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
 import { leaveSchedules, loadLayers, reviseLineage, scheduleChanged, scheduleShifts, writeLayerMembers } from '../lib/schedules.js';
+import { overrideChanged } from '../lib/scheduleNotifications.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
@@ -177,6 +180,29 @@ const rangeSchema = z
     (r) => new Date(r.to).getTime() - new Date(r.from).getTime() <= MAX_RANGE_DAYS * 86_400_000,
     `Ask for at most ${MAX_RANGE_DAYS} days at a time`,
   );
+
+const OVERRIDE_COLUMNS = `o.id, o.schedule_id AS "scheduleId", o.user_id AS "userId", u.name AS "userName",
+  o.replaced_user_id AS "replacedUserId", r.name AS "replacedUserName", o.starts_at AS "startsAt", o.ends_at AS "endsAt",
+  o.source, o.request_id AS "requestId", o.note, o.created_by AS "createdBy", c.name AS "createdByName",
+  o.created_at AS "createdAt"`;
+
+const OVERRIDE_JOINS = `JOIN users u ON u.id = o.user_id
+  LEFT JOIN users r ON r.id = o.replaced_user_id
+  LEFT JOIN users c ON c.id = o.created_by`;
+
+export async function fetchOverride(id: string): Promise<ScheduleOverride> {
+  const { rows } = await query<ScheduleOverride>(`SELECT ${OVERRIDE_COLUMNS} FROM schedule_overrides o ${OVERRIDE_JOINS} WHERE o.id = $1`, [id]);
+  return rows[0];
+}
+
+/** Whether `userId` is in the workspace and may see the schedule: who an override can put on it. */
+async function canSeeSchedule(scheduleId: string, workspaceId: string, userId: string): Promise<boolean> {
+  const { rows } = await query<{ ok: boolean }>(
+    `SELECT ${scheduleLevelSql('$2', roleIdSql('$2', '$3'))} > 0 AS ok FROM schedules s WHERE s.id = $1`,
+    [scheduleId, userId, workspaceId],
+  );
+  return rows[0]?.ok === true;
+}
 
 export const scheduleRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
@@ -434,5 +460,57 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
     }
     shifts.sort((a, b) => a.start.localeCompare(b.start));
     return { from, to, shifts };
+  });
+
+  // --- overrides ----------------------------------------------------------------
+
+  app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>('/schedules/:id/overrides', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id);
+    const { from, to } = parse(rangeSchema, req.query);
+    const { rows } = await query<ScheduleOverride>(
+      `SELECT ${OVERRIDE_COLUMNS} FROM schedule_overrides o ${OVERRIDE_JOINS}
+        WHERE o.schedule_id = $1 AND o.starts_at < $3 AND o.ends_at > $2
+        ORDER BY o.starts_at, o.created_at`,
+      [access.scheduleId, from, to],
+    );
+    return rows;
+  });
+
+  /**
+   * Puts someone onto a stretch of the schedule directly. Only for those who
+   * may override it; and it is the only way onto a schedule for someone who
+   * is not on it, who must still be able to see it.
+   */
+  app.post<{ Params: { id: string } }>('/schedules/:id/overrides', async (req, reply) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'override');
+    const input = parse(createOverrideSchema, req.body ?? {});
+    if (!(await canSeeSchedule(access.scheduleId, access.workspaceId, input.userId))) {
+      throw badRequest('That person cannot see this schedule, so they cannot be put on it');
+    }
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO schedule_overrides (schedule_id, user_id, replaced_user_id, starts_at, ends_at, source, note, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'manual', $6, $7) RETURNING id`,
+      [access.scheduleId, input.userId, input.replacedUserId, input.startsAt, input.endsAt, input.note ?? '', req.user!.id],
+    );
+    const override = await fetchOverride(rows[0].id);
+    await overrideChanged(override, 'created', req.user!.id);
+    scheduleChanged(access.workspaceId, access.scheduleId);
+    reply.status(201);
+    return override;
+  });
+
+  /** Takes an override away, giving the time back to whoever the layers put there. */
+  app.delete<{ Params: { id: string; overrideId: string } }>('/schedules/:id/overrides/:overrideId', async (req, reply) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'override');
+    const { rows } = await query<{ id: string }>('SELECT id FROM schedule_overrides WHERE id::text = $1 AND schedule_id = $2', [
+      req.params.overrideId,
+      access.scheduleId,
+    ]);
+    if (!rows[0]) throw notFound('Override not found');
+    const override = await fetchOverride(rows[0].id);
+    await query('DELETE FROM schedule_overrides WHERE id = $1', [override.id]);
+    await overrideChanged(override, 'removed', req.user!.id);
+    scheduleChanged(access.workspaceId, access.scheduleId);
+    reply.status(204);
   });
 };
