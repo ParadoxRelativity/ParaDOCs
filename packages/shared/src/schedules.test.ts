@@ -220,3 +220,34 @@ describe('helpers', () => {
     expect(coverageGaps(shifts, '2026-01-05T05:00:00Z', '2026-01-06T05:00:00Z')).toHaveLength(2);
   });
 });
+
+describe('pattern presets', () => {
+  const crewOf = ['a', 'b', 'c', 'd'];
+  const people = [A, B, C, D];
+
+  for (const id of ['panama', 'four-on-four-off', 'dupont']) {
+    it(`${id} covers every hour exactly once over its cycle`, async () => {
+      const { PATTERN_PRESETS } = await import('./schedules.js');
+      const preset = PATTERN_PRESETS.find((p) => p.id === id)!;
+      const layer: ResolverLayer = {
+        id,
+        lineageId: id,
+        kind: 'pattern',
+        position: 0,
+        config: { start: '2026-03-01', ...preset.config },
+        effectiveFrom: '2000-01-01T00:00:00Z',
+        effectiveUntil: null,
+        // One person on each crew.
+        members: people.map((userId, i) => ({ userId, position: i, crew: crewOf[i] })),
+      };
+      // From the first morning shift, across a whole cycle and a daylight saving change.
+      const from = '2026-03-01T12:00:00Z';
+      const to = new Date(Date.parse(from) + preset.config.cycle.length * 86_400_000).toISOString();
+      const shifts = resolveSchedule(NY, [layer], [], from, to);
+      expect(coverageGaps(shifts, from, to)).toEqual([]);
+      // No two crews at once: sorted, each shift ends where the next starts.
+      const sorted = [...shifts].sort((a, b) => a.start.localeCompare(b.start));
+      for (let i = 1; i < sorted.length; i += 1) expect(sorted[i].start >= sorted[i - 1].end).toBe(true);
+    });
+  }
+});

@@ -136,4 +136,33 @@ describe('rotations', () => {
     expect((await api.call(owner, 'DELETE', `/schedules/${scheduleId}/layers/${primary}`)).status).toBe(204);
     expect(await shiftsAt('2026-01-05T15:00:00Z')).toEqual(['Ann']);
   });
+
+  it('keeps everyone on a pattern on one of its crews', async () => {
+    const config = {
+      start: '2026-03-01',
+      shiftTypes: [{ id: 'day', name: 'Day', start: '07:00', end: '19:00' }],
+      cycle: ['day', null],
+      crews: [{ id: 'a', name: 'A', offset: 0 }],
+    };
+    const off = await api.call(owner, 'POST', `/schedules/${scheduleId}/layers`, {
+      kind: 'pattern',
+      name: 'Plant',
+      config,
+      members: [{ userId: people[0].id, crew: 'b' }],
+    });
+    expect(off.status).toBe(400);
+    const badCycle = await api.call(owner, 'POST', `/schedules/${scheduleId}/layers`, {
+      kind: 'pattern',
+      name: 'Plant',
+      config: { ...config, cycle: ['night'] },
+    });
+    expect(badCycle.status).toBe(400);
+    const ok = await api.call(owner, 'POST', `/schedules/${scheduleId}/layers`, {
+      kind: 'pattern',
+      name: 'Plant',
+      config,
+      members: [{ userId: people[0].id, crew: 'a' }],
+    });
+    expect(ok.status).toBe(201);
+  });
 });

@@ -804,3 +804,52 @@ export interface ScheduleSettings {
 }
 
 export const scheduleSettingsSchema = z.object({ reminderMinutes: z.number().int().min(0).max(1440) });
+
+// --- shift pattern presets ----------------------------------------------------------
+
+const DAY_12: ShiftType = { id: 'day', name: 'Day', start: '07:00', end: '19:00' };
+const NIGHT_12: ShiftType = { id: 'night', name: 'Night', start: '19:00', end: '07:00' };
+
+/** Days in a cycle from a string: D a day, N a night, - off. */
+function cycleOf(days: string): (string | null)[] {
+  return [...days].map((d) => (d === 'D' ? 'day' : d === 'N' ? 'night' : null));
+}
+
+const fourCrews = (step: number): Crew[] =>
+  ['A', 'B', 'C', 'D'].map((name, i) => ({ id: name.toLowerCase(), name, offset: i * step }));
+
+/**
+ * Common rotating shift patterns, ready to start from and then change. The
+ * 24/7 ones give every hour exactly one crew: each crew works the same cycle,
+ * started a set number of days apart.
+ */
+export const PATTERN_PRESETS: { id: string; name: string; hint: string; config: Omit<PatternConfig, 'start'> }[] = [
+  {
+    id: 'panama',
+    name: '2-2-3 (Panama)',
+    hint: 'Four crews on 12-hour shifts: two on, two off, three on, then nights for two weeks. 24/7.',
+    config: { shiftTypes: [DAY_12, NIGHT_12], cycle: cycleOf('DD--DDD--DD---NN--NNN--NN---'), crews: fourCrews(7) },
+  },
+  {
+    id: 'four-on-four-off',
+    name: '4 on, 4 off',
+    hint: 'Four crews on 12-hour shifts: four days, four off, four nights, four off. 24/7.',
+    config: { shiftTypes: [DAY_12, NIGHT_12], cycle: cycleOf('DDDD----NNNN----'), crews: fourCrews(4) },
+  },
+  {
+    id: 'dupont',
+    name: 'DuPont',
+    hint: 'Four crews on 12-hour shifts over four weeks, with a week off in each cycle. 24/7.',
+    config: { shiftTypes: [DAY_12, NIGHT_12], cycle: cycleOf('NNNN---DDD-NNN---DDDD-------'), crews: fourCrews(7) },
+  },
+  {
+    id: 'five-two',
+    name: '5 on, 2 off',
+    hint: 'One crew working weekdays. Start it on a Monday.',
+    config: {
+      shiftTypes: [{ id: 'day', name: 'Day', start: '09:00', end: '17:00' }],
+      cycle: cycleOf('DDDDD--'),
+      crews: [{ id: 'a', name: 'A', offset: 0 }],
+    },
+  },
+];

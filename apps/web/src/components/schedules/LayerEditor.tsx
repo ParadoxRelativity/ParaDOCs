@@ -19,6 +19,7 @@ import { Modal } from '../Modal';
 import { FIELD, FIELD_BASE } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
+import { PatternFields } from './PatternFields';
 import { DayPicker, formatRange, fromLocalInput, toLocalInput, zoneDiffers } from './scheduleUi';
 
 export interface LayerDraft {
@@ -75,6 +76,7 @@ export interface KindFieldsProps {
 
 export const KIND_FIELDS: Partial<Record<ScheduleLayerKind, (props: KindFieldsProps) => React.ReactNode>> = {
   rotation: (props) => <RotationFields {...props} />,
+  pattern: (props) => <PatternFields {...props} />,
 };
 
 /**
@@ -230,6 +232,14 @@ function Preview({
           </span>
         )}
       </div>
+      {result && result.gaps.length > 0 && result.shifts.length > 0 && (
+        <ul className="border-b border-[var(--color-line)] bg-amber-500/10 px-3 py-1 text-[11px] text-amber-700 dark:text-amber-300">
+          {result.gaps.slice(0, 5).map((gap) => (
+            <li key={gap.start}>Nobody on {formatRange(gap.start, gap.end, zone)}</li>
+          ))}
+          {result.gaps.length > 5 && <li>and {result.gaps.length - 5} more</li>}
+        </ul>
+      )}
       {error ? (
         <p className="px-3 py-2 text-xs text-red-500">{error}</p>
       ) : result && result.shifts.length > 0 ? (
