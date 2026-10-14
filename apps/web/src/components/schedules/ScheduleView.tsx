@@ -92,7 +92,7 @@ export default function ScheduleView({ schedule, actions }: { schedule: Schedule
             <Icon name="chevron-right" />
           </IconButton>
         </div>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
+        <span className="min-w-[9rem] flex-1 truncate text-sm font-medium">{title}</span>
         <Segmented
           label="Range"
           value={kind}
