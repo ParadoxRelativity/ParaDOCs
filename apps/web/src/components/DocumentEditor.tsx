@@ -19,6 +19,7 @@ import { documentSchema, type DocumentBlockEditor } from './documentSchema';
 import Icon from './Icon';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
 import { ProjectPicker, WorkItemPicker } from './projects/WorkItemRefs';
+import { SchedulePicker } from './schedules/SchedulePicker';
 import { copyEditorSelection } from '../lib/documentClipboard';
 import { suggestionMenuPosition } from '../lib/suggestionMenuPosition';
 import { assetUrl, serverPath } from '../lib/server';
@@ -136,6 +137,8 @@ function EditorSurface({
   const chatOn = useAppEnabled(workspaceId, 'chat');
   const sheetsOn = useAppEnabled(workspaceId, 'sheets');
   const projectsOn = useAppEnabled(workspaceId, 'projects');
+  const schedulesOn = useAppEnabled(workspaceId, 'schedules');
+  const [schedulePicker, setSchedulePicker] = useState(false);
   const [itemPicker, setItemPicker] = useState(false);
   const [projectPicker, setProjectPicker] = useState(false);
   const channels = useChannels(chatOn ? workspaceId : undefined);
@@ -334,6 +337,18 @@ function EditorSurface({
                           },
                         ]
                       : []),
+                    ...(schedulesOn
+                      ? [
+                          {
+                            title: 'Schedule',
+                            subtext: 'Link an on-call rotation or work schedule',
+                            aliases: ['schedule', 'on call', 'oncall', 'rota', 'roster', 'shift', 'rotation'],
+                            group: 'Schedules',
+                            icon: <span aria-hidden>🗓</span>,
+                            onItemClick: () => setSchedulePicker(true),
+                          },
+                        ]
+                      : []),
                   ],
                   queryText,
                 )
@@ -410,6 +425,23 @@ function EditorSurface({
                 { type: 'workItem', props: { itemId: item.id, label: `${item.key} ${item.title}` } },
                 ' ',
               ]);
+            }}
+          />
+        )}
+        {schedulePicker && (
+          <SchedulePicker
+            workspaceId={workspaceId}
+            confirmLabel="Insert"
+            onCancel={() => {
+              setSchedulePicker(false);
+              editor.focus();
+            }}
+            onPick={(schedule) => {
+              setSchedulePicker(false);
+              editor.focus();
+              // A link, as a board is: opening it asks the server, which says
+              // not found once access or the app is gone.
+              editor.insertInlineContent([{ type: 'link', href: `/w/${workspaceId}/sc/${schedule.id}`, content: schedule.name }, ' ']);
             }}
           />
         )}

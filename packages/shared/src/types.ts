@@ -282,6 +282,15 @@ export interface SheetSearchHit {
 }
 
 /** A work item that matched a search. */
+/** A schedule found by name or description. */
+export interface ScheduleSearchHit {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  timeZone: string;
+}
+
 export interface WorkItemSearchHit {
   id: string;
   projectId: string;

@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { linkTargetsQuerySchema, searchQuerySchema, type LinkTargets } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { parse } from '../lib/http.js';
-import { documentLevelSql, projectLevelSql, spreadsheetLevelSql } from '../lib/access.js';
+import { documentLevelSql, projectLevelSql, scheduleLevelSql, spreadsheetLevelSql } from '../lib/access.js';
 import { appEnabled } from '../lib/apps.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
@@ -117,6 +117,29 @@ async function searchWorkItems(
   return rows;
 }
 
+/**
+ * Schedules that match, by name or description, among those the reader may
+ * see. Like work items, they have no folders or tags.
+ */
+async function searchSchedules(
+  workspaceId: string,
+  reader: { userId: string; roleId: string },
+  input: { q?: string; tags?: string[]; folderId?: string },
+) {
+  if (input.tags?.length || input.folderId || !input.q) return [];
+  const { rows } = await query(
+    `SELECT s.id, s.name, s.description, s.color, s.time_zone AS "timeZone"
+       FROM schedules s
+      WHERE s.workspace_id = $1
+        AND ${scheduleLevelSql('$2', '$3')} > 0
+        AND (s.name ILIKE '%' || $4 || '%' OR s.description ILIKE '%' || $4 || '%')
+      ORDER BY (s.name ILIKE $4 || '%') DESC, lower(s.name)
+      LIMIT ${ITEM_LIMIT}`,
+    [workspaceId, reader.userId, reader.roleId, input.q],
+  );
+  return rows;
+}
+
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
 
@@ -176,10 +199,11 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
     async (req) => {
       const { roleId } = await assertWorkspaceAccess(req, req.params.id);
       // Each half answers only for an app the workspace has on.
-      const [docsOn, sheetsOn, projectsOn] = await Promise.all([
+      const [docsOn, sheetsOn, projectsOn, schedulesOn] = await Promise.all([
         appEnabled(req.params.id, 'docs'),
         appEnabled(req.params.id, 'sheets'),
         appEnabled(req.params.id, 'projects'),
+        appEnabled(req.params.id, 'schedules'),
       ]);
       const raw = req.query;
       const input = parse(searchQuerySchema, {
@@ -277,7 +301,8 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       const workItems = projectsOn
         ? await searchWorkItems(req.params.id, { userId: req.user!.id, roleId }, input, tsquery)
         : [];
-      return { hits: rows, sheets, workItems, query: input.q ?? '' };
+      const schedules = schedulesOn ? await searchSchedules(req.params.id, { userId: req.user!.id, roleId }, input) : [];
+      return { hits: rows, sheets, workItems, schedules, query: input.q ?? '' };
     },
   );
 };

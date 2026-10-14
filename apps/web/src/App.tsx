@@ -1015,6 +1015,7 @@ function Workspace({
                 onOpenChannel={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
                 onOpenWorkItem={(item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
                 onOpenProject={(project) => navigate(projectPath(workspaceId, project.id, project.kind))}
+                onOpenSchedule={(schedule) => navigate(`/w/${workspaceId}/sc/${schedule.id}`)}
               />
             ) : channelId && directs.isLoading ? (
               <Spinner />
@@ -1179,6 +1180,7 @@ function Workspace({
           onSelectWorkItem={
             appOn('projects') ? (hit) => show(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
           }
+          onSelectSchedule={appOn('schedules') ? (hit) => show(`/w/${workspaceId}/sc/${hit.id}`) : undefined}
         />
       )}
 

@@ -86,6 +86,7 @@ import type {
   WorkItemSummary,
   WorkItemTimeline,
   CreateLayerInput,
+  ScheduleSearchHit,
   CreateOverrideInput,
   CreateRequestInput,
   ScheduleSettings,
@@ -1772,6 +1773,8 @@ export interface SearchResults {
   hits: SearchHit[];
   sheets?: SheetSearchHit[];
   workItems?: WorkItemSearchHit[];
+  /** Absent from servers that predate Schedules. */
+  schedules?: ScheduleSearchHit[];
   query: string;
 }
 

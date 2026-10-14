@@ -52,12 +52,14 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
   const members = new Map(a.members.map((m) => [m.id, m]));
   const workItems = new Map((a.workItems ?? []).map((i) => [i.id, i]));
   const projects = new Map((a.projects ?? []).map((p) => [p.id, p]));
+  const schedules = new Map((a.schedules ?? []).map((s) => [s.id, s]));
   for (const d of b.documents) documents.set(d.id, d);
   for (const s of b.spreadsheets) spreadsheets.set(s.id, s);
   for (const c of b.channels) channels.set(c.id, c);
   for (const m of b.members) members.set(m.id, m);
   for (const i of b.workItems ?? []) workItems.set(i.id, i);
   for (const p of b.projects ?? []) projects.set(p.id, p);
+  for (const s of b.schedules ?? []) schedules.set(s.id, s);
   return {
     documents: [...documents.values()],
     spreadsheets: [...spreadsheets.values()],
@@ -65,6 +67,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
     members: [...members.values()],
     workItems: [...workItems.values()],
     projects: [...projects.values()],
+    schedules: [...schedules.values()],
   };
 }
 

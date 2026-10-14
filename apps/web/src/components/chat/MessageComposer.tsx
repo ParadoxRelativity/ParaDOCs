@@ -16,6 +16,7 @@ import {
   documentRef,
   memberRef,
   projectRef,
+  scheduleRef,
   spreadsheetRef,
   workItemRef,
   type AttachmentKind,
@@ -28,6 +29,7 @@ import {
   useAppEnabled,
   useMembers,
   useProjects,
+  useSchedules,
   useLinkTargets,
   useUploadConfig,
   useWorkItemListing,
@@ -210,6 +212,9 @@ export const MessageComposer = forwardRef<
   });
   const projects = useProjects(trigger?.kind === 'workItem' && projectsOn ? workspaceId : undefined);
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
+  // Schedules are few enough to send whole, and offered after documents and spreadsheets.
+  const schedulesOn = useAppEnabled(workspaceId, 'schedules');
+  const schedules = useSchedules(trigger?.kind === 'document' && schedulesOn ? workspaceId : undefined);
 
   const emojiQuery = trigger?.kind === 'emoji' ? trigger.query : null;
   useEffect(() => {
@@ -308,11 +313,21 @@ export const MessageComposer = forwardRef<
       documentOptions.length,
       Math.max(PICKER_LIMIT - sheetOptions.length, PICKER_LIMIT / 2),
     );
-    return [
+    const scheduleOptions = (schedules.data ?? []).filter((s) => matchesTitle(s.name)).map((s) => ({
+      id: s.id,
+      icon: <span className="inline-block h-2 w-2 rounded-full" style={{ background: s.color }} />,
+      label: s.name,
+      hint: 'Schedule',
+      insert: `[[${s.name}]]`,
+      token: scheduleRef(s.id),
+    }));
+    const linked = [
       ...documentOptions.slice(0, documentShare),
       ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
     ];
-  }, [trigger, channels, direct, targets.data, workItems.data, projects.data, members.data, emojiOptions]);
+    // A schedule named exactly as typed still makes the list when documents fill it.
+    return [...linked, ...scheduleOptions].slice(0, PICKER_LIMIT + Math.min(2, scheduleOptions.length));
+  }, [trigger, channels, direct, targets.data, workItems.data, projects.data, members.data, schedules.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {
@@ -557,7 +572,9 @@ export const MessageComposer = forwardRef<
           ? 'Emoji'
           : trigger?.kind === 'workItem'
             ? 'Boards, queues & work items'
-            : 'Documents & spreadsheets';
+            : schedulesOn
+              ? 'Documents, spreadsheets & schedules'
+              : 'Documents & spreadsheets';
 
   return (
     <div className="relative border-t border-[var(--color-line)] p-3">
