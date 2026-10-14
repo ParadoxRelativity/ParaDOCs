@@ -639,3 +639,11 @@ export function currentLayers(layers: ScheduleLayer[], at: string): ScheduleLaye
   }
   return picked.sort((a, b) => b.position - a.position);
 }
+
+/** One of the viewer's own shifts, with the schedule it is on. */
+export interface MyShift extends Shift {
+  scheduleId: string;
+  scheduleName: string;
+  color: string;
+  timeZone: string;
+}

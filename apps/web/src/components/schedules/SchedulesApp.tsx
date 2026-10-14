@@ -6,13 +6,16 @@ import { ApiError } from '../../api/client';
 import { cx } from '../../lib/util';
 import type { IconName } from '../Icon';
 import { EmptyState, Spinner } from '../ui';
+import MyShifts from './MyShifts';
 import ScheduleLayers from './ScheduleLayers';
 import ScheduleSettings from './ScheduleSettings';
+import ScheduleView from './ScheduleView';
 import { ScheduleDot, ViewTabs } from './scheduleUi';
 
-type View = 'layers' | 'settings';
+type View = 'schedule' | 'layers' | 'settings';
 
 const VIEWS: { id: View; label: string; icon: IconName }[] = [
+  { id: 'schedule', label: 'Schedule', icon: 'calendar-week' },
   { id: 'layers', label: 'Layers', icon: 'layers' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ];
@@ -25,6 +28,7 @@ const VIEWS: { id: View; label: string; icon: IconName }[] = [
 export default function SchedulesApp({
   workspace,
   scheduleId,
+  onOpenSchedule,
   onScheduleDeleted,
 }: {
   workspace: WorkspaceSummary;
@@ -39,9 +43,7 @@ export default function SchedulesApp({
   // Each schedule opens on its first view.
   useEffect(() => setView(VIEWS[0].id), [scheduleId]);
 
-  if (!scheduleId) {
-    return <EmptyState icon="calendar-week" title="My shifts" hint="Your shifts across every schedule will show up here." />;
-  }
+  if (!scheduleId) return <MyShifts workspace={workspace} onOpenSchedule={onOpenSchedule} />;
   if (schedule.isLoading) return <Spinner />;
   if (!schedule.data) {
     const missing = schedule.error instanceof ApiError && schedule.error.status === 404;
@@ -67,6 +69,7 @@ export default function SchedulesApp({
         {mobile && <ViewTabs views={VIEWS} view={view} onChange={setView} mobile />}
       </div>
       <div className="min-h-0 flex-1">
+        {view === 'schedule' && <ScheduleView schedule={data} />}
         {view === 'layers' && <ScheduleLayers schedule={data} />}
         {view === 'settings' && (
           <ScheduleSettings schedule={data} canManageAccess={canManageAccess} onDeleted={onScheduleDeleted} />

@@ -86,6 +86,7 @@ import type {
   WorkItemSummary,
   WorkItemTimeline,
   CreateLayerInput,
+  MyShift,
   CreateScheduleInput,
   Schedule,
   ScheduleShifts,
@@ -2344,6 +2345,19 @@ export function useScheduleShifts(scheduleId: string | undefined, from: string, 
     queryFn: () =>
       api.get<ScheduleShifts>(`/schedules/${scheduleId}/shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     enabled: Boolean(scheduleId),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** The viewer's own shifts across every schedule, over [from, to). */
+export function useMyShifts(workspaceId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ['myShifts', workspaceId ?? '', from, to] as const,
+    queryFn: () =>
+      api.get<{ from: string; to: string; shifts: MyShift[] }>(
+        `/workspaces/${workspaceId}/my-shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      ),
+    enabled: Boolean(workspaceId),
     placeholderData: keepPreviousData,
   });
 }

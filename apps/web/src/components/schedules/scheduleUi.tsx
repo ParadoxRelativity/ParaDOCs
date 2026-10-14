@@ -335,3 +335,33 @@ export function DayPicker({ value, onChange, disabled }: { value: number[]; onCh
     </div>
   );
 }
+
+// --- ranges -------------------------------------------------------------------
+
+export type RangeKind = 'day' | 'week' | 'month';
+
+/** The day, week (from Monday) or month around `anchor`, in the viewer's own time. */
+export function rangeAround(anchor: Date, kind: RangeKind): { from: Date; to: Date } {
+  const from = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  if (kind === 'day') return { from, to: new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1) };
+  if (kind === 'week') {
+    const monday = new Date(from.getFullYear(), from.getMonth(), from.getDate() - ((from.getDay() + 6) % 7));
+    return { from: monday, to: new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 7) };
+  }
+  const first = new Date(from.getFullYear(), from.getMonth(), 1);
+  return { from: first, to: new Date(first.getFullYear(), first.getMonth() + 1, 1) };
+}
+
+/** `anchor` moved by one range, forward or back. */
+export function stepRange(anchor: Date, kind: RangeKind, by: number): Date {
+  if (kind === 'day') return new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + by);
+  if (kind === 'week') return new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 7 * by);
+  return new Date(anchor.getFullYear(), anchor.getMonth() + by, 1);
+}
+
+/** A steady color for a person, so they read the same in every row. */
+export function personColor(userId: string): string {
+  let hash = 0;
+  for (const ch of userId) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  return `hsl(${Math.abs(hash) % 360} 60% 50%)`;
+}
