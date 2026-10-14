@@ -88,6 +88,7 @@ import type {
   CreateLayerInput,
   CreateOverrideInput,
   CreateRequestInput,
+  ScheduleSettings,
   ScheduleRequest,
   ScheduleOverride,
   MyShift,
@@ -1583,6 +1584,15 @@ export function useMarkWorkItemsRead() {
   });
 }
 
+/** Clears schedule notifications: the ones given, or all of them. */
+export function useMarkScheduleNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids?: string[]) => api.post('/notifications/schedules/read', ids ? { ids } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
+  });
+}
+
 // --- tags ------------------------------------------------------------------
 
 export function useTags(workspaceId: string | undefined) {
@@ -2423,5 +2433,17 @@ export function useRequestAction(workspaceId: string) {
     mutationFn: ({ request, action, body }: { request: ScheduleRequest; action: string; body?: object }) =>
       api.post<ScheduleRequest>(`/schedules/${request.scheduleId}/requests/${request.id}/${action}`, body ?? {}),
     onSuccess: (request) => invalidateSchedule(qc, workspaceId, request.scheduleId),
+  });
+}
+
+export function useScheduleSettings() {
+  return useQuery({ queryKey: ['scheduleSettings'] as const, queryFn: () => api.get<ScheduleSettings>('/schedule-settings') });
+}
+
+export function useUpdateScheduleSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: ScheduleSettings) => api.put<ScheduleSettings>('/schedule-settings', settings),
+    onSuccess: (settings) => qc.setQueryData(['scheduleSettings'], settings),
   });
 }

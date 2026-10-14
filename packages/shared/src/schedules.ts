@@ -736,3 +736,71 @@ export interface ScheduleRequest {
   /** Whether the viewer was asked and may take it now. */
   canAccept: boolean;
 }
+
+export const SCHEDULE_NOTIFICATION_REASONS = [
+  'request',
+  'accepted',
+  'approval',
+  'approved',
+  'declined',
+  'cancelled',
+  'override',
+  'override_removed',
+  'reminder',
+  'on_call',
+  'expiring',
+] as const;
+export type ScheduleNotificationReason = (typeof SCHEDULE_NOTIFICATION_REASONS)[number];
+
+/** Something about your shifts that wants your attention. */
+export interface ScheduleNotification {
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  requestId: string | null;
+  reason: ScheduleNotificationReason;
+  startsAt: string | null;
+  endsAt: string | null;
+  /** Who else it involves, by name. */
+  detail: string;
+  workspace: { id: string; name: string; icon: string | null; avatarUrl: string | null };
+  by: { id: string; name: string; avatarUrl: string | null } | null;
+  createdAt: string;
+}
+
+/** The sentence a schedule notification says, after who did it. */
+export function scheduleNotificationText(n: Pick<ScheduleNotification, 'reason' | 'detail' | 'scheduleName' | 'by'>): string {
+  const by = n.by?.name ?? 'Someone';
+  switch (n.reason) {
+    case 'request':
+      return `${by} asked you to cover a shift on ${n.scheduleName}`;
+    case 'accepted':
+      return `${by} took your shift on ${n.scheduleName}. It is waiting for approval`;
+    case 'approval':
+      return `${by} took ${n.detail}'s shift on ${n.scheduleName}. It needs your approval`;
+    case 'approved':
+      return n.detail ? `${n.detail}'s shift on ${n.scheduleName} is now covered` : `Your swap on ${n.scheduleName} went through`;
+    case 'declined':
+      return `${by} declined the swap on ${n.scheduleName}`;
+    case 'cancelled':
+      return `${by} cancelled their request on ${n.scheduleName}`;
+    case 'override':
+      return n.detail ? `${by} changed your shift on ${n.scheduleName}: ${n.detail}` : `${by} put you on ${n.scheduleName}`;
+    case 'override_removed':
+      return `${by} undid an override on ${n.scheduleName}`;
+    case 'reminder':
+      return `Your shift on ${n.scheduleName} starts soon`;
+    case 'on_call':
+      return `You are now on call for ${n.scheduleName}`;
+    case 'expiring':
+      return `A request on ${n.scheduleName} expires soon with nobody to cover it`;
+  }
+}
+
+/** Someone's own choices about schedules. */
+export interface ScheduleSettings {
+  /** How long before a shift to remind them, in minutes. 0 is never. */
+  reminderMinutes: number;
+}
+
+export const scheduleSettingsSchema = z.object({ reminderMinutes: z.number().int().min(0).max(1440) });

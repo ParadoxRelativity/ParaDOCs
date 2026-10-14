@@ -1,5 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { acceptRequestSchema, coversWindow, createRequestSchema, decideRequestSchema, type ScheduleRequest } from '@paradocs/shared';
+import {
+  acceptRequestSchema,
+  coversWindow,
+  createRequestSchema,
+  decideRequestSchema,
+  scheduleSettingsSchema,
+  type ScheduleRequest,
+  type ScheduleSettings,
+} from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { assertScheduleAccess, scheduleLevelSql } from '../lib/access.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
@@ -324,5 +332,23 @@ export const scheduleRequestRoutes: FastifyPluginAsync = async (app) => {
     await requestChanged(request, 'declined', req.user!.id);
     scheduleChanged(access.workspaceId, access.scheduleId);
     return request;
+  });
+
+  /** The caller's own choices about schedules: how long before a shift to remind them. */
+  app.get('/schedule-settings', async (req): Promise<ScheduleSettings> => {
+    const { rows } = await query<{ reminder_minutes: number }>('SELECT reminder_minutes FROM schedule_user_settings WHERE user_id = $1', [
+      req.user!.id,
+    ]);
+    return { reminderMinutes: rows[0]?.reminder_minutes ?? 60 };
+  });
+
+  app.put('/schedule-settings', async (req): Promise<ScheduleSettings> => {
+    const input = parse(scheduleSettingsSchema, req.body ?? {});
+    await query(
+      `INSERT INTO schedule_user_settings (user_id, reminder_minutes) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET reminder_minutes = EXCLUDED.reminder_minutes`,
+      [req.user!.id, input.reminderMinutes],
+    );
+    return input;
   });
 };

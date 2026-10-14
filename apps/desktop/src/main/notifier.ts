@@ -1,5 +1,5 @@
 import { Notification, nativeImage } from 'electron';
-import type { Notifications } from '@paradocs/shared';
+import { scheduleNotificationText, type Notifications } from '@paradocs/shared';
 import { getConnection, listConnections, type Connection } from './connections.js';
 import { notificationsFor, postTo } from './connectionApi.js';
 import { getPreferences } from './preferences.js';
@@ -252,6 +252,18 @@ function announcements(notifications: Notifications): Announcement[] {
       body: item.title,
       picture: item.by?.avatarUrl ?? null,
       path: `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`,
+      sound: 'notification_generic',
+      heardBy: () => true,
+    });
+  }
+
+  for (const n of notifications.schedules ?? []) {
+    found.push({
+      key: `shift:${n.id}`,
+      title: scheduleNotificationText(n),
+      body: n.workspace.name,
+      picture: n.by?.avatarUrl ?? null,
+      path: `/w/${n.workspace.id}/sc/${n.scheduleId}`,
       sound: 'notification_generic',
       heardBy: () => true,
     });

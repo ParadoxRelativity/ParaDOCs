@@ -11,8 +11,10 @@ import type {
   MessageNotification,
   MessageReportNotification,
   Notifications,
+  ScheduleNotification,
   WorkItemNotification,
 } from '@paradocs/shared';
+import { SCHEDULE_NOTIFICATION_REASONS } from '@paradocs/shared';
 import { partitionFor, type Connection } from './connections.js';
 import { paths } from './paths.js';
 import { readJson, writeJson } from './store.js';
@@ -392,9 +394,32 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
       })),
     );
 
+    // Shifts and swaps; absent from servers that predate Schedules.
+    const schedules: ScheduleNotification[] = await Promise.all(
+      records(body.schedules, 100)
+        .filter((n) => (SCHEDULE_NOTIFICATION_REASONS as readonly unknown[]).includes(n.reason))
+        .map(async (n) => {
+          const by = n.by ? record(n.by) : null;
+          return {
+            id: text(n.id),
+            scheduleId: text(n.scheduleId),
+            scheduleName: text(n.scheduleName, 'Schedule').slice(0, 100),
+            requestId: nullable(n.requestId),
+            reason: n.reason as ScheduleNotification['reason'],
+            startsAt: nullable(n.startsAt),
+            endsAt: nullable(n.endsAt),
+            detail: text(n.detail).slice(0, 200),
+            workspace: await workspace(n.workspace),
+            by: by ? { id: text(by.id), name: text(by.name, 'Someone'), avatarUrl: await picture(fetcher, by.avatarUrl) } : null,
+            createdAt: text(n.createdAt),
+          };
+        }),
+    );
+
     return {
       status: 'ok',
       notifications: {
+        schedules,
         invites,
         messages,
         mentions,

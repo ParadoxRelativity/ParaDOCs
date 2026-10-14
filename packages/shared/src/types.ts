@@ -3,6 +3,7 @@
 import type { DocumentMode } from './canvas.js';
 import type { WorkspacePermission } from './permissions.js';
 import type { WorkItemNotification } from './projects.js';
+import type { ScheduleNotification } from './schedules.js';
 import type { SpreadsheetSummary } from './sheet.js';
 import type { ReleaseInfo } from './version.js';
 
@@ -506,4 +507,6 @@ export interface Notifications {
   suspensions?: WorkspaceSuspensionNotification[];
   /** Reported chat messages, for the owners and admins of their workspaces. Absent from older servers. */
   messageReports?: MessageReportNotification[];
+  /** Your shifts and swaps. Absent from older servers. */
+  schedules?: ScheduleNotification[];
 }
