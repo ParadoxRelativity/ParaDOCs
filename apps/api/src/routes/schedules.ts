@@ -11,7 +11,6 @@ import {
   setScheduleMembersSchema,
   updateScheduleSchema,
   type LayerConfig,
-  type MyShift,
   type LayerMember,
   type OverrideGrant,
   type ScheduleOverride,
@@ -26,7 +25,7 @@ import {
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { assertScheduleAccess, roleIdSql, scheduleLevelSql, type ScheduleAccess } from '../lib/access.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
-import { leaveSchedules, loadLayers, reviseLineage, scheduleChanged, scheduleShifts, writeLayerMembers } from '../lib/schedules.js';
+import { leaveSchedules, loadLayers, reviseLineage, scheduleChanged, scheduleShifts, shiftsOf, writeLayerMembers } from '../lib/schedules.js';
 import { overrideChanged } from '../lib/scheduleNotifications.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
@@ -440,25 +439,7 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>('/workspaces/:id/my-shifts', async (req) => {
     const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'schedules.view', 'schedules');
     const { from, to } = parse(rangeSchema, req.query);
-    const me = req.user!.id;
-    const { rows } = await query<{ id: string; name: string; color: string; time_zone: string }>(
-      `SELECT s.id, s.name, s.color, s.time_zone
-         FROM schedules s
-        WHERE s.workspace_id = $1 AND ${scheduleLevelSql('$2', '$3')} > 0
-          AND (EXISTS (SELECT 1 FROM schedule_members sm WHERE sm.schedule_id = s.id AND sm.user_id = $2)
-            OR EXISTS (SELECT 1 FROM schedule_overrides o
-                        WHERE o.schedule_id = s.id AND o.user_id = $2 AND o.starts_at < $5 AND o.ends_at > $4))`,
-      [req.params.id, me, roleId, from, to],
-    );
-    const shifts: MyShift[] = [];
-    for (const schedule of rows) {
-      const resolved = await scheduleShifts({ id: schedule.id, timeZone: schedule.time_zone }, from, to);
-      for (const shift of resolved.shifts) {
-        if (shift.userId !== me) continue;
-        shifts.push({ ...shift, scheduleId: schedule.id, scheduleName: schedule.name, color: schedule.color, timeZone: schedule.time_zone });
-      }
-    }
-    shifts.sort((a, b) => a.start.localeCompare(b.start));
+    const shifts = await shiftsOf(req.params.id, req.user!.id, roleId, from, to);
     return { from, to, shifts };
   });
 

@@ -15,6 +15,7 @@ import { ConfirmDialog } from '../Modal';
 import { FIELD, Section } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
+import { CalendarFeedDialog } from './CalendarFeedDialog';
 import { ColorPicker, MemberPicker, SwitchRow, TimeZoneSelect, type PickedMember } from './scheduleUi';
 
 /**
@@ -46,6 +47,7 @@ export default function ScheduleSettings({
   const [securing, setSecuring] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [grantPick, setGrantPick] = useState('');
+  const [feedOpen, setFeedOpen] = useState(false);
 
   // What the server holds is what the form starts from, again whenever it changes.
   useEffect(() => {
@@ -192,6 +194,12 @@ export default function ScheduleSettings({
           )}
         </Section>
 
+        <Section title="Calendar feed" hint="Everyone's shifts on this schedule, in your phone or desktop calendar.">
+          <Button variant="subtle" className="text-xs" onClick={() => setFeedOpen(true)}>
+            <Icon name="calendar-plus" /> Calendar feed…
+          </Button>
+        </Section>
+
         {canManageAccess && (
           <Section title="Who can see it" hint="Limit the schedule to some teams or people, as with a project or channel.">
             <Button variant="subtle" className="text-xs" onClick={() => setSecuring(true)}>
@@ -209,6 +217,9 @@ export default function ScheduleSettings({
         )}
       </div>
 
+      {feedOpen && (
+        <CalendarFeedDialog workspaceId={workspaceId} scheduleId={schedule.id} title={`${schedule.name} in your calendar`} onClose={() => setFeedOpen(false)} />
+      )}
       {securing && (
         <AccessDialog
           workspaceId={workspaceId}

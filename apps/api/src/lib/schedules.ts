@@ -4,6 +4,7 @@ import {
   resolveSchedule,
   type LayerConfig,
   type LayerMember,
+  type MyShift,
   type RecurringConfig,
   type ResolverOverride,
   type ScheduleLayer,
@@ -11,6 +12,7 @@ import {
   type ScheduleShifts,
 } from '@paradocs/shared';
 import { query, type DbClient } from '../db/pool.js';
+import { scheduleLevelSql } from './access.js';
 import { publishToWorkspace } from '../chat/hub.js';
 
 /**
@@ -261,4 +263,39 @@ export async function expireRequests(scheduleId?: string): Promise<void> {
       WHERE status IN ('open', 'accepted') AND starts_at <= now() AND ($1::uuid IS NULL OR schedule_id = $1)`,
     [scheduleId ?? null],
   );
+}
+
+/**
+ * Someone's own shifts across the schedules in a workspace they can see: those
+ * they are on, and any where an override put them without making them a
+ * member. `scheduleId` narrows it to one schedule's shifts, everyone's.
+ */
+export async function shiftsOf(
+  workspaceId: string,
+  userId: string,
+  roleId: string,
+  from: string,
+  to: string,
+  scheduleId?: string,
+): Promise<MyShift[]> {
+  const { rows } = await query<{ id: string; name: string; color: string; time_zone: string }>(
+    `SELECT s.id, s.name, s.color, s.time_zone
+       FROM schedules s
+      WHERE s.workspace_id = $1 AND ${scheduleLevelSql('$2', '$3')} > 0
+        AND ($6::uuid IS NOT NULL AND s.id = $6
+          OR $6::uuid IS NULL AND (
+               EXISTS (SELECT 1 FROM schedule_members sm WHERE sm.schedule_id = s.id AND sm.user_id = $2)
+            OR EXISTS (SELECT 1 FROM schedule_overrides o
+                        WHERE o.schedule_id = s.id AND o.user_id = $2 AND o.starts_at < $5 AND o.ends_at > $4)))`,
+    [workspaceId, userId, roleId, from, to, scheduleId ?? null],
+  );
+  const shifts: MyShift[] = [];
+  for (const schedule of rows) {
+    const resolved = await scheduleShifts({ id: schedule.id, timeZone: schedule.time_zone }, from, to);
+    for (const shift of resolved.shifts) {
+      if (!scheduleId && shift.userId !== userId) continue;
+      shifts.push({ ...shift, scheduleId: schedule.id, scheduleName: schedule.name, color: schedule.color, timeZone: schedule.time_zone });
+    }
+  }
+  return shifts.sort((a, b) => a.start.localeCompare(b.start));
 }

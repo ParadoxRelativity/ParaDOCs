@@ -2447,3 +2447,37 @@ export function useUpdateScheduleSettings() {
     onSuccess: (settings) => qc.setQueryData(['scheduleSettings'], settings),
   });
 }
+
+/** Whether there is a calendar feed for the viewer's shifts, or one schedule's. Its address is only shown when made. */
+export interface CalendarFeedStatus {
+  hint: string | null;
+  createdAt: string | null;
+  url?: string;
+}
+
+function feedPath(workspaceId: string, scheduleId?: string) {
+  return `/workspaces/${workspaceId}/calendar-feed${scheduleId ? `?scheduleId=${scheduleId}` : ''}`;
+}
+
+export function useCalendarFeed(workspaceId: string, scheduleId?: string) {
+  return useQuery({
+    queryKey: ['calendarFeed', workspaceId, scheduleId ?? ''] as const,
+    queryFn: () => api.get<CalendarFeedStatus>(feedPath(workspaceId, scheduleId)),
+  });
+}
+
+export function useResetCalendarFeed(workspaceId: string, scheduleId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<CalendarFeedStatus>(feedPath(workspaceId, scheduleId), {}),
+    onSuccess: (status) => qc.setQueryData(['calendarFeed', workspaceId, scheduleId ?? ''], { hint: status.hint, createdAt: status.createdAt }),
+  });
+}
+
+export function useDeleteCalendarFeed(workspaceId: string, scheduleId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete(feedPath(workspaceId, scheduleId)),
+    onSuccess: () => qc.setQueryData(['calendarFeed', workspaceId, scheduleId ?? ''], { hint: null, createdAt: null }),
+  });
+}

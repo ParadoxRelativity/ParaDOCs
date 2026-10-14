@@ -5,6 +5,7 @@ import { FIELD_BASE } from '../SettingsParts';
 import { useToast } from '../Toast';
 import Icon from '../Icon';
 import { Button, EmptyState, Spinner } from '../ui';
+import { CalendarFeedDialog } from './CalendarFeedDialog';
 import { ShiftList } from './ScheduleView';
 
 const WEEKS = 4;
@@ -21,6 +22,7 @@ export default function MyShifts({
   children?: React.ReactNode;
 }) {
   const [weeks, setWeeks] = useState(WEEKS);
+  const [feedOpen, setFeedOpen] = useState(false);
   // From the start of today, so a shift running now still shows.
   const [from] = useState(() => {
     const d = new Date();
@@ -38,7 +40,11 @@ export default function MyShifts({
         <Icon name="person-check" />
         <h1 className="flex-1 text-base font-semibold">My shifts</h1>
         <ReminderSetting />
+        <Button variant="subtle" className="py-1 text-xs" onClick={() => setFeedOpen(true)}>
+          <Icon name="calendar-plus" /> <span className="hidden sm:inline">Calendar feed</span>
+        </Button>
       </div>
+      {feedOpen && <CalendarFeedDialog workspaceId={workspace.id} title="Your shifts in your calendar" onClose={() => setFeedOpen(false)} />}
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {children}
         {!mine.data ? (
