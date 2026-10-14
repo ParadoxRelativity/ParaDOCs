@@ -1,10 +1,20 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
 import {
+  createLayerSchema,
+  orderLayersSchema,
+  parseLayerConfig,
+  updateLayerSchema,
   createScheduleSchema,
   setOverrideGrantsSchema,
   setScheduleMembersSchema,
   updateScheduleSchema,
+  type LayerConfig,
+  type LayerMember,
   type OverrideGrant,
+  type PatternConfig,
+  type RecurringConfig,
+  type ScheduleLayerKind,
   type Schedule,
   type ScheduleLayer,
   type ScheduleMember,
@@ -12,8 +22,8 @@ import {
 } from '@paradocs/shared';
 import { query, transaction, type DbClient } from '../db/pool.js';
 import { assertScheduleAccess, scheduleLevelSql, type ScheduleAccess } from '../lib/access.js';
-import { badRequest, parse } from '../lib/http.js';
-import { leaveSchedules, scheduleChanged } from '../lib/schedules.js';
+import { badRequest, notFound, parse } from '../lib/http.js';
+import { leaveSchedules, loadLayers, reviseLineage, scheduleChanged, scheduleShifts, writeLayerMembers } from '../lib/schedules.js';
 import { uploadUrlSql } from '../lib/storage.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
@@ -30,22 +40,6 @@ function summaryColumns(user: string): string {
     EXISTS (SELECT 1 FROM schedule_members sm WHERE sm.schedule_id = s.id AND sm.user_id = ${user}) AS "isMember",
     COALESCE((SELECT sm.manager FROM schedule_members sm WHERE sm.schedule_id = s.id AND sm.user_id = ${user}), false)
       AS "isManager"`;
-}
-
-/** Every version of every layer of a schedule, with its people. */
-export async function loadLayers(scheduleId: string): Promise<ScheduleLayer[]> {
-  const { rows } = await query<ScheduleLayer>(
-    `SELECT l.id, l.lineage_id AS "lineageId", l.kind, l.name, l.position, l.config,
-            l.effective_from AS "effectiveFrom", l.effective_until AS "effectiveUntil",
-            COALESCE((SELECT json_agg(json_build_object('userId', lm.user_id, 'position', lm.position, 'crew', lm.crew)
-                                      ORDER BY lm.position)
-                        FROM schedule_layer_members lm WHERE lm.layer_id = l.id), '[]'::json) AS members
-       FROM schedule_layers l
-      WHERE l.schedule_id = $1
-      ORDER BY l.position DESC, l.effective_from`,
-    [scheduleId],
-  );
-  return rows;
 }
 
 async function loadMembers(scheduleId: string): Promise<ScheduleMember[]> {
@@ -110,6 +104,78 @@ async function writeMembers(client: DbClient, scheduleId: string, members: { use
 function dedupe<T extends { userId: string }>(list: T[]): T[] {
   return [...new Map(list.map((m) => [m.userId, m])).values()];
 }
+
+
+function checkedConfig(kind: ScheduleLayerKind, config: unknown): LayerConfig {
+  const result = parseLayerConfig(kind, config);
+  if (!result.ok) throw badRequest(result.error);
+  return result.config;
+}
+
+/**
+ * A layer's people as stored: in turn order for a rotation, on one of the
+ * pattern's crews for a pattern. Regular hours name their people in each
+ * entry, so the layer itself lists nobody.
+ */
+function checkedMembers(kind: ScheduleLayerKind, config: LayerConfig, members: { userId: string; crew?: string | null }[]): LayerMember[] {
+  if (kind === 'recurring') return [];
+  const unique = [...new Map(members.map((m) => [m.userId, m])).values()];
+  if (kind === 'pattern') {
+    const crews = new Set((config as PatternConfig).crews.map((c) => c.id));
+    if (unique.some((m) => !m.crew || !crews.has(m.crew))) throw badRequest('Everyone on a pattern must be on one of its crews');
+  }
+  return unique.map((m, position) => ({ userId: m.userId, position, crew: kind === 'pattern' ? (m.crew ?? null) : null }));
+}
+
+/** Everyone a layer puts on shift. */
+function peopleIn(kind: ScheduleLayerKind, config: LayerConfig, members: LayerMember[]): string[] {
+  if (kind !== 'recurring') return members.map((m) => m.userId);
+  const recurring = config as RecurringConfig;
+  return [...recurring.entries.map((e) => e.userId), ...recurring.oneOffs.map((s) => s.userId)];
+}
+
+/** People a layer puts on shift are on the schedule, so they can swap like anyone on it. */
+async function ensureScheduleMembers(client: DbClient, scheduleId: string, userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await client.query(
+    `INSERT INTO schedule_members (schedule_id, user_id) SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING`,
+    [scheduleId, [...new Set(userIds)]],
+  );
+}
+
+/**
+ * When a change takes effect: now, or a moment still to come. A change dated
+ * in the past would rewrite shifts already worked, so it is refused.
+ */
+function effectiveAt(value: string | undefined): Date {
+  const now = new Date();
+  if (!value) return now;
+  const at = new Date(value);
+  // A minute's grace for a form that said "now" a moment ago.
+  if (at.getTime() < now.getTime() - 60_000) throw badRequest('A change can only take effect from now or later');
+  return at < now ? now : at;
+}
+
+/** The versions of a layer on this schedule, oldest first, or 404. */
+async function lineage(scheduleId: string, lineageId: string) {
+  const { rows } = await query<{ id: string; kind: ScheduleLayerKind; config: LayerConfig; effective_from: string }>(
+    `SELECT id, kind, config, effective_from FROM schedule_layers
+      WHERE schedule_id = $1 AND lineage_id::text = $2 ORDER BY effective_from`,
+    [scheduleId, lineageId],
+  );
+  if (rows.length === 0) throw notFound('Layer not found');
+  return rows;
+}
+
+const MAX_RANGE_DAYS = 100;
+
+const rangeSchema = z
+  .object({ from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }) })
+  .refine((r) => new Date(r.to) > new Date(r.from), 'The range must end after it starts')
+  .refine(
+    (r) => new Date(r.to).getTime() - new Date(r.from).getTime() <= MAX_RANGE_DAYS * 86_400_000,
+    `Ask for at most ${MAX_RANGE_DAYS} days at a time`,
+  );
 
 export const scheduleRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.requireAuth);
@@ -246,5 +312,97 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
 
     scheduleChanged(access.workspaceId, req.params.id);
     return fetchSchedule(await assertScheduleAccess(req, req.params.id), req.user!.id);
+  });
+
+  // --- layers -------------------------------------------------------------------
+
+  app.post<{ Params: { id: string } }>('/schedules/:id/layers', async (req, reply) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'edit');
+    const input = parse(createLayerSchema, req.body ?? {});
+    const config = checkedConfig(input.kind, input.config);
+    const members = checkedMembers(input.kind, config, input.members ?? []);
+    const people = peopleIn(input.kind, config, members);
+    await assertWorkspaceMembers(access.workspaceId, people);
+    const at = effectiveAt(input.effectiveFrom);
+
+    await transaction(async (client) => {
+      // A new layer goes on top.
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO schedule_layers (schedule_id, lineage_id, kind, name, position, config, effective_from, created_by)
+         VALUES ($1, gen_random_uuid(), $2, $3,
+                 (SELECT COALESCE(max(position) + 1, 0) FROM schedule_layers WHERE schedule_id = $1),
+                 $4, $5, $6)
+         RETURNING id`,
+        [req.params.id, input.kind, input.name, JSON.stringify(config), at, req.user!.id],
+      );
+      await writeLayerMembers(client, rows[0].id, members);
+      await ensureScheduleMembers(client, req.params.id, people);
+    });
+
+    scheduleChanged(access.workspaceId, req.params.id);
+    reply.status(201);
+    return fetchSchedule(await assertScheduleAccess(req, req.params.id), req.user!.id);
+  });
+
+  /** Changes a layer from a moment on, keeping how it was before then. */
+  app.patch<{ Params: { id: string; lineageId: string } }>('/schedules/:id/layers/:lineageId', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'edit');
+    const versions = await lineage(req.params.id, req.params.lineageId);
+    const input = parse(updateLayerSchema, req.body ?? {});
+    const { kind } = versions[0];
+    const config = input.config === undefined ? undefined : checkedConfig(kind, input.config);
+    const members = input.members && checkedMembers(kind, config ?? versions[versions.length - 1].config, input.members);
+    const people = peopleIn(kind, config ?? versions[versions.length - 1].config, members ?? []);
+    await assertWorkspaceMembers(access.workspaceId, people);
+    const at = effectiveAt(input.effectiveFrom);
+
+    await transaction(async (client) => {
+      await reviseLineage(client, req.params.lineageId, at, () => ({ name: input.name, config, members }), req.user!.id);
+      await ensureScheduleMembers(client, req.params.id, people);
+    });
+
+    scheduleChanged(access.workspaceId, req.params.id);
+    return fetchSchedule(await assertScheduleAccess(req, req.params.id), req.user!.id);
+  });
+
+  /** Ends a layer now. Its past shifts stay; one that never started is gone. */
+  app.delete<{ Params: { id: string; lineageId: string } }>('/schedules/:id/layers/:lineageId', async (req, reply) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'edit');
+    await lineage(req.params.id, req.params.lineageId);
+    await transaction(async (client) => {
+      await client.query(`DELETE FROM schedule_layers WHERE lineage_id = $1 AND effective_from >= now()`, [
+        req.params.lineageId,
+      ]);
+      await client.query(
+        `UPDATE schedule_layers SET effective_until = now()
+          WHERE lineage_id = $1 AND (effective_until IS NULL OR effective_until > now())`,
+        [req.params.lineageId],
+      );
+    });
+    scheduleChanged(access.workspaceId, req.params.id);
+    reply.status(204);
+  });
+
+  /** Which layers win over which, highest first. */
+  app.put<{ Params: { id: string } }>('/schedules/:id/layers/order', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'edit');
+    const { lineageIds } = parse(orderLayersSchema, req.body ?? {});
+    await query(
+      `UPDATE schedule_layers l SET position = x.position
+         FROM unnest($2::uuid[], $3::int[]) AS x(lineage_id, position)
+        WHERE l.schedule_id = $1 AND l.lineage_id = x.lineage_id`,
+      [req.params.id, lineageIds, lineageIds.map((_, i) => lineageIds.length - 1 - i)],
+    );
+    scheduleChanged(access.workspaceId, req.params.id);
+    return fetchSchedule(await assertScheduleAccess(req, req.params.id), req.user!.id);
+  });
+
+  // --- shifts -------------------------------------------------------------------
+
+  app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>('/schedules/:id/shifts', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id);
+    const { from, to } = parse(rangeSchema, req.query);
+    const { rows } = await query<{ time_zone: string }>('SELECT time_zone FROM schedules WHERE id = $1', [access.scheduleId]);
+    return scheduleShifts({ id: access.scheduleId, timeZone: rows[0].time_zone }, from, to);
   });
 };

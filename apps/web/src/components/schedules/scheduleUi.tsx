@@ -244,3 +244,94 @@ export function ViewTabs<V extends string>({
     </div>
   );
 }
+
+// --- times --------------------------------------------------------------------
+
+const sameDay = (a: Date, b: Date, zone?: string) =>
+  a.toLocaleDateString('en-CA', { timeZone: zone }) === b.toLocaleDateString('en-CA', { timeZone: zone });
+
+/** A day and time, short: "Mon 5 Jan, 09:00". In `zone`, or the viewer's own. */
+export function formatWhen(iso: string, zone?: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    timeZone: zone,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function formatTime(iso: string, zone?: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { timeZone: zone, hour: '2-digit', minute: '2-digit' });
+}
+
+/** A shift's span, naming the second day only when it differs from the first. */
+export function formatRange(start: string, end: string, zone?: string): string {
+  const a = new Date(start);
+  const b = new Date(end);
+  return `${formatWhen(start, zone)} – ${sameDay(a, b, zone) ? formatTime(end, zone) : formatWhen(end, zone)}`;
+}
+
+/** How long, roughly: "12h", "7d", "1d 4h". */
+export function formatDuration(start: string, end: string): string {
+  const hours = Math.round((Date.parse(end) - Date.parse(start)) / 3_600_000);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
+}
+
+/** An instant as the viewer's own wall time, for a datetime-local input. */
+export function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** A datetime-local input's value, read as the viewer's own wall time. */
+export function fromLocalInput(value: string): string {
+  return new Date(value).toISOString();
+}
+
+/** Whether the viewer's zone differs from the schedule's, so times need saying in both. */
+export function zoneDiffers(zone: string): boolean {
+  return localTimeZone() !== zone;
+}
+
+export const WEEKDAYS = [
+  { day: 1, short: 'M', label: 'Monday' },
+  { day: 2, short: 'T', label: 'Tuesday' },
+  { day: 3, short: 'W', label: 'Wednesday' },
+  { day: 4, short: 'T', label: 'Thursday' },
+  { day: 5, short: 'F', label: 'Friday' },
+  { day: 6, short: 'S', label: 'Saturday' },
+  { day: 7, short: 'S', label: 'Sunday' },
+];
+
+/** Picking days of the week as a row of letters. */
+export function DayPicker({ value, onChange, disabled }: { value: number[]; onChange: (days: number[]) => void; disabled?: boolean }) {
+  return (
+    <div role="group" aria-label="Days" className="flex gap-0.5">
+      {WEEKDAYS.map(({ day, short, label }) => {
+        const on = value.includes(day);
+        return (
+          <button
+            key={day}
+            type="button"
+            aria-pressed={on}
+            aria-label={label}
+            title={label}
+            disabled={disabled}
+            onClick={() => onChange(on ? value.filter((d) => d !== day) : [...value, day].sort())}
+            className={cx(
+              'h-6 w-6 rounded text-[11px] font-medium',
+              on ? 'bg-[var(--color-accent)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-muted)]',
+            )}
+          >
+            {short}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

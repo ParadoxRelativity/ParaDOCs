@@ -6,12 +6,16 @@ import { ApiError } from '../../api/client';
 import { cx } from '../../lib/util';
 import type { IconName } from '../Icon';
 import { EmptyState, Spinner } from '../ui';
+import ScheduleLayers from './ScheduleLayers';
 import ScheduleSettings from './ScheduleSettings';
 import { ScheduleDot, ViewTabs } from './scheduleUi';
 
-type View = 'settings';
+type View = 'layers' | 'settings';
 
-const VIEWS: { id: View; label: string; icon: IconName }[] = [{ id: 'settings', label: 'Settings', icon: 'gear' }];
+const VIEWS: { id: View; label: string; icon: IconName }[] = [
+  { id: 'layers', label: 'Layers', icon: 'layers' },
+  { id: 'settings', label: 'Settings', icon: 'gear' },
+];
 
 /**
  * The Schedules app: on-call rotations, rotating shifts and work schedules,
@@ -31,7 +35,7 @@ export default function SchedulesApp({
 }) {
   const mobile = useIsMobile();
   const schedule = useSchedule(scheduleId ?? undefined);
-  const [view, setView] = useState<View>('settings');
+  const [view, setView] = useState<View>(VIEWS[0].id);
   // Each schedule opens on its first view.
   useEffect(() => setView(VIEWS[0].id), [scheduleId]);
 
@@ -63,6 +67,7 @@ export default function SchedulesApp({
         {mobile && <ViewTabs views={VIEWS} view={view} onChange={setView} mobile />}
       </div>
       <div className="min-h-0 flex-1">
+        {view === 'layers' && <ScheduleLayers schedule={data} />}
         {view === 'settings' && (
           <ScheduleSettings schedule={data} canManageAccess={canManageAccess} onDeleted={onScheduleDeleted} />
         )}

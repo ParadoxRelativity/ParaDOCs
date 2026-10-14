@@ -558,3 +558,84 @@ export interface Schedule extends ScheduleSummary {
   overrideGrants: OverrideGrant[];
   can: ScheduleAbilities;
 }
+
+const layerMemberInputSchema = z.object({ userId: z.string().uuid(), crew: idSchema.nullish() });
+
+/**
+ * A new layer. `config` is checked against its kind's schema separately, as
+ * `parseLayerConfig` does, so the error names the field that is wrong.
+ */
+export const createLayerSchema = z.object({
+  kind: z.enum(SCHEDULE_LAYER_KINDS),
+  name: z.string().trim().min(1, 'Give it a name').max(60),
+  config: z.unknown(),
+  members: z.array(layerMemberInputSchema).max(200).default([]),
+  /** When it starts to count. Now, when left out. */
+  effectiveFrom: z.string().datetime({ offset: true }).optional(),
+});
+export type CreateLayerInput = z.input<typeof createLayerSchema>;
+
+/** A change to a layer, from `effectiveFrom` (now, when left out) onward. */
+export const updateLayerSchema = z.object({
+  name: z.string().trim().min(1).max(60).optional(),
+  config: z.unknown().optional(),
+  members: z.array(layerMemberInputSchema).max(200).optional(),
+  effectiveFrom: z.string().datetime({ offset: true }).optional(),
+});
+export type UpdateLayerInput = z.input<typeof updateLayerSchema>;
+
+/** The layers' order, highest first, by lineage. */
+export const orderLayersSchema = z.object({ lineageIds: z.array(z.string().uuid()).max(50) });
+
+/** A layer's settings checked against its kind, or the problem with them. */
+export function parseLayerConfig(
+  kind: ScheduleLayerKind,
+  config: unknown,
+): { ok: true; config: LayerConfig } | { ok: false; error: string } {
+  const result = LAYER_CONFIG_SCHEMAS[kind].safeParse(config);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    return { ok: false, error: `${issue.path.join('.') || 'config'}: ${issue.message}` };
+  }
+  if (kind === 'pattern') {
+    const pattern = result.data as PatternConfig;
+    const types = new Set(pattern.shiftTypes.map((t) => t.id));
+    if (pattern.cycle.some((day) => day !== null && !types.has(day))) {
+      return { ok: false, error: 'Every day of the cycle must run one of the shift types, or none' };
+    }
+  }
+  return { ok: true, config: result.data };
+}
+
+/** Each layer's own shifts, for the timeline's rows. */
+export interface LayerShifts {
+  lineageId: string;
+  name: string;
+  kind: ScheduleLayerKind;
+  shifts: Shift[];
+}
+
+/** What GET /schedules/:id/shifts answers: who is on, and each layer on its own. */
+export interface ScheduleShifts {
+  from: string;
+  to: string;
+  shifts: Shift[];
+  layers: LayerShifts[];
+}
+
+/** The versions of each layer in effect at `at`, or the last one where none is. */
+export function currentLayers(layers: ScheduleLayer[], at: string): ScheduleLayer[] {
+  const byLineage = new Map<string, ScheduleLayer[]>();
+  for (const layer of layers) byLineage.set(layer.lineageId, [...(byLineage.get(layer.lineageId) ?? []), layer]);
+  const t = ms(at);
+  const picked: ScheduleLayer[] = [];
+  for (const versions of byLineage.values()) {
+    const sorted = [...versions].sort((a, b) => ms(a.effectiveFrom) - ms(b.effectiveFrom));
+    const running = sorted.find((v) => ms(v.effectiveFrom) <= t && (!v.effectiveUntil || ms(v.effectiveUntil) > t));
+    const upcoming = sorted.find((v) => ms(v.effectiveFrom) > t);
+    // A layer ended for good before `at` is not current at all.
+    const chosen = running ?? upcoming;
+    if (chosen) picked.push(chosen);
+  }
+  return picked.sort((a, b) => b.position - a.position);
+}

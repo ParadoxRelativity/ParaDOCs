@@ -1,6 +1,16 @@
 import { DateTime } from 'luxon';
-import type { LayerConfig, LayerMember, RecurringConfig, ScheduleLayerKind } from '@paradocs/shared';
-import type { DbClient } from '../db/pool.js';
+import {
+  resolveLayers,
+  resolveSchedule,
+  type LayerConfig,
+  type LayerMember,
+  type RecurringConfig,
+  type ResolverOverride,
+  type ScheduleLayer,
+  type ScheduleLayerKind,
+  type ScheduleShifts,
+} from '@paradocs/shared';
+import { query, type DbClient } from '../db/pool.js';
 import { publishToWorkspace } from '../chat/hub.js';
 
 /**
@@ -38,7 +48,7 @@ async function layerMembers(client: DbClient, layerId: string): Promise<LayerMem
   return rows;
 }
 
-async function writeMembers(client: DbClient, layerId: string, members: LayerMember[]): Promise<void> {
+export async function writeLayerMembers(client: DbClient, layerId: string, members: LayerMember[]): Promise<void> {
   await client.query('DELETE FROM schedule_layer_members WHERE layer_id = $1', [layerId]);
   if (members.length === 0) return;
   await client.query(
@@ -79,7 +89,7 @@ export async function reviseLineage(
         JSON.stringify(config),
         name,
       ]);
-      if (next.members) await writeMembers(client, row.id, next.members);
+      if (next.members) await writeLayerMembers(client, row.id, next.members);
       continue;
     }
     await client.query('UPDATE schedule_layers SET effective_until = $2 WHERE id = $1', [row.id, at]);
@@ -89,7 +99,7 @@ export async function reviseLineage(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [row.schedule_id, row.lineage_id, row.kind, name, row.position, JSON.stringify(config), at, row.effective_until, userId],
     );
-    await writeMembers(client, created[0].id, next.members ?? members);
+    await writeLayerMembers(client, created[0].id, next.members ?? members);
   }
 }
 
@@ -180,4 +190,63 @@ export async function leaveSchedules(
       WHERE accepted_by = $2 AND status = 'accepted' AND schedule_id IN (${inWorkspace})`,
     [workspaceId, userId, only],
   );
+}
+
+/** Every version of every layer of a schedule, with its people. */
+export async function loadLayers(scheduleId: string): Promise<ScheduleLayer[]> {
+  const { rows } = await query<ScheduleLayer>(
+    `SELECT l.id, l.lineage_id AS "lineageId", l.kind, l.name, l.position, l.config,
+            l.effective_from AS "effectiveFrom", l.effective_until AS "effectiveUntil",
+            COALESCE((SELECT json_agg(json_build_object('userId', lm.user_id, 'position', lm.position, 'crew', lm.crew)
+                                      ORDER BY lm.position)
+                        FROM schedule_layer_members lm WHERE lm.layer_id = l.id), '[]'::json) AS members
+       FROM schedule_layers l
+      WHERE l.schedule_id = $1
+      ORDER BY l.position DESC, l.effective_from`,
+    [scheduleId],
+  );
+  return rows;
+}
+
+
+/** The overrides on a schedule reaching into [from, to), oldest first, as the resolver takes them. */
+export async function loadOverrides(scheduleId: string, from: string, to: string): Promise<ResolverOverride[]> {
+  const { rows } = await query<ResolverOverride>(
+    `SELECT id, user_id AS "userId", replaced_user_id AS "replacedUserId", starts_at AS "startsAt", ends_at AS "endsAt"
+       FROM schedule_overrides
+      WHERE schedule_id = $1 AND starts_at < $3 AND ends_at > $2
+      ORDER BY created_at, id`,
+    [scheduleId, from, to],
+  );
+  return rows;
+}
+
+/**
+ * Who is on a schedule over [from, to), and each layer's own shifts: what the
+ * views, My shifts, reminders and the calendar feed all ask.
+ */
+export async function scheduleShifts(
+  schedule: { id: string; timeZone: string },
+  from: string,
+  to: string,
+  layers?: ScheduleLayer[],
+): Promise<ScheduleShifts> {
+  const all = layers ?? (await loadLayers(schedule.id));
+  const overrides = await loadOverrides(schedule.id, from, to);
+  const shifts = resolveSchedule(schedule, all, overrides, from, to);
+  const rows = resolveLayers(schedule, all, from, to);
+  // Each row is named after the layer's latest version.
+  const latest = new Map<string, ScheduleLayer>();
+  for (const layer of all) {
+    const seen = latest.get(layer.lineageId);
+    if (!seen || seen.effectiveFrom < layer.effectiveFrom) latest.set(layer.lineageId, layer);
+  }
+  return {
+    from,
+    to,
+    shifts,
+    layers: [...latest.values()]
+      .sort((a, b) => b.position - a.position)
+      .map((layer) => ({ lineageId: layer.lineageId, name: layer.name, kind: layer.kind, shifts: rows.get(layer.lineageId) ?? [] })),
+  };
 }

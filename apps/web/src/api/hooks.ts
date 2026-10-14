@@ -85,8 +85,11 @@ import type {
   WorkItemSearchHit,
   WorkItemSummary,
   WorkItemTimeline,
+  CreateLayerInput,
   CreateScheduleInput,
   Schedule,
+  ScheduleShifts,
+  UpdateLayerInput,
   ScheduleSummary,
   UpdateScheduleInput,
 } from '@paradocs/shared';
@@ -2305,5 +2308,42 @@ export function useDeleteSchedule(workspaceId: string) {
       void qc.invalidateQueries({ queryKey: ['schedules', workspaceId] });
       void qc.invalidateQueries({ queryKey: ['myShifts', workspaceId] });
     },
+  });
+}
+
+export function useCreateLayer(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (input: CreateLayerInput) =>
+    api.post<Schedule>(`/schedules/${scheduleId}/layers`, input),
+  );
+}
+
+export function useUpdateLayer(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, ({ lineageId, ...input }: UpdateLayerInput & { lineageId: string }) =>
+    api.patch<Schedule>(`/schedules/${scheduleId}/layers/${lineageId}`, input),
+  );
+}
+
+export function useOrderLayers(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (lineageIds: string[]) =>
+    api.put<Schedule>(`/schedules/${scheduleId}/layers/order`, { lineageIds }),
+  );
+}
+
+export function useEndLayer(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (lineageId: string) => api.delete(`/schedules/${scheduleId}/layers/${lineageId}`),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+/** Who is on a schedule over [from, to), and each layer's own shifts. */
+export function useScheduleShifts(scheduleId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ['schedule', scheduleId ?? '', 'shifts', from, to] as const,
+    queryFn: () =>
+      api.get<ScheduleShifts>(`/schedules/${scheduleId}/shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    enabled: Boolean(scheduleId),
+    placeholderData: keepPreviousData,
   });
 }
