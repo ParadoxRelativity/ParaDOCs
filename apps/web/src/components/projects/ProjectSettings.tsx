@@ -27,6 +27,8 @@ import { Button, IconButton } from '../ui';
 import { CATEGORY_ICON, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
 import IntakeSection from './ProjectIntake';
+import { RuleSection } from './ProjectRules';
+import { SaveTemplateSection } from './ProjectTemplates';
 
 /**
  * How a project is set up: its name and key, the statuses its work moves
@@ -60,10 +62,13 @@ export default function ProjectSettings({
         <ItemTypeSection project={project} items={items} canEdit={canEdit} />
         <StatusSection project={project} items={items} canEdit={canEdit} />
         <WorkflowSection project={project} canEdit={canEdit} />
+        <StatusCommentSection project={project} canEdit={canEdit} />
+        <RuleSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
         {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
         <ArchiveSection project={project} canEdit={canEdit} />
         {project.kind === 'queue' && canEdit && <IntakeSection project={project} />}
+        {canEdit && <SaveTemplateSection project={project} />}
 
         <Section
           title="Permissions"
@@ -154,6 +159,89 @@ export default function ProjectSettings({
  * Whether the board is run in sprints. Turning it off keeps the sprints and
  * what is in them, so turning it back on picks up where it was.
  */
+/** A setting that is on or off, with what it does and what it is doing now. */
+function SwitchRow({
+  icon,
+  label,
+  detail,
+  on,
+  disabled,
+  onToggle,
+}: {
+  icon: IconName;
+  label: string;
+  detail: string;
+  on: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-[var(--color-line)] px-3 py-2.5">
+      <Icon name={icon} className={cx('text-base', on ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-xs text-[var(--color-muted)]">{detail}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onToggle}
+        className={cx(
+          'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
+          on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-line)]',
+          disabled && 'cursor-not-allowed opacity-50',
+        )}
+      >
+        <span
+          aria-hidden
+          className={cx(
+            'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-[left] duration-150 motion-reduce:transition-none',
+            on ? 'left-[1.125rem]' : 'left-0.5',
+          )}
+        />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Whether moving work in the app asks for a comment saying why. Only the app
+ * asks: the API and AI connections move work as they always have.
+ */
+function StatusCommentSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
+  const update = useUpdateProject(project.workspaceId, project.id);
+  const toast = useToast();
+  const on = project.askStatusComment;
+  return (
+    <Section
+      title="Status comments"
+      hint="Ask whoever moves work here to say why, so the reason is kept on the item with the move."
+    >
+      <SwitchRow
+        icon="chat-left-quote"
+        label="Ask for a comment when work changes status"
+        on={on}
+        disabled={!canEdit || update.isPending}
+        detail={
+          on
+            ? 'On: every move to another status in the app asks for a comment, which can be skipped. Cancelling leaves the work where it was.'
+            : 'Off: work moves without asking.'
+        }
+        onToggle={() =>
+          update.mutate(
+            { askStatusComment: !on },
+            { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error') },
+          )
+        }
+      />
+    </Section>
+  );
+}
+
 function SprintSection({ project, canEdit }: { project: Project; canEdit: boolean }) {
   const update = useUpdateProject(project.workspaceId, project.id);
   const toast = useToast();
@@ -166,49 +254,28 @@ function SprintSection({ project, canEdit }: { project: Project; canEdit: boolea
       title="Sprints"
       hint="Run the board in sprints: plan work into a sprint from the backlog, start it, and the board shows that sprint's work until it is completed."
     >
-      <div className="flex items-center gap-3 rounded-lg border border-[var(--color-line)] px-3 py-2.5">
-        <Icon name="arrow-repeat" className={cx('text-base', on ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')} />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium">Use sprints</span>
-          <span className="block text-xs text-[var(--color-muted)]">
-            {on
-              ? running
-                ? `${running.name} is running.`
-                : `${project.sprints.filter((s) => s.state === 'planned').length} planned, none running.`
-              : 'Off: the board shows all planned work. Turning sprints off later keeps them for when they are turned back on.'}
-          </span>
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label="Use sprints"
-          disabled={disabled}
-          onClick={() =>
-            update.mutate(
-              { sprintsEnabled: !on },
-              {
-                onSuccess: () => toast(on ? 'Sprints turned off' : 'Sprints turned on. Plan the first one in the backlog.'),
-                onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error'),
-              },
-            )
-          }
-          className={cx(
-            'relative h-5 w-9 shrink-0 rounded-full transition-colors',
-            'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
-            on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-line)]',
-            disabled && 'cursor-not-allowed opacity-50',
-          )}
-        >
-          <span
-            aria-hidden
-            className={cx(
-              'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-[left] duration-150 motion-reduce:transition-none',
-              on ? 'left-[1.125rem]' : 'left-0.5',
-            )}
-          />
-        </button>
-      </div>
+      <SwitchRow
+        icon="arrow-repeat"
+        label="Use sprints"
+        on={on}
+        disabled={disabled}
+        detail={
+          on
+            ? running
+              ? `${running.name} is running.`
+              : `${project.sprints.filter((s) => s.state === 'planned').length} planned, none running.`
+            : 'Off: the board shows all planned work. Turning sprints off later keeps them for when they are turned back on.'
+        }
+        onToggle={() =>
+          update.mutate(
+            { sprintsEnabled: !on },
+            {
+              onSuccess: () => toast(on ? 'Sprints turned off' : 'Sprints turned on. Plan the first one in the backlog.'),
+              onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the project', 'error'),
+            },
+          )
+        }
+      />
     </Section>
   );
 }
@@ -365,7 +432,7 @@ function ItemTypeSection({ project, items, canEdit }: { project: Project; items:
           const roleCount = project.roles.filter((role) => type.roleIds.includes(role.id)).length;
           return (
             <li key={type.id}>
-              <div className="flex items-center gap-2 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
                 <IconPicker
                   icon={type.icon}
                   color={type.color}
@@ -437,14 +504,14 @@ function ItemTypeSection({ project, items, canEdit }: { project: Project; items:
           );
         })}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name="plus-circle" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder={newEpic ? 'New epic-kind type, such as Initiative' : 'New type, such as Spike'}
-              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 basis-32 py-1')}
             />
             <label
               className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
@@ -748,7 +815,7 @@ function StatusSection({ project, items, canEdit }: { project: Project; items: W
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {statuses.map((status, index) => (
-          <li key={status.id} className="flex items-center gap-2 px-2 py-1.5">
+          <li key={status.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <ColorSwatch
               color={status.color}
               disabled={!canEdit}
@@ -803,14 +870,14 @@ function StatusSection({ project, items, canEdit }: { project: Project; items: W
           </li>
         ))}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name={CATEGORY_ICON[newCategory]} className="w-5 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New status"
-              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 basis-32 py-1')}
             />
             <select
               value={newCategory}
@@ -941,7 +1008,7 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
           const expanded = open === workflow.id;
           return (
             <li key={workflow.id}>
-              <div className="flex items-center gap-2 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
                 <Icon name="diagram-2" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
                 <RenameField
                   value={workflow.name}
@@ -972,14 +1039,14 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
           </li>
         )}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name="plus-circle" className="w-5 shrink-0 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New workflow, such as Standard"
-              className={cx(FIELD_BASE, 'min-w-24 flex-1 py-1')}
+              className={cx(FIELD_BASE, 'min-w-24 flex-1 basis-32 py-1')}
             />
             <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
               Add
@@ -993,7 +1060,7 @@ function WorkflowSection({ project, canEdit }: { project: Project; canEdit: bool
           <h4 className="text-xs font-semibold">What each type follows</h4>
           <ul className="mt-1 divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
             {project.itemTypes.map((type) => (
-              <li key={type.id} className="flex items-center gap-2 px-2 py-1.5">
+              <li key={type.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
                 <TypeIcon type={type} className="w-5 shrink-0 justify-center" />
                 <span className="min-w-0 flex-1 text-sm">{type.name}</span>
                 <select
@@ -1113,6 +1180,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   const [newName, setNewName] = useState('');
   const [newMultiple, setNewMultiple] = useState(false);
   const [newFreeForm, setNewFreeForm] = useState(false);
+  const [newFillWithCreator, setNewFillWithCreator] = useState(false);
   const fail = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
   const roles = project.roles;
 
@@ -1128,12 +1196,13 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
     const name = newName.trim();
     if (!name) return;
     setup.addRole.mutate(
-      { name, multiple: newMultiple, freeForm: newFreeForm },
+      { name, multiple: newMultiple, freeForm: newFreeForm, fillWithCreator: newFillWithCreator },
       {
         onSuccess: () => {
           setNewName('');
           setNewMultiple(false);
           setNewFreeForm(false);
+          setNewFillWithCreator(false);
         },
         onError: fail('Could not add the role'),
       },
@@ -1143,11 +1212,11 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   return (
     <Section
       title="Roles"
-      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. Which types each role applies to is set under Work item types; a new role applies to every type."
+      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. A role filled by its creator gets whoever files the item, in the app, through the API or through an AI connection, unless they say who holds it. Which types each role applies to is set under Work item types; a new role applies to every type."
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {roles.map((role, index) => (
-          <li key={role.id} className="flex items-center gap-2 px-2 py-1.5">
+          <li key={role.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon
               name={role.freeForm ? 'person-vcard' : role.multiple ? 'people' : 'person'}
               className="w-5 text-center text-[var(--color-muted)]"
@@ -1157,33 +1226,49 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
               disabled={!canEdit}
               onCommit={(name) => setup.updateRole.mutate({ id: role.id, name }, { onError: fail('Could not rename the role') })}
             />
-            <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
-              <input
-                type="checkbox"
-                checked={role.multiple}
-                disabled={!canEdit}
-                onChange={(e) =>
-                  setup.updateRole.mutate({ id: role.id, multiple: e.target.checked }, { onError: fail('Could not change the role') })
-                }
-              />
-              Several
-            </label>
-            <label
-              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
-              title={`Lets a name be typed into ${role.name} as well as someone picked, for a customer or anyone else without an account here. Turning it off again drops the names already typed in.`}
-            >
-              <input
-                type="checkbox"
-                checked={role.freeForm}
-                disabled={!canEdit}
-                onChange={(e) =>
-                  setup.updateRole.mutate({ id: role.id, freeForm: e.target.checked }, { onError: fail('Could not change the role') })
-                }
-              />
-              Free-form
-            </label>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
+                <input
+                  type="checkbox"
+                  checked={role.multiple}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.updateRole.mutate({ id: role.id, multiple: e.target.checked }, { onError: fail('Could not change the role') })
+                  }
+                />
+                Several
+              </label>
+              <label
+                className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                title={`Lets a name be typed into ${role.name} as well as someone picked, for a customer or anyone else without an account here. Turning it off again drops the names already typed in.`}
+              >
+                <input
+                  type="checkbox"
+                  checked={role.freeForm}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.updateRole.mutate({ id: role.id, freeForm: e.target.checked }, { onError: fail('Could not change the role') })
+                  }
+                />
+                Free-form
+              </label>
+              <label
+                className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                title={`Puts whoever creates an item in ${role.name}, unless they say who holds it when they create it.`}
+              >
+                <input
+                  type="checkbox"
+                  checked={role.fillWithCreator}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setup.updateRole.mutate({ id: role.id, fillWithCreator: e.target.checked }, { onError: fail('Could not change the role') })
+                  }
+                />
+                Filled by creator
+              </label>
+            </div>
             {canEdit && (
-              <>
+              <div className="ml-auto flex">
                 <IconButton label="Move earlier" disabled={index === 0} onClick={() => move(index, -1)}>
                   <Icon name="chevron-up" />
                 </IconButton>
@@ -1193,20 +1278,20 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
                 <IconButton label="Delete role" onClick={() => setRemoving(role)}>
                   <Icon name="trash3" />
                 </IconButton>
-              </>
+              </div>
             )}
           </li>
         ))}
         {roles.length === 0 && <li className="px-3 py-2 text-xs text-[var(--color-muted)]">No roles yet.</li>}
         {canEdit && (
-          <li className="flex items-center gap-2 px-2 py-1.5">
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5">
             <Icon name="person-plus" className="w-5 text-center text-[var(--color-muted)]" />
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
               placeholder="New role, such as Approver"
-              className={cx(FIELD, 'min-w-0 flex-1 py-1')}
+              className={cx(FIELD, 'min-w-0 flex-1 basis-32 py-1')}
             />
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]">
               <input type="checkbox" checked={newMultiple} onChange={(e) => setNewMultiple(e.target.checked)} />
@@ -1218,6 +1303,13 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
             >
               <input type="checkbox" checked={newFreeForm} onChange={(e) => setNewFreeForm(e.target.checked)} />
               Free-form
+            </label>
+            <label
+              className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+              title="Puts whoever creates an item in the role, unless they say who holds it when they create it."
+            >
+              <input type="checkbox" checked={newFillWithCreator} onChange={(e) => setNewFillWithCreator(e.target.checked)} />
+              Filled by creator
             </label>
             <Button variant="subtle" className="text-xs" disabled={!newName.trim()} onClick={add}>
               Add
@@ -1262,7 +1354,7 @@ function RenameField({ value, disabled, onCommit }: { value: string; disabled: b
           e.currentTarget.blur();
         }
       }}
-      className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm outline-none hover:border-[var(--color-line)] focus:border-[var(--color-accent)] disabled:hover:border-transparent"
+      className="min-w-0 flex-1 basis-32 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm outline-none hover:border-[var(--color-line)] focus:border-[var(--color-accent)] disabled:hover:border-transparent"
     />
   );
 }

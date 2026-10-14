@@ -5,6 +5,7 @@ import {
   WORK_ITEM_LINK_OPTIONS,
   canHaveEpic,
   isEpicType,
+  isOpenItem,
   itemTypeOf,
   rolesForType,
   canMoveTo,
@@ -45,6 +46,8 @@ import Icon, { DocumentIcon } from '../Icon';
 import { ConfirmDialog } from '../Modal';
 import { useToast } from '../Toast';
 import { Button, EmptyState, IconButton, Spinner } from '../ui';
+import { useMoveToBacklog } from './ProjectBoard';
+import { useStatusComment } from './StatusComment';
 import ReferenceEditor from './ReferenceEditor';
 import WorkItemAttachments from './WorkItemAttachments';
 import {
@@ -167,6 +170,8 @@ function ItemDetail({
   const update = useUpdateWorkItem(project.id);
   const remove = useDeleteWorkItem(project.id);
   const siblings = useWorkItems(project.id);
+  const toBacklog = useMoveToBacklog(project);
+  const statusComment = useStatusComment(project);
   const publicOrigin = usePublicOrigin();
   const toast = useToast();
   const [title, setTitle] = useState(item.title);
@@ -186,11 +191,21 @@ function ItemDetail({
   const status = project.statuses.find((s) => s.id === item.statusId);
   const done = status?.category === 'done';
 
-  function patch(changes: UpdateWorkItemInput) {
+  function patch(changes: UpdateWorkItemInput, onSaved?: () => void) {
     update.mutate(
       { id: item.id, ...changes },
-      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the work item', 'error') },
+      {
+        onSuccess: onSaved,
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not change the work item', 'error'),
+      },
     );
+  }
+
+  /** Moves it to another status, saying why first when the project asks. */
+  async function changeStatus(statusId: string) {
+    const answer = await statusComment.confirm([{ key: item.key, statusId: item.statusId, toStatusId: statusId }]);
+    if (answer === false) return;
+    patch({ statusId }, () => void statusComment.comment([item.id], answer));
   }
 
   /**
@@ -252,6 +267,12 @@ function ItemDetail({
             <Icon name="archive" />
           </IconButton>
         )}
+        {/* Dragging to the backlog rail needs a mouse; this is the same move by touch or keyboard. */}
+        {canEdit && !done && !item.archivedAt && !isEpicType(project, item.typeId) && toBacklog.target(item) && (
+          <IconButton label="Move to backlog" onClick={() => void toBacklog.move(item)}>
+            <Icon name="inbox" />
+          </IconButton>
+        )}
         <IconButton label="Copy link" onClick={copyLink}>
           <Icon name="link-45deg" />
         </IconButton>
@@ -295,7 +316,7 @@ function ItemDetail({
             <select
               value={item.statusId}
               disabled={!canEdit}
-              onChange={(e) => patch({ statusId: e.target.value })}
+              onChange={(e) => void changeStatus(e.target.value)}
               className={cx(FIELD, 'cursor-pointer disabled:cursor-default')}
               aria-label="Status"
             >
@@ -367,11 +388,14 @@ function ItemDetail({
                 aria-label="Epic"
               >
                 <option value="">None</option>
+                {/* Open epics, and a finished one only where it already is. */}
                 {(siblings.data ?? [])
                   .filter((other) => isEpicType(project, other.typeId))
+                  .filter((epic) => isOpenItem(project, epic) || epic.id === item.epicId)
                   .map((epic) => (
                     <option key={epic.id} value={epic.id}>
                       {epic.key} {epic.title}
+                      {isOpenItem(project, epic) ? '' : ' (done)'}
                     </option>
                   ))}
               </select>
@@ -1152,7 +1176,7 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
     case 'status':
       return `moved this from ${activity.from} to ${activity.to}`;
     case 'priority':
-      return `changed the priority from ${PRIORITY[activity.from].label.toLowerCase()} to ${PRIORITY[activity.to].label.toLowerCase()}`;
+      return `changed the priority from ${PRIORITY[activity.from].label.toLowerCase()} to ${PRIORITY[activity.to].label.toLowerCase()}${byRule(activity.rule)}`;
     case 'title':
       return `renamed this from "${activity.from}"`;
     case 'link':
@@ -1175,7 +1199,12 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
       const parts: string[] = [];
       if (activity.added.length) parts.push(`made ${activity.added.map(name).join(', ')} ${activity.role}`);
       if (activity.removed.length) parts.push(`removed ${activity.removed.map(name).join(', ')} as ${activity.role}`);
-      return parts.join(' and ');
+      return parts.join(' and ') + byRule(activity.rule);
     }
   }
+}
+
+/** How a change a project rule made is told apart from one made by hand. */
+function byRule(rule: string | undefined): string {
+  return rule ? `, by the rule "${rule}"` : '';
 }

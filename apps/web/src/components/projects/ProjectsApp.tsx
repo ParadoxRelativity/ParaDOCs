@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   activeSprint,
   usesSprints,
   type User,
   isEpicType,
+  isFilterEmpty,
+  type Project,
+  type WorkItemGroupBy,
   type WorkItemListing,
+  type WorkItemSort,
   type WorkItemSummary,
   type WorkspaceMember,
   projectPermission,
@@ -32,12 +36,15 @@ import ProjectAllItems from './ProjectAllItems';
 import ProjectEpics from './ProjectEpics';
 import ProjectInsights from './ProjectInsights';
 import { NewProjectDialog, NewWorkItemDialog } from './ProjectDialogs';
+import { FilterBar, useFilterMatcher, useProjectFilter } from './ProjectFilters';
 import ProjectSettings from './ProjectSettings';
+import { StatusCommentProvider } from './StatusComment';
+import { TemplateList } from './ProjectTemplates';
 import { NoSprintRunning, SprintBacklog, SprintBar } from './ProjectSprints';
-import ProjectTable from './ProjectTable';
+import ProjectTable, { defaultListSettings, type ListSettings } from './ProjectTable';
 import ProjectWorkload from './ProjectWorkload';
 import WorkItemPanel, { type ProjectNavigation } from './WorkItemPanel';
-import { PriorityIcon, ProjectIcon, StatusPill, TypeIcon, formatDue, isOverdue, useMemberMap } from './projectUi';
+import { MenuSheet, PriorityIcon, ProjectIcon, StatusPill, TypeIcon, formatDue, isOverdue, useMemberMap } from './projectUi';
 
 type View = 'epics' | 'backlog' | 'board' | 'list' | 'all' | 'workload' | 'insights' | 'settings';
 
@@ -149,8 +156,9 @@ function ProjectView({
     // Only when a link brings a view in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedView]);
-  const [text, setText] = useState('');
-  const [person, setPerson] = useState('');
+  // How the List and All items are ordered and grouped, kept per project for this reader.
+  const [storedList, setListSettings] = useLocalStorage<ListSettings | null>(`paradocs.projectList.${projectId}`, null);
+  const [filter, setFilter] = useProjectFilter(projectId);
   const [creating, setCreating] = useState<{ typeId?: string; epicId?: string } | null>(null);
 
   const data = project.data;
@@ -172,13 +180,7 @@ function ProjectView({
   const canComment = data !== undefined && can(projectPermission(data.kind, 'comment'));
   const canManageAccess = workspace.role === 'owner' || workspace.role === 'admin';
 
-  const matches = useMemo(() => {
-    const needle = text.trim().toLowerCase();
-    const who = person === 'me' ? user.id : person;
-    return (item: WorkItemSummary) =>
-      (!needle || item.title.toLowerCase().includes(needle) || item.key.toLowerCase().includes(needle)) &&
-      (!who || Object.values(item.roles).some((holders) => holders.includes(who)));
-  }, [text, person, user.id]);
+  const matches = useFilterMatcher(project.data, filter, user.id);
   // Archived work is not loaded with the rest; All items reads it a page at a time.
   const filtered = useMemo(() => (items.data ?? []).filter(matches), [items.data, matches]);
 
@@ -227,231 +229,380 @@ function ProjectView({
     (view === 'backlog'
       ? data.statuses.find((s) => s.category === 'backlog')
       : data.statuses.find((s) => s.category !== 'backlog'))?.id ?? data.statuses[0]?.id;
-  const filtering = text.trim() !== '' || person !== '';
+  const filtering = !isFilterEmpty(filter);
+  const listSettings = storedList ?? defaultListSettings(data);
+  const newButton = (
+    <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
+      <Icon name="plus-lg" /> New
+    </Button>
+  );
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-2">
-          <ProjectIcon project={data} className="text-lg" />
-          <h1 className="min-w-0 truncate text-base font-semibold">{data.name}</h1>
-          <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
-            {data.key}
-          </span>
-          <div role="tablist" className="ml-2 flex rounded-md border border-[var(--color-line)] p-0.5">
-            {views.map((option) => (
-              <button
-                key={option.id}
-                role="tab"
-                aria-selected={view === option.id}
-                onClick={() => setView(option.id)}
-                className={cx(
-                  'flex items-center gap-1 rounded px-2 py-0.5 text-xs',
-                  view === option.id
-                    ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
-                )}
-              >
-                <Icon name={option.icon} />
-                {option.label}
-              </button>
-            ))}
+    <StatusCommentProvider workspaceId={workspace.id}>
+      <div className="flex h-full min-h-0">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-2">
+            <ProjectIcon project={data} className="text-lg" />
+            <h1 className={cx('min-w-0 truncate text-base font-semibold', mobile && 'flex-1 basis-0')}>{data.name}</h1>
+            <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
+              {data.key}
+            </span>
+            {!mobile && <ViewTabs views={views} view={view} onChange={setView} />}
+            {!mobile && <span className="flex-1" />}
+            {mobile && canEdit && !data.archivedAt && newButton}
+            {mobile && <ViewTabs views={views} view={view} onChange={setView} mobile />}
+            {view !== 'settings' && view !== 'insights' && (
+              <FilterBar project={data} items={items.data ?? []} members={members} filter={filter} onChange={setFilter} />
+            )}
+            {(view === 'list' || view === 'all') && (
+              <ViewMenu project={data} settings={listSettings} onChange={setListSettings} />
+            )}
+            {!mobile && canEdit && !data.archivedAt && newButton}
           </div>
-          <span className="flex-1" />
-          {view !== 'settings' && view !== 'insights' && (
-            <>
-              <div className="relative">
-                <Icon name="funnel" className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[var(--color-muted)]" />
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="Filter"
-                  className="w-40 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] py-1 pl-6 pr-2 text-xs outline-none focus:border-[var(--color-accent)]"
-                />
+
+          {data.archivedAt && (
+            <div className="shrink-0 border-b border-[var(--color-line)] bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+              <Icon name="archive" /> This {data.kind} is archived. Its work can still be read and changed, but nothing new can be added.
+            </div>
+          )}
+
+          <div className="min-h-0 flex-1">
+            {items.isLoading ? (
+              <Spinner />
+            ) : view === 'settings' ? (
+              <ProjectSettings
+                project={data}
+                items={items.data ?? []}
+                canEdit={canConfigure}
+                canManageAccess={canManageAccess}
+                onDeleted={onProjectDeleted}
+              />
+            ) : view === 'insights' ? (
+              <ProjectInsights project={data} items={items.data ?? []} />
+            ) : view === 'all' ? (
+              <ProjectAllItems
+                project={data}
+                current={filtered}
+                filter={filter}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                settings={listSettings}
+                onSettings={setListSettings}
+              />
+            ) : view === 'epics' && epicType ? (
+              <ProjectEpics
+                project={data}
+                items={items.data ?? []}
+                visible={filtered}
+                filtering={filtering}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                onNewItem={setCreating}
+              />
+            ) : view === 'backlog' && sprints ? (
+              <SprintBacklog
+                project={data}
+                items={worked}
+                memberMap={memberMap}
+                canEdit={canRunSprints}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                onOpenBoard={() => setView('board')}
+              />
+            ) : view === 'backlog' ? (
+              <ProjectBacklog
+                project={data}
+                items={worked}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                onOpenBoard={() => setView('board')}
+              />
+            ) : (items.data ?? []).length === 0 ? (
+              <EmptyState
+                icon={data.kind === 'queue' ? 'inboxes' : 'kanban'}
+                title={data.kind === 'queue' ? 'Nothing in the queue' : 'No work items yet'}
+                hint={canEdit ? 'Add the first with New. Work items can be linked from documents, canvases and chat.' : undefined}
+              />
+            ) : view === 'board' && sprints && !running ? (
+              <NoSprintRunning project={data} canEdit={canRunSprints} onOpenBacklog={() => setView('backlog')} />
+            ) : view === 'board' ? (
+              <div className="flex h-full flex-col">
+                {running && (
+                  <SprintBar
+                    project={data}
+                    sprint={running}
+                    items={sprintItems}
+                    canEdit={canRunSprints}
+                    onOpenBacklog={() => setView('backlog')}
+                  />
+                )}
+                <div className="min-h-0 flex-1">
+                  <ProjectBoard
+                    project={data}
+                    items={onBoard}
+                    memberMap={memberMap}
+                    canEdit={canEdit && !filtering}
+                    activeItemId={itemId}
+                    onOpenItem={onOpenItem}
+                    onOpenBacklog={hasBacklog ? () => setView('backlog') : undefined}
+                  />
+                </div>
               </div>
-              {view !== 'workload' && (
-                <select
-                  value={person}
-                  onChange={(e) => setPerson(e.target.value)}
-                  className="rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
-                  aria-label="Show work for"
-                >
-                  <option value="">Anyone</option>
-                  <option value="me">Me</option>
-                  {members
-                    .filter((m) => !m.isSelf)
-                    .map((m) => (
-                      <option key={m.userId} value={m.userId}>
-                        {m.name}
-                      </option>
-                    ))}
-                </select>
-              )}
-            </>
-          )}
-          {canEdit && !data.archivedAt && (
-            <Button variant="primary" className="text-xs" onClick={() => setCreating({})}>
-              <Icon name="plus-lg" /> New
-            </Button>
-          )}
+            ) : view === 'list' ? (
+              <ProjectTable
+                project={data}
+                items={filtered}
+                memberMap={memberMap}
+                canEdit={canEdit}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+                sort={listSettings.sort}
+                onSort={(sort) => setListSettings({ ...listSettings, sort })}
+                groupBy={listSettings.groupBy}
+              />
+            ) : (
+              <ProjectWorkload
+                project={data}
+                items={worked}
+                members={members}
+                memberMap={memberMap}
+                activeItemId={itemId}
+                onOpenItem={onOpenItem}
+              />
+            )}
+          </div>
         </div>
 
-        {data.archivedAt && (
-          <div className="shrink-0 border-b border-[var(--color-line)] bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
-            <Icon name="archive" /> This {data.kind} is archived. Its work can still be read and changed, but nothing new can be added.
-          </div>
+        {itemId && (
+          <aside
+            className={cx(
+              'bg-[var(--color-canvas)]',
+              mobile
+                ? 'fixed inset-0 z-40 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+                : 'w-[460px] max-w-[50%] shrink-0 border-l border-[var(--color-line)]',
+            )}
+          >
+            <WorkItemPanel
+              workspaceId={workspace.id}
+              itemId={itemId}
+              project={data}
+              members={members}
+              selfId={user.id}
+              canEdit={canEdit}
+              canComment={canComment}
+              onClose={onCloseItem}
+              navigation={navigation}
+            />
+          </aside>
         )}
 
-        <div className="min-h-0 flex-1">
-          {items.isLoading ? (
-            <Spinner />
-          ) : view === 'settings' ? (
-            <ProjectSettings
-              project={data}
-              items={items.data ?? []}
-              canEdit={canConfigure}
-              canManageAccess={canManageAccess}
-              onDeleted={onProjectDeleted}
-            />
-          ) : view === 'insights' ? (
-            <ProjectInsights project={data} items={items.data ?? []} />
-          ) : view === 'all' ? (
-            <ProjectAllItems
-              project={data}
-              current={filtered}
-              text={text}
-              personId={(person === 'me' ? user.id : person) || null}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-            />
-          ) : view === 'epics' && epicType ? (
-            <ProjectEpics
-              project={data}
-              items={items.data ?? []}
-              visible={filtered}
-              filtering={filtering}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onNewItem={setCreating}
-            />
-          ) : view === 'backlog' && sprints ? (
-            <SprintBacklog
-              project={data}
-              items={worked}
-              memberMap={memberMap}
-              canEdit={canRunSprints}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onOpenBoard={() => setView('board')}
-            />
-          ) : view === 'backlog' ? (
-            <ProjectBacklog
-              project={data}
-              items={worked}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-              onOpenBoard={() => setView('board')}
-            />
-          ) : (items.data ?? []).length === 0 ? (
-            <EmptyState
-              icon={data.kind === 'queue' ? 'inboxes' : 'kanban'}
-              title={data.kind === 'queue' ? 'Nothing in the queue' : 'No work items yet'}
-              hint={canEdit ? 'Add the first with New. Work items can be linked from documents, canvases and chat.' : undefined}
-            />
-          ) : view === 'board' && sprints && !running ? (
-            <NoSprintRunning project={data} canEdit={canRunSprints} onOpenBacklog={() => setView('backlog')} />
-          ) : view === 'board' ? (
-            <div className="flex h-full flex-col">
-              {running && (
-                <SprintBar
-                  project={data}
-                  sprint={running}
-                  items={sprintItems}
-                  canEdit={canRunSprints}
-                  onOpenBacklog={() => setView('backlog')}
-                />
-              )}
-              <div className="min-h-0 flex-1">
-                <ProjectBoard
-                  project={data}
-                  items={onBoard}
-                  memberMap={memberMap}
-                  canEdit={canEdit && !filtering}
-                  activeItemId={itemId}
-                  onOpenItem={onOpenItem}
-                  // The sprint bar leads to the backlog when there are sprints.
-                  onOpenBacklog={hasBacklog && !sprints ? () => setView('backlog') : undefined}
-                />
-              </div>
-            </div>
-          ) : view === 'list' ? (
-            <ProjectTable
-              project={data}
-              items={filtered}
-              memberMap={memberMap}
-              canEdit={canEdit}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-            />
-          ) : (
-            <ProjectWorkload
-              project={data}
-              items={worked}
-              members={members}
-              memberMap={memberMap}
-              activeItemId={itemId}
-              onOpenItem={onOpenItem}
-            />
-          )}
-        </div>
-      </div>
-
-      {itemId && (
-        <aside
-          className={cx(
-            'bg-[var(--color-canvas)]',
-            mobile
-              ? 'fixed inset-0 z-40 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
-              : 'w-[460px] max-w-[50%] shrink-0 border-l border-[var(--color-line)]',
-          )}
-        >
-          <WorkItemPanel
-            workspaceId={workspace.id}
-            itemId={itemId}
+        {creating && (
+          <NewWorkItemDialog
             project={data}
             members={members}
             selfId={user.id}
-            canEdit={canEdit}
-            canComment={canComment}
-            onClose={onCloseItem}
-            navigation={navigation}
+            initialStatusId={newStatusId}
+            // Filed from the board while a sprint runs, it joins that sprint so it shows up there.
+            initialSprintId={view === 'board' ? running?.id : undefined}
+            initialTypeId={creating.typeId ?? (view === 'epics' && !creating.epicId ? epicType?.id : undefined)}
+            initialEpicId={creating.epicId}
+            onClose={() => setCreating(null)}
+            onCreated={(id) => {
+              setCreating(null);
+              onOpenItem(id);
+            }}
           />
-        </aside>
-      )}
+        )}
+      </div>
+    </StatusCommentProvider>
+  );
+}
 
-      {creating && (
-        <NewWorkItemDialog
-          project={data}
-          members={members}
-          selfId={user.id}
-          initialStatusId={newStatusId}
-          // Filed from the board while a sprint runs, it joins that sprint so it shows up there.
-          initialSprintId={view === 'board' ? running?.id : undefined}
-          initialTypeId={creating.typeId ?? (view === 'epics' && !creating.epicId ? epicType?.id : undefined)}
-          initialEpicId={creating.epicId}
-          onClose={() => setCreating(null)}
-          onCreated={(id) => {
-            setCreating(null);
-            onOpenItem(id);
-          }}
-        />
+const SORT_LABELS: Record<WorkItemSort, string> = {
+  key: 'Key',
+  title: 'Title',
+  status: 'Status',
+  priority: 'Priority',
+  due: 'Due date',
+  estimate: 'Estimate',
+  created: 'Created',
+  updated: 'Updated',
+};
+
+/** How the List and All items are ordered and grouped: by any field, and by any of the project's roles. */
+function ViewMenu({
+  project,
+  settings,
+  onChange,
+}: {
+  project: Project;
+  settings: ListSettings;
+  onChange: (settings: ListSettings) => void;
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const groupings: { id: WorkItemGroupBy; label: string }[] = [
+    { id: 'none', label: 'None' },
+    { id: 'status', label: 'Status' },
+    { id: 'type', label: 'Type' },
+    { id: 'priority', label: 'Priority' },
+    ...(project.kind === 'project' && project.itemTypes.some((t) => t.epic) ? [{ id: 'epic' as const, label: 'Epic' }] : []),
+    ...(usesSprints(project) ? [{ id: 'sprint' as const, label: 'Sprint' }] : []),
+    ...project.roles.map((role) => ({ id: `role:${role.id}` as const, label: role.name })),
+  ];
+  // A role since deleted groups nothing.
+  const groupBy = groupings.some((g) => g.id === settings.groupBy) ? settings.groupBy : 'none';
+  const field = 'w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]';
+
+  return (
+    <>
+      <button
+        onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}
+        aria-expanded={anchor !== null}
+        className={cx(
+          'flex items-center gap-1 rounded-md border border-[var(--color-line)] px-2 py-1 text-xs',
+          groupBy !== 'none' ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
+        )}
+      >
+        <Icon name="sliders" /> View
+      </button>
+      {anchor && (
+        <MenuSheet anchor={anchor} title="View" onClose={() => setAnchor(null)} className="w-64">
+          <div className="space-y-3 p-1 text-xs text-[var(--color-muted)]">
+            <label className="block">
+              Sort by
+              <div className="mt-1 flex gap-1.5">
+                <select
+                  value={settings.sort.key}
+                  onChange={(e) => onChange({ ...settings, sort: { ...settings.sort, key: e.target.value as WorkItemSort } })}
+                  className={field}
+                >
+                  {(Object.keys(SORT_LABELS) as WorkItemSort[]).map((key) => (
+                    <option key={key} value={key}>
+                      {SORT_LABELS[key]}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => onChange({ ...settings, sort: { ...settings.sort, descending: !settings.sort.descending } })}
+                  title={settings.sort.descending ? 'Descending' : 'Ascending'}
+                  aria-label={settings.sort.descending ? 'Descending; switch to ascending' : 'Ascending; switch to descending'}
+                  className="shrink-0 rounded-md border border-[var(--color-line)] px-2 text-[var(--color-ink)] hover:bg-[var(--color-surface)]"
+                >
+                  <Icon name={settings.sort.descending ? 'sort-down' : 'sort-up'} />
+                </button>
+              </div>
+            </label>
+            <label className="block">
+              Group by
+              <select
+                value={groupBy}
+                onChange={(e) => onChange({ ...settings, groupBy: e.target.value as WorkItemGroupBy })}
+                className={cx(field, 'mt-1')}
+              >
+                {groupings.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              onClick={() => onChange(defaultListSettings(project))}
+              className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              Reset to {project.kind === 'queue' ? 'oldest first' : 'by number'}, ungrouped
+            </button>
+          </div>
+        </MenuSheet>
       )}
+    </>
+  );
+}
+
+/**
+ * The project's views as tabs. On a phone they take a row of their own and
+ * scroll sideways, so every view down to Settings can be reached in portrait;
+ * the chosen one is kept in sight. Arrow keys move between them.
+ */
+function ViewTabs({
+  views,
+  view,
+  onChange,
+  mobile = false,
+}: {
+  views: { id: View; label: string; icon: IconName }[];
+  view: View;
+  onChange: (view: View) => void;
+  mobile?: boolean;
+}) {
+  const list = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!mobile) return;
+    const reveal = () => {
+      const row = list.current;
+      const tab = row?.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (!tab || !row) return;
+      // Scrolls the row alone; scrollIntoView would move the page as well. The
+      // row is positioned, so a tab's offset is measured from it.
+      const left = tab.offsetLeft;
+      if (left < row.scrollLeft || left + tab.offsetWidth > row.scrollLeft + row.clientWidth) {
+        row.scrollTo({ left: left - (row.clientWidth - tab.offsetWidth) / 2 });
+      }
+    };
+    reveal();
+    // Again once the icons' font is in, which widens the tabs.
+    void document.fonts?.ready.then(reveal);
+  }, [view, mobile]);
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    const index = views.findIndex((v) => v.id === view);
+    const next =
+      e.key === 'ArrowRight' ? index + 1 : e.key === 'ArrowLeft' ? index - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? views.length - 1 : null;
+    if (next === null) return;
+    e.preventDefault();
+    const target = views[(next + views.length) % views.length];
+    onChange(target.id);
+    list.current?.querySelector<HTMLElement>(`[data-view="${target.id}"]`)?.focus();
+  }
+
+  return (
+    <div
+      ref={list}
+      role="tablist"
+      aria-label="Views"
+      onKeyDown={onKeyDown}
+      className={cx(
+        'flex rounded-md border border-[var(--color-line)] p-0.5',
+        mobile ? 'scroll-none relative w-full snap-x overflow-x-auto' : 'ml-2',
+      )}
+    >
+      {views.map((option) => (
+        <button
+          key={option.id}
+          role="tab"
+          data-view={option.id}
+          aria-selected={view === option.id}
+          tabIndex={view === option.id ? 0 : -1}
+          onClick={() => onChange(option.id)}
+          className={cx(
+            'flex shrink-0 snap-start items-center gap-1 whitespace-nowrap rounded px-2 text-xs',
+            mobile ? 'py-1.5' : 'py-0.5',
+            view === option.id
+              ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
+              : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]',
+          )}
+        >
+          <Icon name={option.icon} />
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -577,6 +728,7 @@ function MyWork({
             </div>
           </>
         )}
+        <TemplateList workspaceId={workspace.id} />
       </div>
 
       {creating && (

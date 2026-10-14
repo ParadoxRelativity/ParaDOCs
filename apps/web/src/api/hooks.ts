@@ -70,6 +70,8 @@ import type {
   WorkItemLink,
   Project,
   ProjectRole,
+  ProjectRule,
+  ProjectTemplateSummary,
   ProjectSprint,
   ProjectStatus,
   ProjectSummary,
@@ -950,6 +952,36 @@ export function useCreateProject(workspaceId: string) {
   });
 }
 
+/** The templates a project can start from: the built-ins, then those the workspace saved. */
+export function useProjectTemplates(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['projectTemplates', workspaceId] as const,
+    queryFn: () => api.get<ProjectTemplateSummary[]>(`/workspaces/${workspaceId}/project-templates`),
+    enabled: !!workspaceId,
+  });
+}
+
+/** Saving a project's setup as a template, and renaming or deleting saved ones. */
+export function useTemplateActions(workspaceId: string) {
+  const qc = useQueryClient();
+  const settle = () => void qc.invalidateQueries({ queryKey: ['projectTemplates', workspaceId] });
+  return {
+    save: useMutation({
+      mutationFn: ({ projectId, ...input }: { projectId: string; name: string; description: string }) =>
+        api.post<{ id: string }>(`/projects/${projectId}/template`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; description?: string }) => api.patch(`/project-templates/${id}`, patch),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-templates/${id}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
 export function useUpdateProject(workspaceId: string, projectId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -961,6 +993,7 @@ export function useUpdateProject(workspaceId: string, projectId: string) {
       archived?: boolean;
       boardLayout?: BoardLayout;
       sprintsEnabled?: boolean;
+      askStatusComment?: boolean;
       defaultTypeId?: string;
       archiveAfterDays?: number | null;
     }) => api.patch<Project>(`/projects/${projectId}`, patch),
@@ -1080,7 +1113,7 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
       onSuccess: settle,
     }),
     addRole: useMutation({
-      mutationFn: (input: { name: string; multiple: boolean; freeForm: boolean }) =>
+      mutationFn: (input: { name: string; multiple: boolean; freeForm: boolean; fillWithCreator: boolean }) =>
         api.post<ProjectRole>(`/projects/${projectId}/roles`, input),
       onSuccess: settle,
     }),
@@ -1093,12 +1126,26 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
         name?: string;
         multiple?: boolean;
         freeForm?: boolean;
+        fillWithCreator?: boolean;
         position?: number;
       }) => api.patch<ProjectRole>(`/project-roles/${id}`, patch),
       onSuccess: settle,
     }),
     deleteRole: useMutation({
       mutationFn: (id: string) => api.delete(`/project-roles/${id}`),
+      onSuccess: settle,
+    }),
+    addRule: useMutation({
+      mutationFn: (input: Omit<ProjectRule, 'id' | 'position'>) => api.post<ProjectRule>(`/projects/${projectId}/rules`, input),
+      onSuccess: settle,
+    }),
+    updateRule: useMutation({
+      mutationFn: ({ id, ...patch }: Partial<Omit<ProjectRule, 'id'>> & { id: string }) =>
+        api.patch<ProjectRule>(`/project-rules/${id}`, patch),
+      onSuccess: settle,
+    }),
+    deleteRule: useMutation({
+      mutationFn: (id: string) => api.delete(`/project-rules/${id}`),
       onSuccess: settle,
     }),
     addWorkflow: useMutation({
@@ -1204,6 +1251,21 @@ export function useWorkItems(projectId: string | undefined) {
 }
 
 /** The address of one page of a project's archive. */
+/**
+ * The ids of a project's current work a search finds, its descriptions
+ * included, which the browser does not hold. Short searches are not asked.
+ */
+export function useWorkItemSearch(projectId: string, q: string) {
+  const needle = q.trim();
+  return useQuery({
+    queryKey: ['workItemSearch', projectId, needle] as const,
+    queryFn: async () =>
+      new Set((await api.get<WorkItemSummary[]>(`/projects/${projectId}/items?q=${encodeURIComponent(needle)}`)).map((item) => item.id)),
+    enabled: needle.length >= 3,
+    staleTime: 30_000,
+  });
+}
+
 function archiveUrl(projectId: string, query: ArchivePageQuery): string {
   const params = new URLSearchParams();
   for (const [name, value] of Object.entries(query)) {

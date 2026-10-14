@@ -3,6 +3,7 @@ import {
   DEFAULT_SPRINT_DAYS,
   daysUntil,
   itemTypeOf,
+  sprintEntryStatus,
   type Project,
   type ProjectSprint,
   type ProjectStatus,
@@ -18,6 +19,7 @@ import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton } from '../ui';
 import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue } from './projectUi';
+import { useStatusComment } from './StatusComment';
 
 /**
  * Sprints, for a project whose board is run in them: the bar over the board
@@ -532,6 +534,7 @@ export function SprintBacklog({
 }) {
   const sprints = useSprints(project.workspaceId, project.id);
   const toast = useToast();
+  const statusComment = useStatusComment(project);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [picking, setPicking] = useState<{ ids: string[]; anchor: HTMLElement } | null>(null);
   const [creating, setCreating] = useState(false);
@@ -567,14 +570,27 @@ export function SprintBacklog({
     });
   }
 
-  function place(ids: string[], sprint: ProjectSprint | null) {
+  async function place(ids: string[], sprint: ProjectSprint | null) {
     if (ids.length === 0) return;
+    // Work put in the running sprint goes onto the board, out of its backlog status.
+    const entering =
+      sprint?.state === 'active'
+        ? items
+            .filter((item) => ids.includes(item.id) && item.sprintId !== sprint.id)
+            .map((item) => ({ id: item.id, key: item.key, statusId: item.statusId, toStatusId: sprintEntryStatus(project, item)?.id ?? null }))
+        : [];
+    const answer = await statusComment.confirm(entering);
+    if (answer === false) return;
     sprints.place.mutate(
       { itemIds: ids, sprintId: sprint?.id ?? null },
       {
         onSuccess: ({ moved }) => {
           setSelected(new Set());
           if (moved > 0) toast(`Moved ${moved === 1 ? '1 item' : `${moved} items`} to ${sprint?.name ?? 'the backlog'}`);
+          void statusComment.comment(
+            entering.filter((item) => item.toStatusId !== null && item.toStatusId !== item.statusId).map((item) => item.id),
+            answer,
+          );
         },
         onError: (err) => toast(err instanceof Error ? err.message : 'Could not move them', 'error'),
       },

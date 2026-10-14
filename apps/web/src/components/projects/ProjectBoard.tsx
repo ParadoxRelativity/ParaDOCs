@@ -1,10 +1,13 @@
 import { Fragment, useMemo, useRef, useState, type DragEvent } from 'react';
 import {
+  backlogTarget,
   boardLanes,
+  isEpicType,
   itemTypeOf,
   cellTarget,
   cellTargets,
   layoutOf,
+  usesSprints,
   type BoardCellView,
   type BoardLaneView,
   type Project,
@@ -12,12 +15,13 @@ import {
   type WorkItemSummary,
   type WorkspaceMember,
 } from '@paradocs/shared';
-import { useUpdateProject, useUpdateWorkItem } from '../../api/hooks';
+import { useUpdateProject, useUpdateWorkItem, useWorkItems } from '../../api/hooks';
 import { cx, useLocalStorage } from '../../lib/util';
 import Icon from '../Icon';
 import { Popover } from '../Popover';
 import { useToast } from '../Toast';
 import { IconButton } from '../ui';
+import { useStatusComment } from './StatusComment';
 import { BlockedBadge, PeopleStack, PriorityIcon, StatusPill, TypeIcon, formatDue, isOverdue } from './projectUi';
 
 /** What a dragged card carries, so nothing else can be dropped on a column. */
@@ -32,6 +36,50 @@ export function positionBetween(before: number | undefined, after: number | unde
   if (before === undefined) return after! - 1;
   if (after === undefined) return before + 1;
   return (before + after) / 2;
+}
+
+/**
+ * Takes work off the board and puts it at the top of the backlog, where the
+ * next planning will see it: out of its sprint as well, when the project runs
+ * in sprints. The board's backlog rail and the work item's own button share it.
+ */
+export function useMoveToBacklog(project: Project) {
+  const update = useUpdateWorkItem(project.id);
+  const all = useWorkItems(project.id);
+  const toast = useToast();
+  const statusComment = useStatusComment(project);
+
+  async function move(item: WorkItemSummary & { key: string }) {
+    const status = backlogTarget(project, item);
+    if (!status) return;
+    const answer = await statusComment.confirm([{ key: item.key, statusId: item.statusId, toStatusId: status.id }]);
+    if (answer === false) return;
+    const sprints = usesSprints(project);
+    // The sprint backlog is everything in no sprint; without sprints, the backlog status.
+    const queue = (all.data ?? []).filter(
+      (other) =>
+        other.id !== item.id &&
+        (sprints ? other.sprintId === null && !isEpicType(project, other.typeId) : other.statusId === status.id),
+    );
+    const first = queue.length > 0 ? Math.min(...queue.map((other) => other.position)) : undefined;
+    update.mutate(
+      {
+        id: item.id,
+        statusId: status.id === item.statusId ? undefined : status.id,
+        sprintId: sprints ? null : undefined,
+        position: positionBetween(undefined, first),
+      },
+      {
+        onSuccess: () => {
+          toast(`Moved ${item.key} to the backlog`);
+          void statusComment.comment([item.id], answer);
+        },
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the work item', 'error'),
+      },
+    );
+  }
+
+  return { all: all.data ?? [], target: (item: WorkItemSummary) => backlogTarget(project, item), move };
 }
 
 /** Which of a column's two levels a fold is remembered against. */
@@ -76,6 +124,7 @@ export default function ProjectBoard({
   const update = useUpdateWorkItem(project.id);
   const saveProject = useUpdateProject(project.workspaceId, project.id);
   const toast = useToast();
+  const statusComment = useStatusComment(project);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ cellKey: string; index: number; statusId: string | null } | null>(null);
   const [laneDrag, setLaneDrag] = useState<string | null>(null);
@@ -87,7 +136,47 @@ export default function ProjectBoard({
   const held = dragging ? items.find((item) => item.id === dragging) : undefined;
 
   const backlogIds = new Set(project.statuses.filter((s) => s.category === 'backlog').map((s) => s.id));
-  const backlogCount = items.filter((item) => backlogIds.has(item.statusId)).length;
+  const doneIds = new Set(project.statuses.filter((s) => s.category === 'done').map((s) => s.id));
+  const toBacklog = useMoveToBacklog(project);
+  const sprints = usesSprints(project);
+  // With sprints the board holds the sprint alone, so the backlog is counted from all the work.
+  const backlogCount = sprints
+    ? toBacklog.all.filter((item) => item.sprintId === null && !isEpicType(project, item.typeId) && !doneIds.has(item.statusId)).length
+    : items.filter((item) => backlogIds.has(item.statusId)).length;
+  /** Whether the card in the air may go back to the backlog. */
+  const backlogTakes = held ? toBacklog.target(held) !== null : false;
+  const [overBacklog, setOverBacklog] = useState(false);
+  /** The backlog rail takes a dragged card as a column does, when its workflow allows. */
+  const backlogDrop = {
+    onDragOver: (e: DragEvent) => {
+      if (!canEdit || !backlogTakes || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+      e.preventDefault();
+      setOverBacklog(true);
+    },
+    onDragLeave: () => setOverBacklog(false),
+    onDrop: (e: DragEvent) => {
+      setOverBacklog(false);
+      const id = e.dataTransfer.getData(DRAG_TYPE);
+      const item = items.find((other) => other.id === id);
+      if (!item || !backlogTakes) return;
+      e.preventDefault();
+      setDragging(null);
+      setDrop(null);
+      void toBacklog.move(item);
+    },
+  };
+  const railDragClass = (shown: boolean) =>
+    cx(
+      'flex w-10 shrink-0 flex-col items-center gap-2 rounded-xl py-3 text-xs transition-colors',
+      !shown
+        ? 'bg-[var(--color-surface)] text-[var(--color-muted)] hover:text-[var(--color-ink)]'
+        : backlogTakes
+          ? cx(
+              'border-2 border-dashed text-[var(--color-accent)]',
+              overBacklog ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]' : 'border-[var(--color-line)] bg-[var(--color-surface)]',
+            )
+          : 'bg-[var(--color-surface)] text-[var(--color-muted)] opacity-40',
+    );
 
   /** Every column's cards, in the order the column draws them, by cell key. */
   const byCell = useMemo(() => {
@@ -124,7 +213,7 @@ export default function ProjectBoard({
    * `chosen` is the status a drop box was dropped in, where the column offered
    * a choice; without one the column decides for itself.
    */
-  function moveTo(cell: BoardCellView, index: number, itemId: string, chosen: string | null) {
+  async function moveTo(cell: BoardCellView, index: number, itemId: string, chosen: string | null) {
     const current = items.find((item) => item.id === itemId);
     if (!current) return;
     const statusId = chosen ?? cellTarget(project, cell, current);
@@ -136,9 +225,14 @@ export default function ProjectBoard({
     const others = column.filter((item) => item.id !== itemId);
     const target = original !== -1 && index > original ? index - 1 : index;
     const position = positionBetween(others[target - 1]?.position, others[target]?.position);
+    const answer = await statusComment.confirm([{ key: current.key, statusId: current.statusId, toStatusId: statusId }]);
+    if (answer === false) return;
     update.mutate(
       { id: itemId, statusId: statusId === current.statusId ? undefined : statusId, position },
-      { onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the work item', 'error') },
+      {
+        onSuccess: () => void statusComment.comment([itemId], answer),
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not move the work item', 'error'),
+      },
     );
   }
 
@@ -277,11 +371,20 @@ export default function ProjectBoard({
         setLaneDrop(null);
       }}
     >
-      {backlogIds.size > 0 && onOpenBacklog && (
+      {(backlogIds.size > 0 || sprints) && onOpenBacklog && (
         <button
           onClick={onOpenBacklog}
-          title="Work not yet planned"
-          className="flex w-10 shrink-0 flex-col items-center gap-2 rounded-xl bg-[var(--color-surface)] py-3 text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+          title={
+            held && canEdit
+              ? backlogTakes
+                ? sprints
+                  ? 'Drop here to take it out of the sprint, to the top of the backlog'
+                  : 'Drop here to move it to the top of the backlog'
+                : "The backlog is not a move this item's workflow allows"
+              : 'Work not yet planned'
+          }
+          className={railDragClass(held !== undefined && canEdit)}
+          {...backlogDrop}
         >
           <Icon name="inbox" />
           <span className="font-medium tabular-nums">{backlogCount}</span>
@@ -368,7 +471,7 @@ export default function ProjectBoard({
                     onDropAt={(index, itemId, statusId) => {
                       setDrop(null);
                       setDragging(null);
-                      moveTo(cell, index, itemId, statusId);
+                      void moveTo(cell, index, itemId, statusId);
                     }}
                     laneKey={lane.key}
                     onLaneDragStart={() => setLaneDrag(lane.key)}

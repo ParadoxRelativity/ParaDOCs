@@ -34,6 +34,7 @@
 import { z } from 'zod';
 import { parseMessage, type MessageAttachment, type MessageAuthor, type MessageReferences } from './chat.js';
 import type { CanvasElement } from './canvas.js';
+import type { ProjectRule } from './projectRules.js';
 import { canvasTextOf, walkInlineNodes } from './mentions.js';
 import type { AccessMode, NotificationWorkspace, Permission } from './types.js';
 
@@ -260,6 +261,11 @@ export interface ProjectRole {
    * whoever the item is about but has no account here — a queue's customer.
    */
   freeForm: boolean;
+  /**
+   * Whether whoever creates an item is put in it, as a project's reporter and
+   * a watcher are, unless the item is created with the role already filled.
+   */
+  fillWithCreator: boolean;
   position: number;
 }
 
@@ -305,6 +311,13 @@ export interface Project extends ProjectSummary {
    * off the board and the list, and kept in All items. Null: never.
    */
   archiveAfterDays: number | null;
+  /**
+   * Whether moving work to another status in the app asks for a comment saying
+   * why. Only the app asks; the API and AI connections never do.
+   */
+  askStatusComment: boolean;
+  /** What it fills in when work reaches a status, in the order they run. */
+  rules: ProjectRule[];
   /** What has been archived, totalled, since archived items are not loaded with the rest. */
   archive: ArchiveTotals;
   /** Running first, then planned in the order they were made, then completed, newest first. */
@@ -389,8 +402,9 @@ export type WorkItemActivityData =
   /** `via`: the intake token it came in through, by the name it had, when it was sent in from outside. */
   | { kind: 'created'; via?: string }
   | { kind: 'status'; from: string; to: string }
-  | { kind: 'role'; role: string; added: string[]; removed: string[] }
-  | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority }
+  /** `rule`: the project rule that made the change, by the name it had, when one did. */
+  | { kind: 'role'; role: string; added: string[]; removed: string[]; rule?: string }
+  | { kind: 'priority'; from: WorkItemPriority; to: WorkItemPriority; rule?: string }
   | { kind: 'title'; from: string; to: string }
   /** Sprint names as they were at the time; null is the backlog. */
   | { kind: 'sprint'; from: string | null; to: string | null }
@@ -546,6 +560,27 @@ export function canMoveTo(
   if (fromStatusId === toStatusId) return true;
   const allowed = allowedMoves(project, typeId, fromStatusId);
   return allowed === null || allowed.includes(toStatusId);
+}
+
+/**
+ * Where work taken off the board goes back to, or null when it cannot go.
+ * Without sprints that is the project's first backlog status. With sprints it
+ * also leaves its sprint, landing in the first backlog status, or the first
+ * status when there is none. Either way the move must be one the item's
+ * workflow allows.
+ */
+export function backlogTarget(
+  project: Pick<Project, 'kind' | 'sprintsEnabled' | 'statuses' | 'workflows' | 'itemTypes'>,
+  item: Pick<WorkItemSummary, 'typeId' | 'statusId' | 'sprintId'>,
+): ProjectStatus | null {
+  const backlog = project.statuses.find((s) => s.category === 'backlog');
+  if (usesSprints(project)) {
+    const status = backlog ?? project.statuses[0];
+    if (!status || (item.sprintId === null && status.id === item.statusId)) return null;
+    return canMoveTo(project, item.typeId, item.statusId, status.id) ? status : null;
+  }
+  if (!backlog || backlog.id === item.statusId) return null;
+  return canMoveTo(project, item.typeId, item.statusId, backlog.id) ? backlog : null;
 }
 
 // --- board layout ------------------------------------------------------------
@@ -719,6 +754,18 @@ export function isEpicType(project: Pick<Project, 'itemTypes'>, typeId: string):
 }
 
 /**
+ * Whether an item is still being worked: not in a done status, and not
+ * archived. Pickers offer only open work; the API still takes finished work.
+ */
+export function isOpenItem(
+  project: Pick<Project, 'statuses'>,
+  item: Pick<WorkItemSummary, 'statusId' | 'archivedAt'>,
+): boolean {
+  if (item.archivedAt) return false;
+  return project.statuses.find((s) => s.id === item.statusId)?.category !== 'done';
+}
+
+/**
  * Whether an item of this type can be put under an epic. Anything but an
  * epic-kind type can: epics do not nest.
  */
@@ -885,6 +932,8 @@ export const createProjectSchema = z.object({
   kind: z.enum(['project', 'queue']).default('project'),
   description: z.string().max(4000).default(''),
   icon: z.string().trim().max(8).nullish(),
+  /** A built-in template (`builtin:scrum`) or a saved one's id. Left out: the basic project or queue. */
+  templateId: z.string().max(64).optional(),
 });
 
 /**
@@ -926,6 +975,7 @@ export const updateProjectSchema = z.object({
   defaultTypeId: uuid.optional(),
   /** Null: never archive finished work. */
   archiveAfterDays: z.number().int().min(1).max(MAX_ARCHIVE_DAYS).nullish(),
+  askStatusComment: z.boolean().optional(),
 });
 
 export const createStatusSchema = z.object({
@@ -950,12 +1000,14 @@ export const createRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40),
   multiple: z.boolean().default(false),
   freeForm: z.boolean().default(false),
+  fillWithCreator: z.boolean().default(false),
 });
 
 export const updateRoleSchema = z.object({
   name: z.string().trim().min(1, 'Name the role').max(40).optional(),
   multiple: z.boolean().optional(),
   freeForm: z.boolean().optional(),
+  fillWithCreator: z.boolean().optional(),
   position: z.number().finite().optional(),
 });
 
@@ -1103,6 +1155,109 @@ export const MAX_LISTED_ITEMS = 5000;
 export type WorkItemSort = 'key' | 'title' | 'status' | 'priority' | 'due' | 'estimate' | 'updated' | 'created';
 export const WORK_ITEM_SORTS: WorkItemSort[] = ['key', 'title', 'status', 'priority', 'due', 'estimate', 'updated', 'created'];
 
+/**
+ * What a list of work can be grouped by: a field, or one of the project's
+ * roles as `role:<id>`.
+ */
+export type WorkItemGroupBy = 'none' | 'status' | 'type' | 'priority' | 'epic' | 'sprint' | `role:${string}`;
+
+/** One group of a grouped list. `key` is null for the group of work with nothing in the field. */
+export interface WorkItemGroup<T> {
+  key: string | null;
+  label: string;
+  /** A status's or type's colour, where the group has one. */
+  color?: string;
+  items: T[];
+}
+
+/**
+ * Splits work into groups, in the project's own order: statuses as the board
+ * has them, types as they are offered, priorities most urgent first, epics and
+ * sprints as the project lists them, and people by name. Work with nothing in
+ * the field goes in a last group called None. Groups with nothing in them are
+ * left out. Work held by several people is listed under each of them.
+ *
+ * `epics` names the epics the work is under; `nameOf` names a member.
+ */
+export function groupItems<T extends WorkItemSummary>(
+  project: Pick<Project, 'statuses' | 'itemTypes' | 'roles' | 'sprints'>,
+  items: T[],
+  groupBy: WorkItemGroupBy,
+  { epics = [], nameOf = () => 'Someone' }: { epics?: Pick<WorkItemSummary, 'id' | 'key' | 'title'>[]; nameOf?: (userId: string) => string } = {},
+): WorkItemGroup<T>[] {
+  if (groupBy === 'none') return [{ key: 'all', label: 'All', items }];
+
+  const groups = new Map<string, WorkItemGroup<T>>();
+  const none: T[] = [];
+  /** Where each group sits, which is not always the order work turns up in. */
+  const rank = new Map<string, number | string>();
+  const add = (key: string, label: string, item: T, order: number | string, color?: string) => {
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, color, items: [] };
+      groups.set(key, group);
+      rank.set(key, order);
+    }
+    group.items.push(item);
+  };
+
+  const role = groupBy.startsWith('role:') ? project.roles.find((r) => `role:${r.id}` === groupBy) : undefined;
+  const epicById = new Map(epics.map((epic) => [epic.id, epic]));
+
+  for (const item of items) {
+    if (groupBy === 'status') {
+      const index = project.statuses.findIndex((s) => s.id === item.statusId);
+      const status = project.statuses[index];
+      if (status) add(status.id, status.name, item, index, status.color);
+      else none.push(item);
+    } else if (groupBy === 'type') {
+      const index = project.itemTypes.findIndex((t) => t.id === item.typeId);
+      const type = project.itemTypes[index];
+      if (type) add(type.id, type.name, item, index, type.color);
+      else none.push(item);
+    } else if (groupBy === 'priority') {
+      if (item.priority === 'none') none.push(item);
+      else add(item.priority, item.priority[0].toUpperCase() + item.priority.slice(1), item, WORK_ITEM_PRIORITIES.indexOf(item.priority));
+    } else if (groupBy === 'epic') {
+      const epic = item.epicId ? epicById.get(item.epicId) : undefined;
+      if (epic) add(epic.id, `${epic.key} ${epic.title}`, item, Number(epic.key.split('-').pop()) || 0);
+      else none.push(item);
+    } else if (groupBy === 'sprint') {
+      const index = project.sprints.findIndex((s) => s.id === item.sprintId);
+      const sprint = project.sprints[index];
+      if (sprint) add(sprint.id, sprint.name, item, index);
+      else none.push(item);
+    } else if (role) {
+      const holders = item.roles[role.id] ?? [];
+      const names = item.roleNames[role.id] ?? [];
+      for (const userId of holders) {
+        const name = nameOf(userId);
+        add(`user:${userId}`, name, item, name.toLowerCase());
+      }
+      for (const name of names) add(`name:${name.toLowerCase()}`, name, item, name.toLowerCase());
+      if (holders.length + names.length === 0) none.push(item);
+    } else {
+      none.push(item);
+    }
+  }
+
+  const ordered = [...groups.values()].sort((a, b) => {
+    const x = rank.get(a.key!)!;
+    const y = rank.get(b.key!)!;
+    return typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+  });
+  if (none.length > 0) {
+    const field: Partial<Record<WorkItemGroupBy, string>> = { priority: 'No priority', epic: 'No epic', sprint: 'No sprint' };
+    const label = role
+      ? role.name.toLowerCase() === 'assignee'
+        ? 'Unassigned'
+        : `No ${role.name.toLowerCase()}`
+      : (field[groupBy] ?? 'None');
+    ordered.push({ key: null, label, items: none });
+  }
+  return ordered;
+}
+
 /** How many archived items a page holds unless asked otherwise, and the most it can. */
 export const ARCHIVE_PAGE_SIZE = 100;
 export const MAX_ARCHIVE_PAGE_SIZE = 500;
@@ -1135,6 +1290,11 @@ export const archivePageQuerySchema = z.object({
   epic: uuid.optional(),
   /** Only items finished since this moment. */
   completedSince: z.string().datetime({ offset: true }).optional(),
+  /** A WorkItemFilter, as encodeFilter writes it. Its search also reads descriptions. */
+  f: z.string().max(4000).optional(),
+  /** The reader's day and time zone, which the filter's dates are counted in. */
+  today: isoDate.optional(),
+  tz: z.string().regex(/^[A-Za-z0-9_+\-/]{1,64}$/).optional(),
   /** From the page before; opaque. */
   cursor: z.string().max(1000).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_ARCHIVE_PAGE_SIZE).default(ARCHIVE_PAGE_SIZE),
