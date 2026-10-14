@@ -17,6 +17,7 @@ export * from './projectFilters.js';
 export * from './projectRules.js';
 export * from './projectTemplates.js';
 export * from './projectInsights.js';
+export * from './schedules.js';
 export * from './schemas.js';
 export * from './sheet.js';
 export * from './sheetCompute.js';
