@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { coversWindow, createRequestSchema, type ScheduleRequest } from '@paradocs/shared';
-import { query, transaction } from '../db/pool.js';
+import { acceptRequestSchema, coversWindow, createRequestSchema, decideRequestSchema, type ScheduleRequest } from '@paradocs/shared';
+import { query, transaction, type DbClient } from '../db/pool.js';
 import { assertScheduleAccess, scheduleLevelSql } from '../lib/access.js';
 import { badRequest, conflict, forbidden, notFound, parse } from '../lib/http.js';
 import { requestChanged } from '../lib/scheduleNotifications.js';
@@ -53,6 +53,54 @@ export async function requestOn(scheduleId: string, requestId: string) {
   );
   if (!rows[0]) throw notFound('Request not found');
   return rows[0];
+}
+
+interface LockedRequest {
+  id: string;
+  schedule_id: string;
+  requester_id: string;
+  kind: 'cover' | 'swap';
+  starts_at: string;
+  ends_at: string;
+  status: string;
+  ask_everyone: boolean;
+  accepted_by: string | null;
+  swap_starts_at: string | null;
+  swap_ends_at: string | null;
+}
+
+/** The request, locked for the rest of the transaction, so two people acting at once take turns. */
+async function lockRequest(client: DbClient, id: string): Promise<LockedRequest> {
+  const { rows } = await client.query<LockedRequest>(
+    `SELECT id, schedule_id, requester_id, kind, starts_at, ends_at, status, ask_everyone, accepted_by,
+            swap_starts_at, swap_ends_at
+       FROM schedule_requests WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  if (!rows[0]) throw notFound('Request not found');
+  return rows[0];
+}
+
+/**
+ * Makes a request's overrides: whoever took it covers the requester's time,
+ * and for a swap the requester covers theirs in return.
+ */
+async function applyRequest(client: DbClient, request: LockedRequest, acceptedBy: string, by: string): Promise<void> {
+  const insert = `INSERT INTO schedule_overrides
+      (schedule_id, user_id, replaced_user_id, starts_at, ends_at, source, request_id, created_by)
+    VALUES ($1, $2, $3, $4, $5, 'request', $6, $7)`;
+  await client.query(insert, [request.schedule_id, acceptedBy, request.requester_id, request.starts_at, request.ends_at, request.id, by]);
+  if (request.kind === 'swap' && request.swap_starts_at && request.swap_ends_at) {
+    await client.query(insert, [
+      request.schedule_id,
+      request.requester_id,
+      acceptedBy,
+      request.swap_starts_at,
+      request.swap_ends_at,
+      request.id,
+      by,
+    ]);
+  }
 }
 
 export const scheduleRequestRoutes: FastifyPluginAsync = async (app) => {
@@ -162,5 +210,119 @@ export const scheduleRequestRoutes: FastifyPluginAsync = async (app) => {
     await requestChanged(updated, 'cancelled', req.user!.id);
     scheduleChanged(access.workspaceId, access.scheduleId);
     return updated;
+  });
+
+  /**
+   * Takes a request. The first to take it wins: the request is locked while it
+   * is checked and changed, so two people at once produce one override. Only
+   * someone on the schedule now, and asked, can take it. With approval off
+   * it applies at once; with it on, it waits for a manager.
+   */
+  app.post<{ Params: { id: string; requestId: string } }>('/schedules/:id/requests/:requestId/accept', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'request');
+    const input = parse(acceptRequestSchema, req.body ?? {});
+    const me = req.user!.id;
+    const found = await requestOn(access.scheduleId, req.params.requestId);
+    if (found.requester_id === me) throw badRequest('You cannot take your own request');
+
+    const { rows: schedule } = await query<{ time_zone: string; requires_approval: boolean }>(
+      'SELECT time_zone, requires_approval FROM schedules WHERE id = $1',
+      [access.scheduleId],
+    );
+    const { rows: shape } = await query<{ kind: string; starts_at: string; ends_at: string }>(
+      'SELECT kind, starts_at, ends_at FROM schedule_requests WHERE id = $1',
+      [found.id],
+    );
+    // For a swap, the shift given back must be one's own, on this schedule, still to come.
+    if (shape[0].kind === 'swap') {
+      const { swapStartsAt, swapEndsAt } = input;
+      if (!swapStartsAt || !swapEndsAt || Date.parse(swapEndsAt) <= Date.parse(swapStartsAt)) {
+        throw badRequest('Choose the shift you give in return');
+      }
+      if (Date.parse(swapStartsAt) <= Date.now()) throw badRequest('That shift has already started');
+      if (Date.parse(swapStartsAt) < Date.parse(shape[0].ends_at) && Date.parse(swapEndsAt) > Date.parse(shape[0].starts_at)) {
+        throw badRequest('The shift given in return cannot overlap the one asked about');
+      }
+      const { shifts } = await scheduleShifts({ id: access.scheduleId, timeZone: schedule[0].time_zone }, swapStartsAt, swapEndsAt);
+      if (!coversWindow(shifts, me, swapStartsAt, swapEndsAt)) throw badRequest('You can only give one of your own shifts in return');
+    }
+
+    const applied = await transaction(async (client) => {
+      const request = await lockRequest(client, found.id);
+      if (request.status !== 'open') throw conflict('Someone else has already taken this, or it is no longer open');
+      if (Date.parse(request.starts_at) <= Date.now()) throw conflict('That shift has already started');
+      // Checked again inside the lock: whether they are on the schedule now, and were asked.
+      const { rows: allowed } = await client.query<{ member: boolean; asked: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM schedule_members WHERE schedule_id = $1 AND user_id = $2) AS member,
+                EXISTS (SELECT 1 FROM schedule_request_candidates WHERE request_id = $3 AND user_id = $2) AS asked`,
+        [request.schedule_id, me, request.id],
+      );
+      if (!allowed[0].member) throw forbidden('Only people on this schedule can take shifts on it');
+      if (!request.ask_everyone && !allowed[0].asked) throw forbidden('You were not asked on this request');
+
+      const swap = request.kind === 'swap' ? { start: input.swapStartsAt!, end: input.swapEndsAt! } : null;
+      const approve = !schedule[0].requires_approval;
+      await client.query(
+        `UPDATE schedule_requests
+            SET status = $2, accepted_by = $3, accepted_at = now(), swap_starts_at = $4, swap_ends_at = $5,
+                decided_at = CASE WHEN $2 = 'approved' THEN now() ELSE NULL END, updated_at = now()
+          WHERE id = $1`,
+        [request.id, approve ? 'approved' : 'accepted', me, swap?.start ?? null, swap?.end ?? null],
+      );
+      if (approve) {
+        await applyRequest(client, { ...request, swap_starts_at: swap?.start ?? null, swap_ends_at: swap?.end ?? null }, me, me);
+      }
+      return approve;
+    });
+
+    const request = await fetchRequest(found.id, me);
+    await requestChanged(request, applied ? 'approved' : 'accepted', me);
+    scheduleChanged(access.workspaceId, access.scheduleId);
+    return request;
+  });
+
+  /** A manager, or someone allowed to approve swaps, lets a taken request apply. */
+  app.post<{ Params: { id: string; requestId: string } }>('/schedules/:id/requests/:requestId/approve', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'approve');
+    const { note } = parse(decideRequestSchema, req.body ?? {});
+    const found = await requestOn(access.scheduleId, req.params.requestId);
+    await transaction(async (client) => {
+      const request = await lockRequest(client, found.id);
+      if (request.status !== 'accepted' || !request.accepted_by) throw conflict('Only a request someone has taken can be approved');
+      await client.query(
+        `UPDATE schedule_requests SET status = 'approved', decided_by = $2, decided_at = now(), decision_note = $3,
+                updated_at = now() WHERE id = $1`,
+        [request.id, req.user!.id, note ?? ''],
+      );
+      await applyRequest(client, request, request.accepted_by, req.user!.id);
+    });
+    const request = await fetchRequest(found.id, req.user!.id);
+    await requestChanged(request, 'approved', req.user!.id);
+    scheduleChanged(access.workspaceId, access.scheduleId);
+    return request;
+  });
+
+  /** Turns down a taken request: back to open for someone else, or closed. */
+  app.post<{ Params: { id: string; requestId: string } }>('/schedules/:id/requests/:requestId/decline', async (req) => {
+    const access = await assertScheduleAccess(req, req.params.id, 'approve');
+    const { note, reopen } = parse(decideRequestSchema, req.body ?? {});
+    const found = await requestOn(access.scheduleId, req.params.requestId);
+    await transaction(async (client) => {
+      const request = await lockRequest(client, found.id);
+      if (request.status !== 'accepted') throw conflict('Only a request waiting for approval can be declined');
+      await client.query(
+        reopen
+          ? `UPDATE schedule_requests SET status = 'open', accepted_by = NULL, accepted_at = NULL, swap_starts_at = NULL,
+                    swap_ends_at = NULL, decided_by = $2, decided_at = now(), decision_note = $3, updated_at = now()
+              WHERE id = $1`
+          : `UPDATE schedule_requests SET status = 'declined', decided_by = $2, decided_at = now(), decision_note = $3,
+                    updated_at = now() WHERE id = $1`,
+        [request.id, req.user!.id, note ?? ''],
+      );
+    });
+    const request = await fetchRequest(found.id, req.user!.id);
+    await requestChanged(request, 'declined', req.user!.id);
+    scheduleChanged(access.workspaceId, access.scheduleId);
+    return request;
   });
 };

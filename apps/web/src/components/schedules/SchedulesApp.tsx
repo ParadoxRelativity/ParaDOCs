@@ -8,6 +8,7 @@ import Icon, { type IconName } from '../Icon';
 import { Button, EmptyState, Spinner } from '../ui';
 import MyShifts from './MyShifts';
 import { OverrideDialog } from './OverrideDialog';
+import { useRequestActions } from './RequestActions';
 import { RequestDialog } from './RequestDialog';
 import ScheduleRequests, { MyRequests } from './ScheduleRequests';
 import ScheduleOverrides from './ScheduleOverrides';
@@ -49,13 +50,16 @@ export default function SchedulesApp({
   const [view, setView] = useState<View>(VIEWS[0].id);
   const [overriding, setOverriding] = useState<Shift | null>(null);
   const [requesting, setRequesting] = useState<Shift | null>(null);
+  // In a schedule, approving is that schedule's call; across schedules, only taking is offered.
+  const requestActions = useRequestActions(workspace.id, () => schedule.data?.can.approve ?? false);
   // Each schedule opens on its first view.
   useEffect(() => setView(VIEWS[0].id), [scheduleId]);
 
   if (!scheduleId) {
     return (
       <MyShifts workspace={workspace} onOpenSchedule={onOpenSchedule}>
-        <MyRequests workspaceId={workspace.id} selfId={user.id} />
+        <MyRequests workspaceId={workspace.id} selfId={user.id} actions={requestActions.actions} />
+        {requestActions.dialogs}
       </MyShifts>
     );
   }
@@ -121,7 +125,9 @@ export default function SchedulesApp({
       </div>
       <div className="min-h-0 flex-1">
         {view === 'schedule' && <ScheduleView schedule={data} actions={shiftActions} />}
-        {view === 'requests' && <ScheduleRequests scheduleId={data.id} workspaceId={workspace.id} selfId={user.id} />}
+        {view === 'requests' && (
+          <ScheduleRequests scheduleId={data.id} workspaceId={workspace.id} selfId={user.id} actions={requestActions.actions} />
+        )}
         {view === 'overrides' && <ScheduleOverrides schedule={data} />}
         {view === 'layers' && <ScheduleLayers schedule={data} />}
         {view === 'settings' && (
@@ -129,6 +135,7 @@ export default function SchedulesApp({
         )}
       </div>
       {overriding && <OverrideDialog schedule={data} shift={overriding} onClose={() => setOverriding(null)} />}
+      {requestActions.dialogs}
       {requesting && <RequestDialog schedule={data} shift={requesting} selfId={user.id} onClose={() => setRequesting(null)} />}
     </div>
   );

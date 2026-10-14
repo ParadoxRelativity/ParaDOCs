@@ -97,4 +97,61 @@ describe('replacement requests', () => {
     const { body } = await api.call(owner, 'GET', `/schedules/${scheduleId}/requests?all=true`);
     expect(body.find((r: { id: string }) => r.id === made.body.id).status).toBe('expired');
   });
+
+  describe('taking requests', () => {
+    const overridesFor = async (requestId: string) =>
+      api.sql<{ user_id: string; replaced_user_id: string }>('SELECT user_id, replaced_user_id FROM schedule_overrides WHERE request_id = $1', [requestId]);
+    const take = (user: TestUser, requestId: string, body: object = {}) =>
+      api.call(user, 'POST', `/schedules/${scheduleId}/requests/${requestId}/accept`, body);
+
+    it('applies at once when approval is off', async () => {
+      const { body: request } = await ask(ann, dayOf(ann, 12));
+      const taken = await take(ben, request.id);
+      expect(taken.status).toBe(200);
+      expect(taken.body).toMatchObject({ status: 'approved', acceptedByName: 'Ben' });
+      expect(await overridesFor(request.id)).toEqual([{ user_id: ben.id, replaced_user_id: ann.id }]);
+    });
+
+    it('gives exactly one override when two take it at the same moment', async () => {
+      const { body: request } = await ask(ann, dayOf(ann, 15));
+      const results = await Promise.all([take(ben, request.id), take(cat, request.id)]);
+      expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+      expect(await overridesFor(request.id)).toHaveLength(1);
+    });
+
+    it('refuses someone who is not on the schedule', async () => {
+      const { body: request } = await ask(ann, dayOf(ann, 18));
+      expect((await take(stranger, request.id)).status).toBe(403);
+      // Nor someone not asked.
+      const { body: specific } = await ask(ann, { ...dayOf(ann, 21), askUserIds: [cat.id] });
+      expect((await take(ben, specific.id)).status).toBe(403);
+    });
+
+    it('swaps two shifts both ways', async () => {
+      const { body: request } = await ask(ann, { ...dayOf(ann, 24), kind: 'swap' });
+      expect((await take(ben, request.id)).status).toBe(400);
+      const taken = await take(ben, request.id, { swapStartsAt: dayOf(ben, 27).startsAt, swapEndsAt: dayOf(ben, 27).endsAt });
+      expect(taken.status).toBe(200);
+      const made = await overridesFor(request.id);
+      expect(made).toHaveLength(2);
+      expect(made).toContainEqual({ user_id: ann.id, replaced_user_id: ben.id });
+    });
+
+    it('waits for a manager when approval is on, and can be declined back to open', async () => {
+      await api.call(owner, 'PATCH', `/schedules/${scheduleId}`, { requiresApproval: true });
+      const { body: request } = await ask(ann, dayOf(ann, 30));
+      const taken = await take(ben, request.id);
+      expect(taken.body.status).toBe('accepted');
+      expect(await overridesFor(request.id)).toHaveLength(0);
+      // Stan is not on the schedule, but editors may approve swaps by default.
+      expect((await api.call(stranger, 'POST', `/schedules/${scheduleId}/requests/${request.id}/approve`)).status).toBe(200);
+      expect(await overridesFor(request.id)).toHaveLength(1);
+
+      const { body: second } = await ask(ann, dayOf(ann, 33));
+      await take(cat, second.id);
+      const declined = await api.call(owner, 'POST', `/schedules/${scheduleId}/requests/${second.id}/decline`, { reopen: true, note: 'Cat is on leave' });
+      expect(declined.body).toMatchObject({ status: 'open', acceptedBy: null, decisionNote: 'Cat is on leave' });
+      await api.call(owner, 'PATCH', `/schedules/${scheduleId}`, { requiresApproval: false });
+    });
+  });
 });
