@@ -4,6 +4,7 @@ import {
   COLLAB_FRAGMENT,
   MAX_ARCHIVE_PAGE_SIZE,
   WORK_ITEM_PRIORITIES,
+  formatMinutes,
   isEpicType,
   parseMessage,
   type ArchivePage,
@@ -13,11 +14,13 @@ import {
   type MyShift,
   type Project,
   type ProjectSummary,
+  type ResponseTime,
   type Schedule,
   type ScheduleRequest,
   type ScheduleShifts,
   type ScheduleSummary,
   type WorkItem,
+  type WorkItemActivity,
   type WorkItemListing,
   type WorkItemSummary,
   type WorkItemTimeline,
@@ -460,6 +463,11 @@ async function describeItem(ctx: ToolContext, itemId: string): Promise<string> {
   ].filter(Boolean);
   const roles = roleSummary(item, project, names);
   const refs = timeline.references;
+  const escalations = timeline.activity.flatMap((a) =>
+    a.kind === 'escalated'
+      ? [`- ${a.createdAt.slice(0, 16).replace('T', ' ')}: ${escalationLine(a, names)}`]
+      : [],
+  );
   const comments = timeline.comments.map(
     (c) => `- ${c.author?.name ?? 'Someone'}, ${c.createdAt.slice(0, 10)}: ${readable(c.body, refs)}`,
   );
@@ -468,10 +476,30 @@ async function describeItem(ctx: ToolContext, itemId: string): Promise<string> {
     header.filter(Boolean).join('\n'),
     `## Description\n${item.description.trim() ? readable(item.description, item.references) : '(none)'}`,
     current && archived && childList(project, names, current.filter((i) => i.epicId === item.id), archived),
+    escalations.length > 0 && `## Escalations\n${escalations.join('\n')}`,
     `## Comments (${comments.length})\n${comments.length ? comments.join('\n') : '(none)'}`,
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+/** What a queue's response time does, in a line: who it waits on, and where work goes and when. */
+function responseTimeSummary(project: Project, responseTime: ResponseTime): string {
+  const role = (id: string | null) => project.roles.find((r) => r.id === id)?.name ?? 'a role';
+  const steps = responseTime.steps.map((step, n) =>
+    n === 0
+      ? `after ${formatMinutes(step.afterMinutes)} without a response, escalated to ${role(step.roleId)}`
+      : `${formatMinutes(step.afterMinutes)} later to ${role(step.roleId)}`,
+  );
+  const waiting = responseTime.roleId ? `waits on ${role(responseTime.roleId)}; ` : '';
+  return `${waiting}${steps.join(', then ')}. A comment from anyone but the filer, a status change or finishing it is a response.`;
+}
+
+/** An escalation in an item's history, as its history in the app tells it. */
+function escalationLine(entry: Extract<WorkItemActivity, { kind: 'escalated' }>, names: Map<string, string>): string {
+  const who = [...entry.added, ...entry.held].map((id) => names.get(id) ?? 'someone');
+  const after = `after ${formatMinutes(entry.minutes)} without a response, by the queue's response time`;
+  return who.length > 0 ? `Escalated to ${who.join(', ')} (${entry.role}) ${after}` : `Nobody was in ${entry.role} to escalate to ${after}`;
 }
 
 /** The work under an epic, current in board order and then archived, each with its type, status and assignee. */
@@ -855,6 +883,7 @@ export const TOOLS: Tool[] = [
         `Statuses, in order: ${p.statuses.map((s) => `${s.name} [${s.category}]`).join(', ')}`,
         `Types: ${p.itemTypes.map((t) => `${t.name}${t.epic ? ' (epic)' : ''}${t.id === p.defaultTypeId ? ' (default)' : ''}`).join(', ')}`,
         `Roles: ${p.roles.map((r) => `${r.name}${r.multiple ? ' (several)' : ''}${r.freeForm ? ' (any name)' : ''}${r.fillWithCreator ? ' (filled by creator)' : ''}${r.scheduleId ? ' (filled from a schedule)' : ''}`).join(', ')}`,
+        p.responseTime ? `Response time: ${responseTimeSummary(p, p.responseTime)}` : '',
         p.sprintsEnabled
           ? `Sprints: ${sprints.map((s) => `${s.name} [${s.state}${s.endDate ? `, ends ${s.endDate}` : ''}]${s.goal ? ` — ${s.goal}` : ''}`).join('; ') || 'none planned'}`
           : '',
@@ -975,7 +1004,7 @@ export const TOOLS: Tool[] = [
     name: 'get_work_item',
     title: 'Get a work item',
     description:
-      'A work item in full: status, type, people, dates, the epic it is under, description and every comment. For an epic, also all the work under it, finished and archived included.',
+      'A work item in full: status, type, people, dates, the epic it is under, description, every comment, and when its queue escalated it for want of a response. For an epic, also all the work under it, finished and archived included.',
     params: {
       item: { type: 'string', description: 'The key, such as ENG-12, or the id', required: true },
       workspace: WORKSPACE,

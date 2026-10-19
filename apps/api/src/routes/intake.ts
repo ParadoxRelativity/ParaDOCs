@@ -13,6 +13,7 @@ import { query, transaction } from '../db/pool.js';
 import { assertProjectAccess, UUID } from '../lib/access.js';
 import { appEnabled } from '../lib/apps.js';
 import { HttpError, badRequest, forbidden, notFound, parse, unauthorized } from '../lib/http.js';
+import { escalationRoleIds } from '../lib/escalations.js';
 import { intakeLimits } from '../lib/rateLimit.js';
 import { getServerSettings } from '../lib/serverSettings.js';
 import { notifyAboutWorkItem, projectChanged } from '../lib/workItems.js';
@@ -260,7 +261,8 @@ async function createFromSubmission(token: TokenRow, input: Submission): Promise
   if (input.requester && !requesterRole) extras.unshift(['Requester', input.requester]);
 
   // Roles filled from a schedule get whoever is on it, as work filed in the
-  // app does. Nobody filed this, so a role filled by its creator stays empty.
+  // app does, but for those the queue escalates to, which wait until it does.
+  // Nobody filed this, so a role filled by its creator stays empty.
   const { rows: scheduledRoles } = await query<{ id: string; name: string; multiple: boolean; scheduleId: string }>(
     `SELECT id, name, multiple, fill_from_schedule_id AS "scheduleId" FROM project_roles
       WHERE project_id = $1 AND fill_from_schedule_id IS NOT NULL ORDER BY position, created_at`,
@@ -269,7 +271,7 @@ async function createFromSubmission(token: TokenRow, input: Submission): Promise
   const scheduled = await defaultHolders(
     scheduledRoles.map((role) => ({ ...role, fillWithCreator: false })),
     type.role_ids,
-    new Set(requesterRole ? [requesterRole.id] : []),
+    new Set([...(requesterRole ? [requesterRole.id] : []), ...(await escalationRoleIds(token.project_id))]),
     token.workspace_id,
     null,
   );

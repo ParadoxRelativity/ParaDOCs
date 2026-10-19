@@ -59,6 +59,7 @@ import {
   type Project,
   type ProjectItemType,
   type ProjectKind,
+  type UpdateProjectInput,
   type ProjectRole,
   type ProjectSprint,
   type ProjectStatus,
@@ -251,6 +252,19 @@ const TRANSITIONS_JSON = `COALESCE((
            GROUP BY t.from_status) g
 ), '{}'::json)`;
 
+/**
+ * A queue's response time, when it is on: turned on, with at least one step
+ * left. A step goes with its role, so deleting the last such role turns it off.
+ */
+const RESPONSE_TIME_JSON = `CASE WHEN p.kind = 'queue' AND p.escalation_since IS NOT NULL
+       AND EXISTS (SELECT 1 FROM project_escalation_steps es WHERE es.project_id = p.id)
+  THEN json_build_object(
+    'roleId', p.response_role_id,
+    'since', p.escalation_since,
+    'steps', (SELECT json_agg(json_build_object('roleId', es.role_id, 'afterMinutes', es.after_minutes) ORDER BY es.position)
+                FROM project_escalation_steps es WHERE es.project_id = p.id))
+  END`;
+
 export async function fetchProject(id: string, userId: string): Promise<Project> {
   const { rows } = await query<Project>(
     `SELECT ${projectColumns('$2', roleIdSql('$2', 'p.workspace_id'))},
@@ -273,6 +287,7 @@ export async function fetchProject(id: string, userId: string): Promise<Project>
             p.kind = 'project' AND p.sprints_enabled AS "sprintsEnabled",
             p.archive_after_days AS "archiveAfterDays",
             p.ask_status_comment AS "askStatusComment",
+            ${RESPONSE_TIME_JSON} AS "responseTime",
             COALESCE((SELECT json_agg(json_build_object('id', ru.id, 'name', ru.name, 'enabled', ru.enabled,
                                                         'position', ru.position, 'statusId', ru.status_id,
                                                         'typeIds', ru.type_ids, 'actions', ru.actions)
@@ -441,6 +456,49 @@ async function assertRoleNameFree(projectId: string, name: string, exceptId?: st
 
 const ROLE_COLUMNS = `id, name, multiple, free_form AS "freeForm", fill_with_creator AS "fillWithCreator",
   fill_from_schedule_id AS "scheduleId", position`;
+
+/**
+ * Turns a queue's response time on, changes it, or with null turns it off.
+ * Changed while on, it keeps when it was turned on; turned on afresh, only
+ * work filed from now is escalated.
+ */
+async function setResponseTime(projectId: string, input: UpdateProjectInput['responseTime']): Promise<void> {
+  const { rows } = await query<{ kind: ProjectKind; enabled: boolean }>(
+    `SELECT kind, escalation_since IS NOT NULL
+             AND EXISTS (SELECT 1 FROM project_escalation_steps es WHERE es.project_id = p.id) AS enabled
+       FROM projects p WHERE id = $1`,
+    [projectId],
+  );
+  if (rows[0]?.kind !== 'queue') throw badRequest('Only a queue has a response time');
+  if (input) {
+    const { rows: roles } = await query<{ id: string }>('SELECT id FROM project_roles WHERE project_id = $1', [projectId]);
+    const ours = new Set(roles.map((r) => r.id));
+    const stepRoles = input.steps.map((step) => step.roleId);
+    if (![input.roleId, ...stepRoles].every((id) => id === null || ours.has(id))) throw badRequest('That role is not in this project');
+    if (new Set(stepRoles).size !== stepRoles.length) throw badRequest('Each step escalates to a different role');
+    if (input.roleId && stepRoles.includes(input.roleId)) {
+      throw badRequest('Work cannot be escalated to the role it is waiting on');
+    }
+  }
+  await transaction(async (client) => {
+    await client.query('DELETE FROM project_escalation_steps WHERE project_id = $1', [projectId]);
+    if (!input) {
+      await client.query('UPDATE projects SET response_role_id = NULL, escalation_since = NULL WHERE id = $1', [projectId]);
+      return;
+    }
+    await client.query(
+      `INSERT INTO project_escalation_steps (project_id, position, role_id, after_minutes)
+       SELECT $1, s.n, s.role_id, s.after_minutes
+         FROM unnest($2::uuid[], $3::int[]) WITH ORDINALITY AS s(role_id, after_minutes, n)`,
+      [projectId, input.steps.map((s) => s.roleId), input.steps.map((s) => s.afterMinutes)],
+    );
+    await client.query(
+      `UPDATE projects SET response_role_id = $2, escalation_since = CASE WHEN $3 THEN escalation_since ELSE now() END
+        WHERE id = $1`,
+      [projectId, input.roleId, rows[0].enabled],
+    );
+  });
+}
 
 /** A role can only be filled from a schedule in its own workspace that whoever sets it up can see. */
 async function assertRoleSchedule(req: FastifyRequest, workspaceId: string, scheduleId: string): Promise<void> {
@@ -1164,6 +1222,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       const { rows } = await query<{ kind: ProjectKind }>('SELECT kind FROM projects WHERE id = $1', [req.params.id]);
       if (rows[0]?.kind === 'queue') throw badRequest('A queue is worked through in order, not in sprints');
     }
+    if (input.responseTime !== undefined) await setResponseTime(req.params.id, input.responseTime);
 
     await query(
       `UPDATE projects
@@ -2139,7 +2198,9 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     // Whoever is on a role's schedule fills it, and whoever files it fills the
     // roles set to take them, unless the request said who holds the role; an
     // empty list given for it means nobody.
-    roles.push(...(await defaultHolders(project.roles, type.roleIds, roleIds, workspaceId, req.user!.id)));
+    // Roles the queue escalates to stay empty until it does.
+    const left = new Set([...roleIds, ...(project.responseTime?.steps.map((step) => step.roleId) ?? [])]);
+    roles.push(...(await defaultHolders(project.roles, type.roleIds, left, workspaceId, req.user!.id)));
     await assertMembers(workspaceId, [...new Set(roles.flatMap((r) => r.userIds))]);
 
     const id = await transaction(async (client) => {
@@ -2717,7 +2778,13 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       ),
     ]);
     // The people a role change names are resolved alongside the comments' references.
-    const named = activity.flatMap((a) => (a.data.kind === 'role' ? [...a.data.added, ...a.data.removed] : []));
+    const named = activity.flatMap((a) =>
+      a.data.kind === 'role'
+        ? [...a.data.added, ...a.data.removed]
+        : a.data.kind === 'escalated'
+          ? [...a.data.added, ...a.data.removed, ...a.data.held]
+          : [],
+    );
     const references = await resolveReferences(
       [...comments.map((c) => c.body), named.map(memberRef).join(' ')],
       workspaceId,

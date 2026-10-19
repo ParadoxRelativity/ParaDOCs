@@ -830,7 +830,14 @@ function MentionRow({ mention, onOpen }: { mention: MentionNotification; onOpen:
 function WorkItemRow({ item, onOpen }: { item: WorkItemNotification; onOpen: (newTab: boolean) => void }) {
   return (
     <button onClick={(event) => onOpen(wantsNewTab(event))} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]">
-      <Avatar name={item.by?.name ?? '?'} url={item.by?.avatarUrl} seed={item.by?.id} size="lg" />
+      {item.reason === 'escalated' && !item.by ? (
+        // The queue's response time, not a person.
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+          <Icon name="stopwatch" />
+        </span>
+      ) : (
+        <Avatar name={item.by?.name ?? '?'} url={item.by?.avatarUrl} seed={item.by?.id} size="lg" />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
           <span className="truncate font-medium text-[var(--color-ink)]">
@@ -839,11 +846,20 @@ function WorkItemRow({ item, onOpen }: { item: WorkItemNotification; onOpen: (ne
           <span className="truncate">{item.workspace.name}</span>
           <span className="ml-auto shrink-0">{formatRelative(item.createdAt)}</span>
         </div>
-        <p className="mt-0.5 line-clamp-2 text-sm">
-          <span className="font-medium">{item.by?.name ?? 'Someone'}</span> {workItemAction(item)}{' '}
-          <span className="font-medium">{item.title}</span>
-          {item.reason === 'status' && item.status ? ` to ${item.status}` : ''}
-        </p>
+        {item.reason === 'escalated' ? (
+          <p className="mt-0.5 line-clamp-2 text-sm">
+            <span className="font-medium">{item.title}</span> was escalated
+          </p>
+        ) : (
+          <p className="mt-0.5 line-clamp-2 text-sm">
+            <span className="font-medium">{item.by?.name ?? 'Someone'}</span> {workItemAction(item)}{' '}
+            <span className="font-medium">{item.title}</span>
+            {item.reason === 'status' && item.status ? ` to ${item.status}` : ''}
+          </p>
+        )}
+        {item.reason === 'escalated' && item.escalation && (
+          <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted)]">{item.escalation}</p>
+        )}
         <p className="mt-1">
           <span className={cx('rounded-full px-1.5 text-[11px] font-semibold text-white', WORK_ITEM_BADGE[item.reason])}>
             {workItemBadge(item)}
@@ -906,6 +922,7 @@ const WORK_ITEM_BADGE: Record<WorkItemNotification['reason'], string> = {
   mention: 'bg-amber-500',
   comment: 'bg-slate-500',
   status: 'bg-slate-500',
+  escalated: 'bg-red-500',
 };
 
 function workItemBadge(item: WorkItemNotification): string {
@@ -916,6 +933,8 @@ function workItemBadge(item: WorkItemNotification): string {
       return 'New comment';
     case 'status':
       return item.status ?? 'Status changed';
+    case 'escalated':
+      return 'Escalated';
     default:
       return 'Mentioned you';
   }

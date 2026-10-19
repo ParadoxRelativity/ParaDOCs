@@ -230,6 +230,51 @@ export const DEFAULT_ARCHIVE_DAYS: Record<ProjectKind, number> = { project: 30, 
 /** The longest finished work can be kept out before it is archived, short of never. */
 export const MAX_ARCHIVE_DAYS = 3650;
 
+/** The longest one escalation step can wait: a week. */
+export const MAX_RESPONSE_MINUTES = 10080;
+
+/** How many roles work can pass through before it has been escalated as far as it goes. */
+export const MAX_ESCALATION_STEPS = 5;
+
+/** One step of a queue's escalation: after this long without a response, whoever is in this role is brought in. */
+export interface EscalationStep {
+  roleId: string;
+  /** From the step before, or for the first, from when the item was filed. */
+  afterMinutes: number;
+}
+
+/**
+ * How long a queue gives work before it is escalated. A response is what
+ * insights counts as one: a comment from anyone but whoever filed it, a move
+ * to another status, or its being finished. Without one, each step in turn
+ * brings in whoever holds its role — refilled from the role's schedule at that
+ * moment, when it has one — and tells them and those it was waiting on. The
+ * people already on it stay on it.
+ */
+export interface ResponseTime {
+  /** The role being waited on, who hears when work passes them. Null: none named. */
+  roleId: string | null;
+  /** In order. At least one. */
+  steps: EscalationStep[];
+  /** When it was turned on. Work filed before then is never escalated. */
+  since: string;
+}
+
+/** The minutes from filing until each step is due, in step order. */
+export function escalationDeadlines(steps: Pick<EscalationStep, 'afterMinutes'>[]): number[] {
+  let total = 0;
+  return steps.map((step) => (total += step.afterMinutes));
+}
+
+/** "15 minutes", "2 hours", "1 hour 30 minutes", "1 day". */
+export function formatMinutes(minutes: number): string {
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
+  if (minutes % 1440 === 0) return plural(minutes / 1440, 'day');
+  if (minutes < 60) return plural(minutes, 'minute');
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${plural(hours, 'hour')} ${plural(minutes % 60, 'minute')}` : plural(hours, 'hour');
+}
+
 export type SprintState = 'planned' | 'active' | 'completed';
 
 /**
@@ -323,6 +368,8 @@ export interface Project extends ProjectSummary {
    * why. Only the app asks; the API and AI connections never do.
    */
   askStatusComment: boolean;
+  /** How long work waits for a response before it is escalated. Null: never, as for every project. */
+  responseTime: ResponseTime | null;
   /** What it fills in when work reaches a status, in the order they run. */
   rules: ProjectRule[];
   /** What has been archived, totalled, since archived items are not loaded with the rest. */
@@ -424,7 +471,14 @@ export type WorkItemActivityData =
   /** Put in the archive: by hand, or with no actor when it had sat untouched long enough. */
   | { kind: 'archived' }
   /** Taken back out of the archive: by hand, or by a comment on it. */
-  | { kind: 'restored' };
+  | { kind: 'restored' }
+  /**
+   * Passed on by the queue's response time, with no actor: `added` and
+   * `removed` are who came into and left `role`, by member id, and `held` who
+   * was already in it and stayed. Nobody in any of them: there was nobody to
+   * pass it to. `minutes` is how long it had waited since it was filed.
+   */
+  | { kind: 'escalated'; role: string; added: string[]; removed: string[]; held: string[]; minutes: number };
 
 export type WorkItemActivity = {
   id: string;
@@ -516,13 +570,16 @@ export interface WorkItemNotification {
   title: string;
   /**
    * Given a role on it, named in its description or a comment, or — holding
-   * any role on it — a new comment or status. Older servers send only the first two.
+   * any role on it — a new comment or status, or its escalation, to them or
+   * past them, for want of a response. Older servers send only the first two.
    */
-  reason: 'role' | 'mention' | 'comment' | 'status';
+  reason: 'role' | 'mention' | 'comment' | 'status' | 'escalated';
   /** For a role, which one. */
   role: string | null;
   /** For a status change, the status it moved to. Absent from older servers. */
   status?: string | null;
+  /** For an escalation, what happened, told to them: "Escalated to Cara after 15 minutes without a response". */
+  escalation?: string | null;
   workspace: NotificationWorkspace;
   by: { id: string; name: string; avatarUrl: string | null } | null;
   createdAt: string;
@@ -983,6 +1040,16 @@ export const updateProjectSchema = z.object({
   /** Null: never archive finished work. */
   archiveAfterDays: z.number().int().min(1).max(MAX_ARCHIVE_DAYS).nullish(),
   askStatusComment: z.boolean().optional(),
+  /** Queues only. Null: turn it off. */
+  responseTime: z
+    .object({
+      roleId: uuid.nullable(),
+      steps: z
+        .array(z.object({ roleId: uuid, afterMinutes: z.number().int().min(1).max(MAX_RESPONSE_MINUTES) }))
+        .min(1, 'Add a step to escalate to')
+        .max(MAX_ESCALATION_STEPS),
+    })
+    .nullish(),
 });
 
 export const createStatusSchema = z.object({

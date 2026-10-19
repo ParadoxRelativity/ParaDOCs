@@ -4,6 +4,7 @@ import {
   WORK_ITEM_LINK_LABELS,
   WORK_ITEM_LINK_OPTIONS,
   canHaveEpic,
+  formatMinutes,
   isEpicType,
   isOpenItem,
   itemTypeOf,
@@ -1144,6 +1145,8 @@ function History({ item, memberMap }: { item: WorkItem; memberMap: Map<string, W
                   {entry.kind === 'archived' && !entry.actor ? (
                     // The sweep, not a person: nobody to name.
                     'Archived after sitting untouched'
+                  ) : entry.kind === 'escalated' ? (
+                    describeEscalation(entry, name)
                   ) : entry.kind === 'created' && entry.via ? (
                     // Sent in from outside, through one of the queue's intake tokens.
                     <>
@@ -1195,6 +1198,8 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
     case 'sprint':
       if (!activity.to) return `took this out of ${activity.from ?? 'its sprint'}, back to the backlog`;
       return activity.from ? `moved this from ${activity.from} to ${activity.to}` : `added this to ${activity.to}`;
+    case 'escalated':
+      return describeEscalation(activity, name);
     case 'role': {
       const parts: string[] = [];
       if (activity.added.length) parts.push(`made ${activity.added.map(name).join(', ')} ${activity.role}`);
@@ -1202,6 +1207,13 @@ function describeActivity(activity: WorkItemActivity, name: (id: string) => stri
       return parts.join(' and ') + byRule(activity.rule);
     }
   }
+}
+
+/** The queue's response time passing work on, which nobody did by hand. */
+function describeEscalation(activity: Extract<WorkItemActivity, { kind: 'escalated' }>, name: (id: string) => string): string {
+  const who = [...activity.added, ...activity.held].map(name);
+  const after = `after ${formatMinutes(activity.minutes)} without a response, by the queue's response time`;
+  return who.length > 0 ? `Escalated to ${who.join(', ')} as ${activity.role} ${after}` : `Nobody was in ${activity.role} to escalate to ${after}`;
 }
 
 /** How a change a project rule made is told apart from one made by hand. */

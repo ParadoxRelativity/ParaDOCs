@@ -69,6 +69,7 @@ import type {
   WorkItemAttachment,
   WorkItemLink,
   Project,
+  ResponseTime,
   ProjectRole,
   ProjectRule,
   ProjectTemplateSummary,
@@ -1011,6 +1012,7 @@ export function useUpdateProject(workspaceId: string, projectId: string) {
       askStatusComment?: boolean;
       defaultTypeId?: string;
       archiveAfterDays?: number | null;
+      responseTime?: Pick<ResponseTime, 'roleId' | 'steps'> | null;
     }) => api.patch<Project>(`/projects/${projectId}`, patch),
     onSuccess: (project) => {
       qc.setQueryData(keys.project(project.id), project);

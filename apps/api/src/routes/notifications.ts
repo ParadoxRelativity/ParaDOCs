@@ -495,6 +495,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           reason: row.reason,
           role: row.reason === 'role' ? row.detail : null,
           status: row.reason === 'status' ? row.detail : null,
+          escalation: row.reason === 'escalated' ? row.detail : null,
           workspace: workspaceOf(row),
           by: row.author_id
             ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
