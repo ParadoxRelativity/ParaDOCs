@@ -23,6 +23,8 @@ export interface SpreadsheetLinkTarget {
 export interface LinkTargets {
   documents: DocumentLinkTarget[];
   spreadsheets: SpreadsheetLinkTarget[];
+  /** Absent from servers that predate Slides. */
+  presentations?: SpreadsheetLinkTarget[];
 }
 
 const uuid = z.string().uuid();
@@ -201,8 +203,8 @@ export const searchQuerySchema = z.object({
  */
 export const linkTargetsQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
-  /** Comma-separated: `documents`, `spreadsheets`, or both. */
-  kinds: z.string().max(40).default('documents,spreadsheets'),
+  /** Comma-separated: `documents`, `spreadsheets`, `presentations`, or any of them. */
+  kinds: z.string().max(60).default('documents,spreadsheets'),
   limit: z.coerce.number().int().min(1).max(MAX_LINK_TARGETS).default(20),
 });
 

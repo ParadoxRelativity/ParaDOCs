@@ -16,6 +16,7 @@ import {
   documentRef,
   memberRef,
   projectRef,
+  presentationRef,
   scheduleRef,
   spreadsheetRef,
   workItemRef,
@@ -38,7 +39,7 @@ import { uploadChatFile } from '../../lib/chatFiles';
 import { useTypingReporter } from '../../lib/typing';
 import { replaceShortcodes, searchEmoji, type EmojiOption } from '../../lib/emoji';
 import { cx, formatBytes, useDebounced } from '../../lib/util';
-import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
+import Icon, { DocumentIcon, PresentationIcon, SpreadsheetIcon } from '../Icon';
 import { useToast } from '../Toast';
 import { IconButton } from '../ui';
 import { EmojiPicker } from './EmojiPicker';
@@ -194,14 +195,15 @@ export const MessageComposer = forwardRef<
   // And only from the apps the workspace has on.
   const docsOn = useAppEnabled(workspaceId, 'docs');
   const sheetsOn = useAppEnabled(workspaceId, 'sheets');
+  const slidesOn = useAppEnabled(workspaceId, 'slides');
   // Searched on the server as the name is typed, since a workspace can hold
   // more documents and spreadsheets than any list it would send. Each kind is
   // asked for a full picker's worth, so either can fill the list alone.
   const linkQuery = useDebounced(trigger?.kind === 'document' ? trigger.query.trim() : '', 150);
   const targets = useLinkTargets(
-    trigger?.kind === 'document' && (docsOn || sheetsOn) ? workspaceId : undefined,
+    trigger?.kind === 'document' && (docsOn || sheetsOn || slidesOn) ? workspaceId : undefined,
     linkQuery,
-    { limit: PICKER_LIMIT },
+    { limit: PICKER_LIMIT, kinds: ['documents', 'spreadsheets', ...(slidesOn ? (['presentations'] as const) : [])] },
   );
   // Work items are searched on the server, since a workspace can have thousands:
   // by title, or by key, so `[[ENG-12` finds the one meant.
@@ -321,12 +323,21 @@ export const MessageComposer = forwardRef<
       insert: `[[${s.name}]]`,
       token: scheduleRef(s.id),
     }));
+    const presentationOptions = (targets.data?.presentations ?? []).filter((p) => matchesTitle(p.title)).map((p) => ({
+      id: p.id,
+      icon: <PresentationIcon presentation={p} />,
+      label: p.title || 'Untitled',
+      hint: 'Presentation',
+      insert: `[[${p.title || 'Untitled'}]]`,
+      token: presentationRef(p.id),
+    }));
     const linked = [
       ...documentOptions.slice(0, documentShare),
       ...sheetOptions.slice(0, PICKER_LIMIT - documentShare),
     ];
-    // A schedule named exactly as typed still makes the list when documents fill it.
-    return [...linked, ...scheduleOptions].slice(0, PICKER_LIMIT + Math.min(2, scheduleOptions.length));
+    // A presentation or schedule named exactly as typed still makes the list when documents fill it.
+    const others = [...presentationOptions, ...scheduleOptions];
+    return [...linked, ...others].slice(0, PICKER_LIMIT + Math.min(2, others.length));
   }, [trigger, channels, direct, targets.data, workItems.data, projects.data, members.data, schedules.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
@@ -572,9 +583,12 @@ export const MessageComposer = forwardRef<
           ? 'Emoji'
           : trigger?.kind === 'workItem'
             ? 'Boards, queues & work items'
-            : schedulesOn
-              ? 'Documents, spreadsheets & schedules'
-              : 'Documents & spreadsheets';
+            : [
+                'Documents',
+                'spreadsheets',
+                ...(slidesOn ? ['presentations'] : []),
+                ...(schedulesOn ? ['schedules'] : []),
+              ].join(', ').replace(/, ([^,]*)$/, ' & $1');
 
   return (
     <div className="relative border-t border-[var(--color-line)] p-3">

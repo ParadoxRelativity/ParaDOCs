@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { ScheduleSearchHit, SearchHit, SheetSearchHit, WorkItemSearchHit } from '@paradocs/shared';
+import type { PresentationSearchHit, ScheduleSearchHit, SearchHit, SheetSearchHit, WorkItemSearchHit } from '@paradocs/shared';
 import { useAppEnabled, useSearch, useTags } from '../api/hooks';
 import { useBackHandler } from '../lib/back';
 import { cx, formatRelative, plainSnippet, useDebounced } from '../lib/util';
 import { TagChip } from './ui';
-import Icon, { DocumentIcon } from './Icon';
+import Icon, { DocumentIcon, PresentationIcon } from './Icon';
 
 interface Props {
   workspaceId: string;
@@ -16,6 +16,8 @@ interface Props {
   onSelectWorkItem?: (hit: WorkItemSearchHit) => void;
   /** And a schedule in Schedules. */
   onSelectSchedule?: (hit: ScheduleSearchHit) => void;
+  /** And a presentation in Slides, on the slide the match is on. */
+  onSelectPresentation?: (hit: PresentationSearchHit) => void;
   initialTagIds?: string[];
 }
 
@@ -23,6 +25,7 @@ interface Props {
 type Result =
   | { kind: 'document'; hit: SearchHit }
   | { kind: 'sheet'; hit: SheetSearchHit }
+  | { kind: 'presentation'; hit: PresentationSearchHit }
   | { kind: 'workItem'; hit: WorkItemSearchHit }
   | { kind: 'schedule'; hit: ScheduleSearchHit };
 
@@ -33,6 +36,7 @@ export default function SearchPalette({
   onSelectSheet,
   onSelectWorkItem,
   onSelectSchedule,
+  onSelectPresentation,
   initialTagIds = [],
 }: Props) {
   const [text, setText] = useState('');
@@ -55,11 +59,13 @@ export default function SearchPalette({
 
   const hits = search.data?.hits ?? [];
   const sheets = search.data?.sheets ?? [];
+  const presentations = onSelectPresentation ? (search.data?.presentations ?? []) : [];
   const workItems = onSelectWorkItem ? (search.data?.workItems ?? []) : [];
   const schedules = onSelectSchedule ? (search.data?.schedules ?? []) : [];
   const results: Result[] = [
     ...hits.map((hit): Result => ({ kind: 'document', hit })),
     ...sheets.map((hit): Result => ({ kind: 'sheet', hit })),
+    ...presentations.map((hit): Result => ({ kind: 'presentation', hit })),
     ...workItems.map((hit): Result => ({ kind: 'workItem', hit })),
     ...schedules.map((hit): Result => ({ kind: 'schedule', hit })),
   ];
@@ -68,7 +74,9 @@ export default function SearchPalette({
       ? onSelect(result.hit.id)
       : result.kind === 'sheet'
         ? onSelectSheet(result.hit.id)
-        : result.kind === 'workItem'
+        : result.kind === 'presentation'
+          ? onSelectPresentation?.(result.hit)
+          : result.kind === 'workItem'
           ? onSelectWorkItem?.(result.hit)
           : onSelectSchedule?.(result.hit);
 
@@ -109,7 +117,7 @@ export default function SearchPalette({
             autoFocus
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={onSelectWorkItem ? 'Search documents, spreadsheets and work items…' : 'Search documents and spreadsheets…'}
+            placeholder={onSelectWorkItem ? 'Search documents, spreadsheets, slides and work items…' : 'Search documents and spreadsheets…'}
             className="flex-1 bg-transparent py-3 text-sm outline-none"
           />
           <button
@@ -238,13 +246,53 @@ export default function SearchPalette({
               </button>
             );
           })}
+          {presentations.length > 0 && (
+            <div className="border-b border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Presentations
+            </div>
+          )}
+          {presentations.map((hit, offset) => {
+            const index = hits.length + sheets.length + offset;
+            return (
+              <button
+                key={`deck-${hit.id}`}
+                onMouseEnter={() => setCursor(index)}
+                onClick={() => {
+                  onSelectPresentation?.(hit);
+                  onClose();
+                }}
+                className={cx(
+                  'block w-full border-b border-[var(--color-line)] px-3 py-2.5 text-left last:border-0',
+                  index === cursor && 'bg-[var(--color-surface)]',
+                )}
+              >
+                <div className="flex items-center gap-1.5">
+                  <PresentationIcon presentation={hit} className="text-xs" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{hit.title}</span>
+                  {hit.slide && (
+                    <span className="shrink-0 rounded bg-[var(--color-accent)]/15 px-1.5 text-[10px] text-[var(--color-accent)]">
+                      Slide {hit.slide}
+                      {hit.inNotes ? ' notes' : ''}
+                    </span>
+                  )}
+                  <span className="shrink-0 text-[10px] text-[var(--color-muted)]">{formatRelative(hit.updatedAt)}</span>
+                </div>
+                {hit.snippet && (
+                  <p
+                    className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted)]"
+                    dangerouslySetInnerHTML={{ __html: highlightSafely(hit.snippet) }}
+                  />
+                )}
+              </button>
+            );
+          })}
           {workItems.length > 0 && (
             <div className="border-b border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               Work items
             </div>
           )}
           {workItems.map((hit, offset) => {
-            const index = hits.length + sheets.length + offset;
+            const index = hits.length + sheets.length + presentations.length + offset;
             return (
               <button
                 key={`item-${hit.id}`}
@@ -275,7 +323,7 @@ export default function SearchPalette({
             </div>
           )}
           {schedules.map((hit, offset) => {
-            const index = hits.length + sheets.length + workItems.length + offset;
+            const index = hits.length + sheets.length + presentations.length + workItems.length + offset;
             return (
               <button
                 key={`schedule-${hit.id}`}
