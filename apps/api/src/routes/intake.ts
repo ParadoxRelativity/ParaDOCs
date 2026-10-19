@@ -15,8 +15,8 @@ import { appEnabled } from '../lib/apps.js';
 import { HttpError, badRequest, forbidden, notFound, parse, unauthorized } from '../lib/http.js';
 import { intakeLimits } from '../lib/rateLimit.js';
 import { getServerSettings } from '../lib/serverSettings.js';
-import { projectChanged } from '../lib/workItems.js';
-import { endOfStatus, insertRoleHolders, logActivity } from './projects.js';
+import { notifyAboutWorkItem, projectChanged } from '../lib/workItems.js';
+import { defaultHolders, endOfStatus, insertRoleHolders, logActivity } from './projects.js';
 
 /**
  * The intake webhook: work sent in from outside, filed in a queue.
@@ -211,7 +211,14 @@ interface TypeRow {
   role_ids: string[];
 }
 
-async function createFromSubmission(token: TokenRow, input: Submission): Promise<{ id: string; key: string }> {
+interface Created {
+  id: string;
+  key: string;
+  /** The roles filled from their schedules, to tell whoever is now in them. */
+  filled: { name: string; userIds: string[] }[];
+}
+
+async function createFromSubmission(token: TokenRow, input: Submission): Promise<Created> {
   const { rows: types } = await query<TypeRow>(
     `SELECT t.id, t.name, t.epic,
             ARRAY(SELECT tr.role_id FROM project_item_type_roles tr WHERE tr.type_id = t.id) AS role_ids
@@ -252,6 +259,21 @@ async function createFromSubmission(token: TokenRow, input: Submission): Promise
   const extras = [...input.extras];
   if (input.requester && !requesterRole) extras.unshift(['Requester', input.requester]);
 
+  // Roles filled from a schedule get whoever is on it, as work filed in the
+  // app does. Nobody filed this, so a role filled by its creator stays empty.
+  const { rows: scheduledRoles } = await query<{ id: string; name: string; multiple: boolean; scheduleId: string }>(
+    `SELECT id, name, multiple, fill_from_schedule_id AS "scheduleId" FROM project_roles
+      WHERE project_id = $1 AND fill_from_schedule_id IS NOT NULL ORDER BY position, created_at`,
+    [token.project_id],
+  );
+  const scheduled = await defaultHolders(
+    scheduledRoles.map((role) => ({ ...role, fillWithCreator: false })),
+    type.role_ids,
+    new Set(requesterRole ? [requesterRole.id] : []),
+    token.workspace_id,
+    null,
+  );
+
   let description = inert(input.description);
   if (extras.length > 0) {
     const listed = extras.map(([key, value]) => `${inert(key)}: ${inert(value)}`).join('\n');
@@ -286,11 +308,16 @@ async function createFromSubmission(token: TokenRow, input: Submission): Promise
     );
     const itemId = rows[0].id;
     if (requesterRole) await insertRoleHolders(client, itemId, requesterRole.id, [], [input.requester!]);
+    for (const { role, userIds } of scheduled) await insertRoleHolders(client, itemId, role.id, userIds, []);
     await logActivity(client, itemId, null, { kind: 'created', via: token.name });
     await client.query('UPDATE intake_tokens SET last_used_at = now(), use_count = use_count + 1 WHERE id = $1', [
       token.id,
     ]);
-    return { id: itemId, key: `${numbered[0].key}-${numbered[0].number}` };
+    return {
+      id: itemId,
+      key: `${numbered[0].key}-${numbered[0].number}`,
+      filled: scheduled.map(({ role, userIds }) => ({ name: role.name, userIds })),
+    };
   });
 }
 
@@ -347,6 +374,12 @@ const webhookRoutes: FastifyPluginAsync = async (app) => {
 
       const created = await createFromSubmission(token, readSubmission(req.body));
       projectChanged(token.workspace_id, token.project_id, created.id);
+      for (const { name, userIds } of created.filled) {
+        // Telling them is not worth failing a submission that has been filed.
+        await notifyAboutWorkItem(created.id, userIds, 'role', name, null).catch((err: unknown) =>
+          req.log.warn({ err, itemId: created.id }, 'could not record work item notifications'),
+        );
+      }
       if (wantsPage(req)) return page(reply, 201, 'Thank you', `Your request was received as ${created.key}.`);
       reply.status(201);
       return { id: created.id, key: created.key };

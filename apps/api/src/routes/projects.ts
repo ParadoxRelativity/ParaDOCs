@@ -95,8 +95,10 @@ import {
   permissionSql,
   projectLevelSql,
   roleIdSql,
+  scheduleAccess,
 } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
+import { onCallAt } from '../lib/schedules.js';
 import { resolveReferences, resolveWorkItems } from '../lib/chatReferences.js';
 import {
   dimension,
@@ -258,7 +260,7 @@ export async function fetchProject(id: string, userId: string): Promise<Project>
                         FROM project_statuses st WHERE st.project_id = p.id), '[]'::json) AS statuses,
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'name', r.name, 'multiple', r.multiple,
                                                         'freeForm', r.free_form, 'fillWithCreator', r.fill_with_creator,
-                                                        'position', r.position)
+                                                        'scheduleId', r.fill_from_schedule_id, 'position', r.position)
                                       ORDER BY r.position, r.created_at)
                         FROM project_roles r WHERE r.project_id = p.id), '[]'::json) AS roles,
             COALESCE((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'position', w.position,
@@ -435,6 +437,41 @@ async function assertRoleNameFree(projectId: string, name: string, exceptId?: st
     [projectId, name, exceptId ?? null],
   );
   if (rows.length) throw conflict(`This project already has a role called ${name}`);
+}
+
+const ROLE_COLUMNS = `id, name, multiple, free_form AS "freeForm", fill_with_creator AS "fillWithCreator",
+  fill_from_schedule_id AS "scheduleId", position`;
+
+/** A role can only be filled from a schedule in its own workspace that whoever sets it up can see. */
+async function assertRoleSchedule(req: FastifyRequest, workspaceId: string, scheduleId: string): Promise<void> {
+  const access = await scheduleAccess(req.user!.id, scheduleId);
+  if (!access || access.workspaceId !== workspaceId) throw badRequest('That schedule is not in this workspace');
+}
+
+type DefaultedRole = Pick<ProjectRole, 'id' | 'multiple' | 'fillWithCreator' | 'scheduleId'>;
+
+/**
+ * Who a new item's roles start with when nobody was named for them: whoever
+ * is on the role's schedule — the first of them, for a role one person holds —
+ * or else, for a role filled by its creator, whoever filed it. Roles its type
+ * does not have, and roles in `given`, are left as they are.
+ */
+export async function defaultHolders<R extends DefaultedRole>(
+  roles: R[],
+  typeRoleIds: string[],
+  given: Set<string>,
+  workspaceId: string,
+  creatorId: string | null,
+): Promise<{ role: R; userIds: string[]; names: string[] }[]> {
+  const filled: { role: R; userIds: string[]; names: string[] }[] = [];
+  for (const role of roles) {
+    if (!typeRoleIds.includes(role.id) || given.has(role.id)) continue;
+    let userIds = role.scheduleId ? await onCallAt(role.scheduleId, workspaceId) : [];
+    userIds = userIds.slice(0, role.multiple ? MAX_ROLE_HOLDERS : 1);
+    if (userIds.length === 0 && role.fillWithCreator && creatorId) userIds = [creatorId];
+    if (userIds.length > 0) filled.push({ role, userIds, names: [] });
+  }
+  return filled;
 }
 
 /** Only members of the workspace can hold a role on its items. */
@@ -1285,11 +1322,12 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const { workspaceId } = await assertProjectAccess(req, req.params.id, 'configure');
     const input = parse(createRoleSchema, req.body ?? {});
     await assertRoleNameFree(req.params.id, input.name);
+    if (input.scheduleId) await assertRoleSchedule(req, workspaceId, input.scheduleId);
     const { rows } = await query<ProjectRole>(
-      `INSERT INTO project_roles (project_id, name, multiple, free_form, fill_with_creator, position)
-       VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
-       RETURNING id, name, multiple, free_form AS "freeForm", fill_with_creator AS "fillWithCreator", position`,
-      [req.params.id, input.name, input.multiple, input.freeForm, input.fillWithCreator],
+      `INSERT INTO project_roles (project_id, name, multiple, free_form, fill_with_creator, fill_from_schedule_id, position)
+       VALUES ($1, $2, $3, $4, $5, $6, (SELECT COALESCE(max(position), 0) + 1 FROM project_roles WHERE project_id = $1))
+       RETURNING ${ROLE_COLUMNS}`,
+      [req.params.id, input.name, input.multiple, input.freeForm, input.fillWithCreator, input.scheduleId ?? null],
     );
     // A new role applies to every type until someone says otherwise.
     await query(
@@ -1307,15 +1345,17 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const { workspaceId } = await assertProjectAccess(req, projectId, 'configure');
     const input = parse(updateRoleSchema, req.body ?? {});
     if (input.name) await assertRoleNameFree(projectId, input.name, req.params.id);
+    if (input.scheduleId) await assertRoleSchedule(req, workspaceId, input.scheduleId);
 
     const { rows } = await transaction(async (client) => {
       const result = await client.query<ProjectRole>(
         `UPDATE project_roles
             SET name = COALESCE($2, name), multiple = COALESCE($3, multiple),
                 free_form = COALESCE($5, free_form), fill_with_creator = COALESCE($6, fill_with_creator),
+                fill_from_schedule_id = CASE WHEN $7 THEN $8::uuid ELSE fill_from_schedule_id END,
                 position = COALESCE($4, position)
           WHERE id = $1
-          RETURNING id, name, multiple, free_form AS "freeForm", fill_with_creator AS "fillWithCreator", position`,
+          RETURNING ${ROLE_COLUMNS}`,
         [
           req.params.id,
           input.name ?? null,
@@ -1323,6 +1363,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           input.position ?? null,
           input.freeForm ?? null,
           input.fillWithCreator ?? null,
+          input.scheduleId !== undefined,
+          input.scheduleId ?? null,
         ],
       );
       // A role that no longer takes typed names lets go of the ones it has;
@@ -2094,13 +2136,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       assertRoleFits(role, userIds, names);
       return { role, userIds, names };
     });
-    // Whoever files it fills the roles set to take them, unless the request
-    // said who holds the role; an empty list given for it means nobody.
-    for (const role of project.roles) {
-      if (role.fillWithCreator && type.roleIds.includes(role.id) && !roleIds.has(role.id)) {
-        roles.push({ role, userIds: [req.user!.id], names: [] });
-      }
-    }
+    // Whoever is on a role's schedule fills it, and whoever files it fills the
+    // roles set to take them, unless the request said who holds the role; an
+    // empty list given for it means nobody.
+    roles.push(...(await defaultHolders(project.roles, type.roleIds, roleIds, workspaceId, req.user!.id)));
     await assertMembers(workspaceId, [...new Set(roles.flatMap((r) => r.userIds))]);
 
     const id = await transaction(async (client) => {

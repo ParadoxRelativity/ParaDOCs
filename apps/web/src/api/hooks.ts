@@ -1142,6 +1142,7 @@ export function useProjectSetup(workspaceId: string, projectId: string) {
         multiple?: boolean;
         freeForm?: boolean;
         fillWithCreator?: boolean;
+        scheduleId?: string | null;
         position?: number;
       }) => api.patch<ProjectRole>(`/project-roles/${id}`, patch),
       onSuccess: settle,
