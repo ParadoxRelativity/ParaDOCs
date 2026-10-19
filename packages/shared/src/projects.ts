@@ -266,6 +266,13 @@ export interface ProjectRole {
    * a watcher are, unless the item is created with the role already filled.
    */
   fillWithCreator: boolean;
+  /**
+   * A schedule whoever is on when an item is created is put in it from, as a
+   * queue's on-call assignee is, unless the item is created with the role
+   * already filled. A role that is also filled by its creator gets the creator
+   * when nobody is on. Null: none.
+   */
+  scheduleId: string | null;
   position: number;
 }
 
@@ -1001,6 +1008,7 @@ export const createRoleSchema = z.object({
   multiple: z.boolean().default(false),
   freeForm: z.boolean().default(false),
   fillWithCreator: z.boolean().default(false),
+  scheduleId: uuid.nullish(),
 });
 
 export const updateRoleSchema = z.object({
@@ -1008,6 +1016,8 @@ export const updateRoleSchema = z.object({
   multiple: z.boolean().optional(),
   freeForm: z.boolean().optional(),
   fillWithCreator: z.boolean().optional(),
+  /** Null takes the schedule off. */
+  scheduleId: uuid.nullish(),
   position: z.number().finite().optional(),
 });
 

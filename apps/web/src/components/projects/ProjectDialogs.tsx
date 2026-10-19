@@ -231,9 +231,13 @@ export function NewWorkItemDialog({
   const [dueDate, setDueDate] = useState('');
   const [estimate, setEstimate] = useState('');
   // Whoever files something fills the roles set to take them, as the server
-  // would; they can take themselves off before creating it.
+  // would; they can take themselves off before creating it. A role filled from
+  // a schedule is left to the server, which knows who is on, until someone is
+  // picked for it.
   const [roles, setRoles] = useState<Record<string, string[]>>(() =>
-    Object.fromEntries(project.roles.filter((role) => role.fillWithCreator).map((role) => [role.id, [selfId]])),
+    Object.fromEntries(
+      project.roles.filter((role) => role.fillWithCreator && !role.scheduleId).map((role) => [role.id, [selfId]]),
+    ),
   );
   // Names typed into free-form roles, beside the members chosen for them.
   const [roleNames, setRoleNames] = useState<Record<string, string[]>>({});
@@ -252,8 +256,11 @@ export function NewWorkItemDialog({
         estimate: parsedEstimate !== null && Number.isFinite(parsedEstimate) ? parsedEstimate : null,
         // Every role its type offers, empty ones included, so the server does not
         // fill a role the creator took themselves off. One filled in and then
-        // hidden by a type change is dropped.
-        roles: Object.fromEntries(typeRoles.map((role) => [role.id, roles[role.id] ?? []])),
+        // hidden by a type change is dropped. A scheduled role nobody touched
+        // is left out, for the server to fill from its schedule.
+        roles: Object.fromEntries(
+          typeRoles.filter((role) => !role.scheduleId || role.id in roles).map((role) => [role.id, roles[role.id] ?? []]),
+        ),
         roleNames: Object.fromEntries(Object.entries(roleNames).filter(([id]) => typeRoles.some((r) => r.id === id))),
         typeId: type,
         // Epics sit above sprints and other epics.
@@ -371,7 +378,12 @@ export function NewWorkItemDialog({
                     onClick={(e) => setPicking({ roleId: role.id, anchor: e.currentTarget })}
                     className={cx(FIELD, 'mt-1 flex items-center gap-1.5 text-left')}
                   >
-                    {holders.length + names.length === 0 ? (
+                    {role.scheduleId && !(role.id in roles) && names.length === 0 ? (
+                      <span className="flex items-center gap-1.5 text-[var(--color-muted)]">
+                        <Icon name="calendar-week" />
+                        Whoever is on call
+                      </span>
+                    ) : holders.length + names.length === 0 ? (
                       <span className="text-[var(--color-muted)]">{role.freeForm ? 'Nobody yet' : 'Nobody'}</span>
                     ) : (
                       <>

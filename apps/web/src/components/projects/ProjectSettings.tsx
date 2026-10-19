@@ -16,7 +16,7 @@ import {
   type StatusCategory,
   type WorkItemSummary,
 } from '@paradocs/shared';
-import { useDeleteProject, useProjectSetup, useUpdateProject } from '../../api/hooks';
+import { useAppEnabled, useDeleteProject, useProjectSetup, useSchedules, useUpdateProject } from '../../api/hooks';
 import { cx } from '../../lib/util';
 import { AccessDialog } from '../AccessDialog';
 import Icon, { type IconName } from '../Icon';
@@ -1183,6 +1183,10 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   const [newFillWithCreator, setNewFillWithCreator] = useState(false);
   const fail = (fallback: string) => (err: unknown) => toast(err instanceof Error ? err.message : fallback, 'error');
   const roles = project.roles;
+  const schedulesOn = useAppEnabled(project.workspaceId, 'schedules');
+  const schedules = useSchedules(schedulesOn ? project.workspaceId : undefined).data ?? [];
+  // Offered once there is a schedule to pick, or when a role already has one.
+  const offerSchedules = schedulesOn && (schedules.length > 0 || roles.some((role) => role.scheduleId));
 
   function move(index: number, by: -1 | 1) {
     const target = index + by;
@@ -1212,7 +1216,7 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
   return (
     <Section
       title="Roles"
-      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. A role filled by its creator gets whoever files the item, in the app, through the API or through an AI connection, unless they say who holds it. Which types each role applies to is set under Work item types; a new role applies to every type."
+      hint="What people can be on a work item here. The first role is the one boards and lists show, and workload starts from. A free-form role also takes a name typed straight in, for a customer with no account here. A role filled by its creator gets whoever files the item, in the app, through the API or through an AI connection, unless they say who holds it. A role filled from a schedule gets whoever is on it when the item is filed, intake forms included, such as an on-call assignee and an escalation role each following their own rotation; with Filled by creator too, the creator fills in when nobody is on. Which types each role applies to is set under Work item types; a new role applies to every type."
     >
       <ul className="divide-y divide-[var(--color-line)] rounded-lg border border-[var(--color-line)]">
         {roles.map((role, index) => (
@@ -1266,6 +1270,36 @@ function RoleSection({ project, canEdit }: { project: Project; canEdit: boolean 
                 />
                 Filled by creator
               </label>
+              {offerSchedules && (
+                <label
+                  className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                  title={`Puts whoever is on this schedule when an item is created in ${role.name} — the first of them, unless several can hold it — unless whoever creates it says who holds it.`}
+                >
+                  <Icon name="calendar-week" />
+                  <select
+                    value={role.scheduleId ?? ''}
+                    disabled={!canEdit}
+                    aria-label={`Schedule that fills ${role.name}`}
+                    onChange={(e) =>
+                      setup.updateRole.mutate(
+                        { id: role.id, scheduleId: e.target.value || null },
+                        { onError: fail('Could not change the role') },
+                      )
+                    }
+                    className={cx(FIELD_BASE, 'max-w-40 py-0.5 text-xs')}
+                  >
+                    <option value="">No schedule</option>
+                    {schedules.map((schedule) => (
+                      <option key={schedule.id} value={schedule.id}>
+                        On call: {schedule.name}
+                      </option>
+                    ))}
+                    {role.scheduleId && !schedules.some((s) => s.id === role.scheduleId) && (
+                      <option value={role.scheduleId}>A schedule you cannot see</option>
+                    )}
+                  </select>
+                </label>
+              )}
             </div>
             {canEdit && (
               <div className="ml-auto flex">

@@ -2,6 +2,7 @@ import { DateTime } from 'luxon';
 import {
   resolveLayers,
   resolveSchedule,
+  shiftsAt,
   type LayerConfig,
   type LayerMember,
   type MyShift,
@@ -13,6 +14,7 @@ import {
 } from '@paradocs/shared';
 import { query, type DbClient } from '../db/pool.js';
 import { scheduleLevelSql } from './access.js';
+import { appEnabledSql } from './apps.js';
 import { publishToWorkspace } from '../chat/hub.js';
 
 /**
@@ -251,6 +253,33 @@ export async function scheduleShifts(
       .sort((a, b) => b.position - a.position)
       .map((layer) => ({ lineageId: layer.lineageId, name: layer.name, kind: layer.kind, shifts: rows.get(layer.lineageId) ?? [] })),
   };
+}
+
+/**
+ * Who is on a schedule at `at`, in the order the resolver gives, kept to the
+ * workspace's members: someone who has left may still be on a layer. Nobody
+ * when the schedule is gone, is in another workspace, or Schedules is off.
+ * It is the system asking, so whose eyes the schedule is hidden from is not
+ * what decides it.
+ */
+export async function onCallAt(scheduleId: string, workspaceId: string, at = new Date()): Promise<string[]> {
+  const { rows } = await query<{ time_zone: string }>(
+    `SELECT s.time_zone FROM schedules s WHERE s.id = $1 AND s.workspace_id = $2 AND ${appEnabledSql('s.workspace_id', 'schedules')}`,
+    [scheduleId, workspaceId],
+  );
+  if (!rows[0]) return [];
+  const from = at.toISOString();
+  const to = new Date(at.getTime() + 1).toISOString();
+  const overrides = await loadOverrides(scheduleId, from, to);
+  const on = shiftsAt(resolveSchedule({ timeZone: rows[0].time_zone }, await loadLayers(scheduleId), overrides, from, to), from);
+  const userIds = [...new Set(on.map((shift) => shift.userId))];
+  if (userIds.length === 0) return [];
+  const { rows: members } = await query<{ user_id: string }>(
+    'SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND user_id = ANY($2::uuid[])',
+    [workspaceId, userIds],
+  );
+  const kept = new Set(members.map((m) => m.user_id));
+  return userIds.filter((id) => kept.has(id));
 }
 
 /**

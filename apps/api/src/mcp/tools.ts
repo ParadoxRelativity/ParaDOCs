@@ -854,7 +854,7 @@ export const TOOLS: Tool[] = [
         `Link: ${ctx.origin}/w/${p.workspaceId}/p/${p.id}`,
         `Statuses, in order: ${p.statuses.map((s) => `${s.name} [${s.category}]`).join(', ')}`,
         `Types: ${p.itemTypes.map((t) => `${t.name}${t.epic ? ' (epic)' : ''}${t.id === p.defaultTypeId ? ' (default)' : ''}`).join(', ')}`,
-        `Roles: ${p.roles.map((r) => `${r.name}${r.multiple ? ' (several)' : ''}${r.freeForm ? ' (any name)' : ''}${r.fillWithCreator ? ' (filled by creator)' : ''}`).join(', ')}`,
+        `Roles: ${p.roles.map((r) => `${r.name}${r.multiple ? ' (several)' : ''}${r.freeForm ? ' (any name)' : ''}${r.fillWithCreator ? ' (filled by creator)' : ''}${r.scheduleId ? ' (filled from a schedule)' : ''}`).join(', ')}`,
         p.sprintsEnabled
           ? `Sprints: ${sprints.map((s) => `${s.name} [${s.state}${s.endDate ? `, ends ${s.endDate}` : ''}]${s.goal ? ` — ${s.goal}` : ''}`).join('; ') || 'none planned'}`
           : '',

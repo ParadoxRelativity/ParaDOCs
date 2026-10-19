@@ -77,7 +77,8 @@ export async function notifyAboutWorkItem(
   userIds: string[],
   reason: 'role' | 'mention',
   detail: string | null,
-  by: string,
+  /** Who did it, who is not told; null for work that came in from outside. */
+  by: string | null,
 ): Promise<void> {
   const candidates = [...new Set(userIds)].filter((id) => id !== by);
   if (candidates.length === 0) return;
