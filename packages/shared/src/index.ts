@@ -23,5 +23,6 @@ export * from './sheet.js';
 export * from './sheetCompute.js';
 export * from './sheetFormat.js';
 export * from './sheetRefs.js';
+export * from './slides.js';
 export * from './types.js';
 export * from './version.js';
