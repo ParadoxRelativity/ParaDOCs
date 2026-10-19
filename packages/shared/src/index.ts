@@ -25,6 +25,7 @@ export * from './sheetFormat.js';
 export * from './sheetRefs.js';
 export * from './slideOutline.js';
 export * from './slides.js';
+export * from './slideBuilds.js';
 export * from './slideGeometry.js';
 export * from './slideEdit.js';
 export * from './types.js';

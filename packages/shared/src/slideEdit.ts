@@ -6,7 +6,8 @@
  */
 
 import * as Y from 'yjs';
-import { ELEMENT_BODY_KEY, SLIDE_ELEMENTS_KEY, SLIDE_ORDER, notesFragmentName, slideMapName, type SlideElement } from './slides.js';
+import { ELEMENT_BODY_KEY, SLIDE_ELEMENTS_KEY, SLIDE_ORDER, notesFragmentName, readSlide, slideMapName, type SlideElement } from './slides.js';
+import { animatedElements, readAnimation, supportsParagraphBuild, type ElementAnimation } from './slideBuilds.js';
 
 function elementsOf(doc: Y.Doc, slideId: string): Y.Map<Y.Map<unknown>> | null {
   const elements = doc.getMap<unknown>(slideMapName(slideId)).get(SLIDE_ELEMENTS_KEY);
@@ -145,5 +146,73 @@ export function moveSlides(doc: Y.Doc, slideIds: string[], toIndex: number): voi
     // Reinsert after the slide that now precedes the group.
     const before = at === 0 ? -1 : kept.indexOf(rest[at - 1]);
     order.insert(before + 1, moving);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Build animations
+// ---------------------------------------------------------------------------
+
+/**
+ * Gives elements an animation, or removes it with `null`. A newly animated
+ * element goes to the end of the slide's animation order; one that already
+ * had an animation keeps its place. Later animations close the gap when one
+ * is removed, so `order` always reads 0..n-1.
+ */
+export function setElementAnimations(
+  doc: Y.Doc,
+  slideId: string,
+  ids: string[],
+  change: Partial<Omit<ElementAnimation, 'order'>> | null,
+): void {
+  doc.transact(() => {
+    const elements = readSlide(doc, slideId).elements;
+    const byId = new Map(elements.map((e) => [e.id, e]));
+    let next = animatedElements(elements).length;
+    const patches: { id: string; patch: Record<string, unknown> }[] = [];
+    for (const id of ids) {
+      const element = byId.get(id);
+      if (!element) continue;
+      const current = readAnimation((element as { animation?: unknown }).animation);
+      if (change === null) {
+        if (current) patches.push({ id, patch: { animation: undefined } });
+        continue;
+      }
+      const animation: ElementAnimation = current
+        ? { ...current, ...change, order: current.order }
+        : { effect: 'fade', trigger: 'onClick', ...change, order: next++ };
+      // A box that is not text cannot build by paragraph, and a stale flag would only mislead.
+      if (animation.byParagraph && !supportsParagraphBuild(element)) delete animation.byParagraph;
+      if (animation.effect === 'appear') delete animation.durationMs;
+      for (const key of Object.keys(animation) as (keyof ElementAnimation)[]) if (animation[key] === undefined) delete animation[key];
+      patches.push({ id, patch: { animation } });
+    }
+    patchSlideElements(doc, slideId, patches);
+    if (change === null) normalizeAnimationOrder(doc, slideId);
+  });
+}
+
+/** Rewrites `order` as 0..n-1 in the current order, touching only what differs. */
+function normalizeAnimationOrder(doc: Y.Doc, slideId: string, sequence?: string[]): void {
+  const animated = animatedElements(readSlide(doc, slideId).elements);
+  const ids = sequence ?? animated.map((a) => a.element.id);
+  const byId = new Map(animated.map((a) => [a.element.id, a.animation]));
+  const patches: { id: string; patch: Record<string, unknown> }[] = [];
+  ids.forEach((id, order) => {
+    const animation = byId.get(id);
+    if (animation && animation.order !== order) patches.push({ id, patch: { animation: { ...animation, order } } });
+  });
+  patchSlideElements(doc, slideId, patches);
+}
+
+/** Moves an element's animation to `toIndex` in the slide's animation order. */
+export function moveElementAnimation(doc: Y.Doc, slideId: string, elementId: string, toIndex: number): void {
+  doc.transact(() => {
+    const ids = animatedElements(readSlide(doc, slideId).elements).map((a) => a.element.id);
+    const from = ids.indexOf(elementId);
+    if (from < 0) return;
+    ids.splice(from, 1);
+    ids.splice(Math.min(Math.max(toIndex, 0), ids.length), 0, elementId);
+    normalizeAnimationOrder(doc, slideId, ids);
   });
 }

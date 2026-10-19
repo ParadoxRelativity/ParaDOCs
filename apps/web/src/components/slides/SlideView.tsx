@@ -1,5 +1,6 @@
-import { memo, type CSSProperties } from 'react';
+import { memo, useMemo, type CSSProperties } from 'react';
 import {
+  buildPlan,
   resolveSlideColor,
   slideAspectRatio,
   type SlideElement,
@@ -10,6 +11,7 @@ import {
 } from '@paradocs/shared';
 import { assetUrl } from '../../lib/server';
 import { slideElementRenderer } from './slideExtensions';
+import { BuildBox } from './SlideBuild';
 
 const NO_MEMBERS: WorkspaceMember[] = [];
 const noop = () => {};
@@ -54,6 +56,7 @@ const SlideView = memo(function SlideView({
   className?: string;
 }) {
   const scale = width / size.width;
+  const plan = useMemo(() => buildPlan(slide.elements), [slide.elements]);
   return (
     <div
       className={className}
@@ -70,18 +73,20 @@ const SlideView = memo(function SlideView({
         {slide.elements.map((element) => {
           const Renderer = slideElementRenderer(element.type);
           return (
-            <div key={element.id} className="absolute" style={elementBoxStyle(element)}>
-              <Renderer
-                element={element}
-                theme={theme}
-                selected={false}
-                editing={false}
-                readOnly
-                members={NO_MEMBERS}
-                onUpdate={noop}
-                onStopEditing={noop}
-              />
-            </div>
+            <BuildBox key={element.id} element={element} plan={plan} style={elementBoxStyle(element)}>
+              {(shown) => (
+                <Renderer
+                  element={shown}
+                  theme={theme}
+                  selected={false}
+                  editing={false}
+                  readOnly
+                  members={NO_MEMBERS}
+                  onUpdate={noop}
+                  onStopEditing={noop}
+                />
+              )}
+            </BuildBox>
           );
         })}
       </div>

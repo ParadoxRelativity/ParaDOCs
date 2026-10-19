@@ -32,6 +32,7 @@ import {
 } from './slideExtensions';
 import './slideBuiltins';
 import './slideShowBuiltins';
+import './slideBuildBuiltins';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
