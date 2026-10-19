@@ -172,3 +172,25 @@ describe('deckSearchText', () => {
     expect(deckSearchText([{ elements: [], notes: '' }, { elements: [], notes: 'n' }])).toBe('n');
   });
 });
+
+describe('speaker notes as written by the notes editor', () => {
+  it('reads one line per block, nested blocks included', () => {
+    const doc = new Y.Doc();
+    const id = createSlide(doc);
+    const block = (kind: string, text: string, nested?: Y.XmlElement) => {
+      const container = new Y.XmlElement('blockContainer');
+      const content = new Y.XmlElement(kind);
+      const run = new Y.XmlText();
+      run.insert(0, text);
+      content.insert(0, [run]);
+      container.insert(0, nested ? [content, nested] : [content]);
+      return container;
+    };
+    const group = new Y.XmlElement('blockGroup');
+    const inner = new Y.XmlElement('blockGroup');
+    inner.insert(0, [block('bulletListItem', 'sub point')]);
+    group.insert(0, [block('heading', 'Opening'), block('paragraph', 'say hello', inner)]);
+    doc.getXmlFragment(notesFragmentName(id)).insert(0, [group]);
+    expect(readDeck(doc).slides[0].notes).toBe('Opening\nsay hello\nsub point');
+  });
+});

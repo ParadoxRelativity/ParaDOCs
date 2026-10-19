@@ -28,6 +28,7 @@ export const WORKSPACE_PERMISSIONS = [
   'sheets.create',
   'sheets.delete',
   'slides.view',
+  'slides.comment',
   'slides.edit',
   'slides.create',
   'slides.delete',
@@ -122,6 +123,12 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
         label: 'See presentations',
         description: 'Open presentations and their folders, present them to themselves and export them.',
         requires: [],
+      },
+      {
+        id: 'slides.comment',
+        label: 'Comment',
+        description: 'Comment on slides they can see.',
+        requires: ['slides.view'],
       },
       {
         id: 'slides.edit',
@@ -342,6 +349,7 @@ export const VIEWER_PERMISSIONS: WorkspacePermission[] = [
   'docs.comment',
   'sheets.view',
   'slides.view',
+  'slides.comment',
   'chat.view',
   'chat.post',
   'chat.direct',

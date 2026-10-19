@@ -18,6 +18,7 @@ import type {
   CalendarEvent,
   Channel,
   Comment,
+  SlideCommentThreads,
   Doc,
   DocumentMode,
   DocumentSummary,
@@ -169,6 +170,7 @@ export const keys = {
   document: (id: string) => ['document', id] as const,
   tags: (ws: string) => ['tags', ws] as const,
   comments: (id: string) => ['comments', id] as const,
+  slideComments: (presentationId: string) => ['slideComments', presentationId] as const,
   events: (ws: string, from: string, to: string) => ['events', ws, from, to] as const,
   activity: (ws: string, from: string, to: string) => ['activity', ws, from, to] as const,
   search: (ws: string, key: string) => ['search', ws, key] as const,
@@ -1965,6 +1967,48 @@ export function useDeleteComment(documentId: string) {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/comments/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.comments(documentId) }),
+  });
+}
+
+// --- slide comments --------------------------------------------------------
+
+/** A presentation's comment threads. Refetched now and then, so a collaborator's comment turns up without a reload. */
+export function useSlideComments(presentationId: string) {
+  return useQuery({
+    queryKey: keys.slideComments(presentationId),
+    queryFn: () => api.get<SlideCommentThreads>(`/presentations/${presentationId}/comments`),
+    refetchInterval: 20_000,
+  });
+}
+
+export function useSlideCommentActions(presentationId: string) {
+  const qc = useQueryClient();
+  const settle = () => qc.invalidateQueries({ queryKey: keys.slideComments(presentationId) });
+  return {
+    add: useMutation({
+      mutationFn: (input: { body: string; slideId: string; elementId?: string | null; parentId?: string | null }) =>
+        api.post(`/presentations/${presentationId}/comments`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; body?: string; resolved?: boolean }) =>
+        api.patch(`/slide-comments/${id}`, patch),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/slide-comments/${id}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
+/** Opening a presentation answers the slide mentions in it. */
+export function useMarkSlideMentionsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (presentationIds?: string[]) =>
+      api.post('/notifications/slide-mentions/read', presentationIds ? { presentationIds } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
   });
 }
 

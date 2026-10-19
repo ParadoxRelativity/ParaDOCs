@@ -14,13 +14,14 @@ import {
   type WorkspaceSuspensionNotification,
   type Role,
   type ScheduleNotification,
+  type SlideMentionNotification,
   type WorkItemNotification,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { publishToUser } from '../chat/hub.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
+import { channelLevelSql, documentLevelSql, presentationLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
@@ -39,6 +40,11 @@ const markReadSchema = z.object({
 const readMentionsSchema = z.object({
   /** Omit to clear every tag addressed to you. */
   documentIds: z.array(z.string().uuid()).max(500).optional(),
+});
+
+const readSlideMentionsSchema = z.object({
+  /** Omit to clear every slide mention addressed to you. */
+  presentationIds: z.array(z.string().uuid()).max(500).optional(),
 });
 
 const MAX_MENTIONS = 50;
@@ -144,6 +150,58 @@ function workspaceOf(row: WorkspaceColumns): NotificationWorkspace {
     icon: row.workspace_icon,
     avatarUrl: row.workspace_avatar_url,
   };
+}
+
+interface SlideMentionRow extends WorkspaceColumns {
+  presentation_id: string;
+  slide_id: string;
+  title: string;
+  created_at: string;
+  author_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
+}
+
+/**
+ * Comments on slides that name this person and have not been opened: the
+ * newest per slide, so a thread of replies is one thing to go and read. As for
+ * document tags, access is asked now, not when the comment was written.
+ */
+async function slideMentionsFor(userId: string): Promise<SlideMentionNotification[]> {
+  const { rows } = await query<SlideMentionRow>(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (sm.presentation_id, sm.slide_id)
+              sm.presentation_id, sm.slide_id, sm.created_at, p.title,
+              ${WORKSPACE_SELECT},
+              author.id AS author_id, author.name AS author_name,
+              ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+         FROM slide_comment_mentions sm
+         JOIN presentations p ON p.id = sm.presentation_id
+         JOIN workspaces w ON w.id = p.workspace_id
+         JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
+         LEFT JOIN users author ON author.id = sm.created_by
+        WHERE sm.user_id = $1
+          AND sm.read_at IS NULL
+          AND ${notBlockedAuthorSql('$1', 'sm.created_by')}
+          AND p.archived_at IS NULL
+          AND ${appEnabledSql('p.workspace_id', 'slides')}
+          AND ${presentationLevelSql('$1', 'wm.role_id')} > 0
+        ORDER BY sm.presentation_id, sm.slide_id, sm.created_at DESC
+     ) latest
+     ORDER BY created_at DESC
+     LIMIT ${MAX_MENTIONS}`,
+    [userId],
+  );
+  return rows.map((row) => ({
+    presentationId: row.presentation_id,
+    slideId: row.slide_id,
+    title: row.title,
+    workspace: workspaceOf(row),
+    taggedBy: row.author_id
+      ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+      : null,
+    createdAt: row.created_at,
+  }));
 }
 
 function truncate(text: string, length = PREVIEW_LENGTH): string {
@@ -486,6 +544,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           createdAt: row.created_at,
         }),
       ),
+      slideMentions: await slideMentionsFor(user.id),
       workItems: workItemRows.map(
         (row): WorkItemNotification => ({
           workItemId: row.work_item_id,
@@ -570,6 +629,24 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           AND read_at IS NULL
           AND ($2::uuid[] IS NULL OR document_id = ANY($2::uuid[]))`,
       [req.user!.id, input.documentIds ?? null],
+    );
+    if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
+    reply.status(204);
+  });
+
+  /**
+   * Clears the slide mentions addressed to you in the presentations given, or
+   * in all of them. Opening a presentation is what normally calls this.
+   */
+  app.post('/notifications/slide-mentions/read', async (req, reply) => {
+    const input = parse(readSlideMentionsSchema, req.body ?? {});
+    const { rowCount } = await query(
+      `UPDATE slide_comment_mentions
+          SET read_at = now()
+        WHERE user_id = $1
+          AND read_at IS NULL
+          AND ($2::uuid[] IS NULL OR presentation_id = ANY($2::uuid[]))`,
+      [req.user!.id, input.presentationIds ?? null],
     );
     if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);

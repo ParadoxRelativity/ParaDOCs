@@ -5,6 +5,7 @@ import type { WorkspacePermission } from './permissions.js';
 import type { WorkItemNotification } from './projects.js';
 import type { ScheduleNotification } from './schedules.js';
 import type { SpreadsheetSummary } from './sheet.js';
+import type { SlideMentionNotification } from './slideComments.js';
 import type { ReleaseInfo } from './version.js';
 
 export interface User {
@@ -529,6 +530,8 @@ export interface Notifications {
   invites: InviteNotification[];
   messages: MessageNotification[];
   mentions: MentionNotification[];
+  /** Comments on slides that name you. Absent from older servers. */
+  slideMentions?: SlideMentionNotification[];
   /** Work items you were given a role on or named in. Absent from older servers. */
   workItems?: WorkItemNotification[];
   /** Null when there is none, or for anyone but a server administrator. Absent from older servers. */

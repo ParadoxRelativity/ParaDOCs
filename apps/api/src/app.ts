@@ -25,6 +25,7 @@ import { spreadsheetRoutes } from './routes/spreadsheets.js';
 import { searchRoutes } from './routes/search.js';
 import { tagRoutes } from './routes/tags.js';
 import { commentRoutes } from './routes/comments.js';
+import { slideCommentRoutes } from './routes/slideComments.js';
 import { channelRoutes } from './routes/channels.js';
 import { voiceRoutes, voiceWebhookRoutes } from './routes/voice.js';
 import { eventRoutes } from './routes/events.js';
@@ -148,6 +149,7 @@ export async function buildApp() {
     searchRoutes,
     tagRoutes,
     commentRoutes,
+    slideCommentRoutes,
     channelRoutes,
     directRoutes,
     presenceRoutes,
