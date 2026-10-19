@@ -55,6 +55,9 @@ contextBridge.exposeInMainWorld('paradocsDesktop', {
     showInMain: (path: string) => ipcRenderer.invoke('desktop:popouts:showInMain', path),
     onChanged: (handler: () => void) => subscribe('desktop:popouts-changed', () => handler()),
   },
+  presenter: {
+    arrange: (swap: boolean) => ipcRenderer.invoke('desktop:presenter:arrange', swap),
+  },
   notifications: {
     list: () => ipcRenderer.invoke('desktop:notifications:list'),
     changed: (state: { quiet: boolean; openChannelId: string | null; workspaceId: string | null }) =>

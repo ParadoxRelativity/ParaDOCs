@@ -33,3 +33,4 @@ export * from './types.js';
 export * from './version.js';
 export * from './slideShow.js';
 export * from './slideLive.js';
+export * from './presenter.js';
