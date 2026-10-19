@@ -90,6 +90,7 @@ import type {
   WorkItemSummary,
   WorkItemTimeline,
   CreateLayerInput,
+  PresentationSearchHit,
   ScheduleSearchHit,
   CreateOverrideInput,
   CreateRequestInput,
@@ -923,7 +924,7 @@ export function useDeleteDocument(workspaceId: string) {
 export function useLinkTargets(
   workspaceId: string | undefined,
   q: string,
-  options: { kinds?: ('documents' | 'spreadsheets')[]; limit?: number; enabled?: boolean } = {},
+  options: { kinds?: ('documents' | 'spreadsheets' | 'presentations')[]; limit?: number; enabled?: boolean } = {},
 ) {
   const kinds = (options.kinds ?? ['documents', 'spreadsheets']).join(',');
   const limit = options.limit ?? 20;
@@ -1915,6 +1916,8 @@ export interface SearchResults {
   workItems?: WorkItemSearchHit[];
   /** Absent from servers that predate Schedules. */
   schedules?: ScheduleSearchHit[];
+  /** Absent from servers that predate Slides search. */
+  presentations?: PresentationSearchHit[];
   query: string;
 }
 

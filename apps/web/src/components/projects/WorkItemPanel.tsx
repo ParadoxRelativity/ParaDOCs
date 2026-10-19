@@ -71,6 +71,7 @@ export interface ProjectNavigation {
   onOpenChannel: (id: string) => void;
   onOpenWorkItem: (item: { id: string; projectId: string }) => void;
   onOpenProject?: (project: { id: string; kind: ProjectKind }) => void;
+  onOpenPresentation?: (presentation: { id: string }, slideId?: string) => void;
 }
 
 const FIELD =

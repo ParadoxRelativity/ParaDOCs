@@ -287,6 +287,25 @@ export interface SheetSearchHit {
   rank: number;
 }
 
+/**
+ * A presentation that matched a search. When what matched is on a slide, which
+ * one, so the result can open the deck there and say so.
+ */
+export interface PresentationSearchHit {
+  id: string;
+  title: string;
+  icon: string | null;
+  updatedAt: string;
+  /** Highlighted snippet from the slide, with <mark> around matches. */
+  snippet: string;
+  rank: number;
+  /** The slide that matched, counted from 1, or null when only the title did. */
+  slide: number | null;
+  slideId: string | null;
+  /** The match is in that slide's speaker notes rather than on the slide. */
+  inNotes: boolean;
+}
+
 /** A work item that matched a search. */
 /** A schedule found by name or description. */
 export interface ScheduleSearchHit {

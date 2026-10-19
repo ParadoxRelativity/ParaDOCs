@@ -7,6 +7,7 @@ import {
   directPeople,
   isGroupDirect,
   parseMentionHref,
+  presentationPath,
   projectPath,
   type Channel,
   type PresenceStatus,
@@ -1051,6 +1052,7 @@ function Workspace({
                 onOpenWorkItem={(item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
                 onOpenProject={(project) => navigate(projectPath(workspaceId, project.id, project.kind))}
                 onOpenSchedule={(schedule) => navigate(`/w/${workspaceId}/sc/${schedule.id}`)}
+                onOpenPresentation={(deck, slideId) => navigate(presentationPath(workspaceId, deck.id, slideId))}
               />
             ) : channelId && directs.isLoading ? (
               <Spinner />
@@ -1070,6 +1072,7 @@ function Workspace({
                   onOpenChannel: (id) => navigate(`/w/${workspaceId}/c/${id}`),
                   onOpenWorkItem: (item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`),
                   onOpenProject: (project) => navigate(projectPath(workspaceId, project.id, project.kind)),
+                  onOpenPresentation: (deck, slideId) => navigate(presentationPath(workspaceId, deck.id, slideId)),
                 }}
                 onOpenProject={(id) => navigate(`/w/${workspaceId}/p/${id}`)}
                 onOpenItem={(project, item) => navigate(`/w/${workspaceId}/p/${project}/${item}`)}
@@ -1222,6 +1225,7 @@ function Workspace({
             appOn('projects') ? (hit) => show(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
           }
           onSelectSchedule={appOn('schedules') ? (hit) => show(`/w/${workspaceId}/sc/${hit.id}`) : undefined}
+          onSelectPresentation={appOn('slides') ? (hit) => show(presentationPath(workspaceId, hit.id, hit.slideId ?? undefined)) : undefined}
         />
       )}
 

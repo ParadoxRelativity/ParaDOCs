@@ -4,7 +4,9 @@ import {
   documentRef,
   memberRef,
   parseMessage,
+  presentationRef,
   projectRef,
+  scheduleRef,
   spreadsheetRef,
   workItemRef,
   type MessageReferences,
@@ -19,7 +21,7 @@ import {
 } from '../../api/hooks';
 import { cx, useDebounced } from '../../lib/util';
 import Avatar from '../Avatar';
-import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
+import Icon, { DocumentIcon, PresentationIcon, SpreadsheetIcon } from '../Icon';
 import { INSERTED_REF, WORK_ITEM_TRIGGER, matchProjects, projectLabel } from '../chat/MessageComposer';
 import { Button } from '../ui';
 
@@ -103,6 +105,14 @@ function toDisplay(body: string, references: MessageReferences | undefined): { t
         const project = (refs.projects ?? []).find((p) => p.id === segment.id);
         label = project && projectLabel(project);
         token = projectRef(segment.id);
+      } else if (segment.type === 'presentation') {
+        const title = (refs.presentations ?? []).find((p) => p.id === segment.id)?.title;
+        label = title !== undefined ? `[[${title || 'Untitled'}]]` : undefined;
+        token = presentationRef(segment.id, segment.slideId);
+      } else if (segment.type === 'schedule') {
+        const name = (refs.schedules ?? []).find((s) => s.id === segment.id)?.name;
+        label = name !== undefined ? `[[${name}]]` : undefined;
+        token = scheduleRef(segment.id);
       } else {
         const key = (refs.workItems ?? []).find((i) => i.id === segment.id)?.key;
         label = key && `${WORK_ITEM_TRIGGER}${key}`;
@@ -150,6 +160,7 @@ export default function ReferenceEditor({
 
   const docsOn = useAppEnabled(workspaceId, 'docs');
   const sheetsOn = useAppEnabled(workspaceId, 'sheets');
+  const slidesOn = useAppEnabled(workspaceId, 'slides');
   const chatOn = useAppEnabled(workspaceId, 'chat');
   const linking = trigger?.kind === 'link';
   const itemSearch = trigger?.kind === 'item';
@@ -158,7 +169,10 @@ export default function ReferenceEditor({
   // Searched on the server as the name is typed, so nothing is out of reach
   // however many documents and spreadsheets the workspace holds.
   const linkQuery = useDebounced(linking ? trigger.query.trim() : '', 150);
-  const targets = useLinkTargets(linking && (docsOn || sheetsOn) ? workspaceId : undefined, linkQuery, { limit: 4 });
+  const targets = useLinkTargets(linking && (docsOn || sheetsOn || slidesOn) ? workspaceId : undefined, linkQuery, {
+    limit: 4,
+    kinds: ['documents', 'spreadsheets', ...(slidesOn ? (['presentations'] as const) : [])],
+  });
   const workItems = useWorkItemListing(itemSearch ? workspaceId : undefined, {
     q: itemSearch ? trigger.query || undefined : undefined,
     limit: LIMIT,
@@ -225,7 +239,15 @@ export default function ReferenceEditor({
       insert: `[[${s.title || 'Untitled'}]]`,
       token: spreadsheetRef(s.id),
     }));
-    return [...docs, ...sheets].slice(0, LIMIT);
+    const decks = (targets.data?.presentations ?? []).filter((p) => matches(p.title)).slice(0, 3).map((p) => ({
+      id: p.id,
+      icon: <PresentationIcon presentation={p} />,
+      label: p.title || 'Untitled',
+      hint: 'Presentation',
+      insert: `[[${p.title || 'Untitled'}]]`,
+      token: presentationRef(p.id),
+    }));
+    return [...docs, ...sheets, ...decks].slice(0, LIMIT);
   }, [trigger, members.data, channels.data, targets.data, workItems.data, projects.data]);
 
   useLayoutEffect(() => {
@@ -358,7 +380,7 @@ export default function ReferenceEditor({
 
       <div className="mt-1.5 flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--color-muted)]">
-          @ people · # channels · [[ documents and spreadsheets · {WORK_ITEM_TRIGGER} work items and boards · ⌘↵ to save
+          @ people · # channels · [[ documents, spreadsheets and presentations · {WORK_ITEM_TRIGGER} work items and boards · ⌘↵ to save
         </span>
         {onCancel && (
           <Button variant="subtle" className="text-xs" onClick={onCancel} disabled={saving}>

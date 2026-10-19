@@ -53,6 +53,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
   const workItems = new Map((a.workItems ?? []).map((i) => [i.id, i]));
   const projects = new Map((a.projects ?? []).map((p) => [p.id, p]));
   const schedules = new Map((a.schedules ?? []).map((s) => [s.id, s]));
+  const presentations = new Map((a.presentations ?? []).map((p) => [p.id, p]));
   for (const d of b.documents) documents.set(d.id, d);
   for (const s of b.spreadsheets) spreadsheets.set(s.id, s);
   for (const c of b.channels) channels.set(c.id, c);
@@ -60,6 +61,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
   for (const i of b.workItems ?? []) workItems.set(i.id, i);
   for (const p of b.projects ?? []) projects.set(p.id, p);
   for (const s of b.schedules ?? []) schedules.set(s.id, s);
+  for (const p of b.presentations ?? []) presentations.set(p.id, p);
   return {
     documents: [...documents.values()],
     spreadsheets: [...spreadsheets.values()],
@@ -68,6 +70,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
     workItems: [...workItems.values()],
     projects: [...projects.values()],
     schedules: [...schedules.values()],
+    presentations: [...presentations.values()],
   };
 }
 

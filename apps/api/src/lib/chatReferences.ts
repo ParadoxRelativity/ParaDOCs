@@ -4,13 +4,22 @@ import {
   type DocumentReference,
   type MemberReference,
   type MessageReferences,
+  type PresentationReference,
   type ProjectReference,
   type ScheduleReference,
   type SpreadsheetReference,
   type WorkItemReference,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql, roleIdSql, scheduleLevelSql, spreadsheetLevelSql } from './access.js';
+import {
+  channelLevelSql,
+  documentLevelSql,
+  presentationLevelSql,
+  projectLevelSql,
+  roleIdSql,
+  scheduleLevelSql,
+  spreadsheetLevelSql,
+} from './access.js';
 import { appEnabledSql } from './apps.js';
 
 export type {
@@ -18,13 +27,14 @@ export type {
   DocumentReference,
   MemberReference,
   MessageReferences,
+  PresentationReference,
   ProjectReference,
   SpreadsheetReference,
   WorkItemReference,
 };
 
 /**
- * Resolves the `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>`, `<#…>` and `<@…>` tokens in
+ * Resolves the `<doc:…>`, `<sheet:…>`, `<deck:…>`, `<item:…>`, `<proj:…>`, `<#…>` and `<@…>` tokens in
  * a batch of message bodies — or anything else written the same way, such as a
  * work item's description and comments.
  *
@@ -44,14 +54,16 @@ export async function resolveReferences(
   workspaceId: string,
   viewerId: string | null,
 ): Promise<MessageReferences> {
-  const { documentIds, spreadsheetIds, workItemIds, projectIds, scheduleIds, channelIds, userIds } = collectReferences(bodies);
-  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [], projects: [], schedules: [] };
+  const { documentIds, spreadsheetIds, workItemIds, projectIds, scheduleIds, presentationIds, channelIds, userIds } =
+    collectReferences(bodies);
+  const empty: MessageReferences = { documents: [], spreadsheets: [], channels: [], members: [], workItems: [], projects: [], schedules: [], presentations: [] };
   if (
     documentIds.length === 0 &&
     spreadsheetIds.length === 0 &&
     workItemIds.length === 0 &&
     projectIds.length === 0 &&
     scheduleIds.length === 0 &&
+    presentationIds.length === 0 &&
     channelIds.length === 0 &&
     userIds.length === 0
   ) {
@@ -61,7 +73,7 @@ export async function resolveReferences(
   const viewerRole = roleIdSql('$3', '$2');
   const viewer = viewerId ? [viewerId] : [];
 
-  const [documents, spreadsheets, channels, members, workItems, projects, schedules] = await Promise.all([
+  const [documents, spreadsheets, channels, members, workItems, projects, schedules, presentations] = await Promise.all([
     documentIds.length
       ? query<DocumentReference>(
           `SELECT d.id, d.title, d.icon, d.mode FROM documents d
@@ -121,9 +133,19 @@ export async function resolveReferences(
           [scheduleIds, workspaceId, ...viewer],
         ).then((r) => r.rows)
       : Promise.resolve([]),
+    presentationIds.length
+      ? // Held to what the reader may see, and gone with the app. An archived
+        // deck still resolves: the link to it is history.
+        query<PresentationReference>(
+          `SELECT p.id, p.title, p.icon FROM presentations p
+            WHERE p.id = ANY($1::uuid[]) AND p.workspace_id = $2 AND ${appEnabledSql('$2', 'slides')}
+              AND ${viewerId ? `${presentationLevelSql('$3', viewerRole)} > 0` : 'document_is_open(p.access, p.folder_id)'}`,
+          [presentationIds, workspaceId, ...viewer],
+        ).then((r) => r.rows)
+      : Promise.resolve([]),
   ]);
 
-  return { documents, spreadsheets, channels, members, workItems, projects, schedules };
+  return { documents, spreadsheets, channels, members, workItems, projects, schedules, presentations };
 }
 
 /**

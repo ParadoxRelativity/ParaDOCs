@@ -20,6 +20,7 @@ import Icon from './Icon';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
 import { ProjectPicker, WorkItemPicker } from './projects/WorkItemRefs';
 import { SchedulePicker } from './schedules/SchedulePicker';
+import { PresentationPicker } from './slides/PresentationPicker';
 import { copyEditorSelection } from '../lib/documentClipboard';
 import { suggestionMenuPosition } from '../lib/suggestionMenuPosition';
 import { assetUrl, serverPath } from '../lib/server';
@@ -139,6 +140,8 @@ function EditorSurface({
   const projectsOn = useAppEnabled(workspaceId, 'projects');
   const schedulesOn = useAppEnabled(workspaceId, 'schedules');
   const [schedulePicker, setSchedulePicker] = useState(false);
+  const slidesOn = useAppEnabled(workspaceId, 'slides');
+  const [presentationPicker, setPresentationPicker] = useState(false);
   const [itemPicker, setItemPicker] = useState(false);
   const [projectPicker, setProjectPicker] = useState(false);
   const channels = useChannels(chatOn ? workspaceId : undefined);
@@ -337,6 +340,18 @@ function EditorSurface({
                           },
                         ]
                       : []),
+                    ...(slidesOn
+                      ? [
+                          {
+                            title: 'Presentation',
+                            subtext: 'Link a slide deck',
+                            aliases: ['presentation', 'slides', 'deck', 'slideshow', 'powerpoint'],
+                            group: 'Slides',
+                            icon: <span aria-hidden>▭</span>,
+                            onItemClick: () => setPresentationPicker(true),
+                          },
+                        ]
+                      : []),
                     ...(schedulesOn
                       ? [
                           {
@@ -423,6 +438,26 @@ function EditorSurface({
               editor.focus();
               editor.insertInlineContent([
                 { type: 'workItem', props: { itemId: item.id, label: `${item.key} ${item.title}` } },
+                ' ',
+              ]);
+            }}
+          />
+        )}
+        {presentationPicker && (
+          <PresentationPicker
+            workspaceId={workspaceId}
+            confirmLabel="Insert"
+            onCancel={() => {
+              setPresentationPicker(false);
+              editor.focus();
+            }}
+            onPick={(presentation) => {
+              setPresentationPicker(false);
+              editor.focus();
+              // A link, as a schedule is: opening it asks the server, which says
+              // not found once access or the app is gone.
+              editor.insertInlineContent([
+                { type: 'link', href: `/w/${workspaceId}/sl/${presentation.id}`, content: presentation.title || 'Untitled' },
                 ' ',
               ]);
             }}
