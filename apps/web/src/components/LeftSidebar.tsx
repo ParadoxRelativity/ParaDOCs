@@ -52,6 +52,7 @@ import { useToast } from './Toast';
 import { useDocumentImport } from './ImportDocument';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
+import { PresentationList } from './slides/PresentationList';
 import { ProjectList } from './projects/ProjectList';
 import { ScheduleList } from './schedules/ScheduleList';
 import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
@@ -94,6 +95,11 @@ interface Props {
   onSelectSheet: (id: string) => void;
   /** A spreadsheet was deleted from the list, so anything showing it must move off. */
   onSheetDeleted: (id: string) => void;
+  /** The presentation open in the Slides app, if any. */
+  activePresentationId: string | null;
+  onSelectPresentation: (id: string) => void;
+  /** A presentation was deleted from the list, so anything showing it must move off. */
+  onPresentationDeleted: (id: string) => void;
   /** The project open in the Projects app, or null for My work. */
   activeProjectId: string | null;
   onSelectProject: (id: string) => void;
@@ -407,6 +413,15 @@ export default function LeftSidebar(props: Props) {
           myWorkCount={props.myWorkCount}
           onOpenMyWork={props.onOpenMyWork}
           onSelect={props.onSelectProject}
+        />
+      ) : props.section === 'slides' ? (
+        <PresentationList
+          workspaceId={workspaceId}
+          activePresentationId={props.activePresentationId}
+          can={props.can}
+          canManageAccess={props.canManageAccess}
+          onSelect={props.onSelectPresentation}
+          onDeleted={props.onPresentationDeleted}
         />
       ) : props.section === 'sheets' ? (
         <SheetList

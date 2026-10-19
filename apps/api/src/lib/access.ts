@@ -357,6 +357,19 @@ export async function assertSpreadsheetAccess(
   return access;
 }
 
+/** The same for a presentation. */
+export async function assertPresentationAccess(
+  req: FastifyRequest,
+  presentationId: string,
+  need: 'view' | 'edit' | 'delete' = 'view',
+): Promise<ResourceAccess> {
+  if (!req.user) throw unauthorized();
+  const access = await presentationAccess(req.user.id, presentationId);
+  if (!access) throw notFound('Presentation not found');
+  if (need !== 'view') assertMayChange(access, `slides.${need}`, 'slides.edit', 'this presentation');
+  return access;
+}
+
 /**
  * Checks someone may do `action` in a project or queue they can see. Anything
  * past viewing needs their role to allow it there — projects and queues are

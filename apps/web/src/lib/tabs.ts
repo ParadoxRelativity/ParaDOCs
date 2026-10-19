@@ -21,7 +21,7 @@ import { randomId } from './util';
  * it survives walking off to read a document.
  */
 
-export type TabKind = 'page' | 'canvas' | 'sheet' | 'chat' | 'project' | 'schedule' | 'all' | 'access' | 'home';
+export type TabKind = 'page' | 'canvas' | 'sheet' | 'slides' | 'chat' | 'project' | 'schedule' | 'all' | 'access' | 'home';
 
 export interface Tab {
   id: string;
@@ -51,7 +51,7 @@ const STORAGE_KEY = 'paradocs.tabs';
 
 const UUID = '[0-9a-fA-F-]{36}';
 const WORKSPACE_PATH = new RegExp(
-  `^/w/(${UUID})(?:/(d|c|s|sc|all)(?:/(${UUID}))?|/(access|people)(?:/[a-z]+)?|/(p)(?:/${UUID}(?:/${UUID})?)?)?/?$`,
+  `^/w/(${UUID})(?:/(d|c|s|sl|sc|all)(?:/(${UUID}))?|/(access|people)(?:/[a-z]+)?|/(p)(?:/${UUID}(?:/${UUID})?)?)?/?$`,
 );
 
 /** What a path is, as far as a tab is concerned. Null for anything not tabbable. */
@@ -68,6 +68,8 @@ export function describePath(path: string): { workspaceId: string; kind: TabKind
   if (section === 'c') return { workspaceId, kind: 'chat' };
   // Spreadsheets are their own app, under their own letter.
   if (section === 's') return { workspaceId, kind: 'sheet' };
+  // Presentations, under theirs.
+  if (section === 'sl') return { workspaceId, kind: 'slides' };
   if (section === 'sc') return { workspaceId, kind: 'schedule' };
   if (section === 'all') return { workspaceId, kind: 'all' };
   return { workspaceId, kind: 'home' };

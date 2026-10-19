@@ -166,7 +166,7 @@ export interface InvitePreview {
 export interface Folder {
   id: string;
   workspaceId: string;
-  /** Which tree it is in: documents, or spreadsheets. */
+  /** Which tree it is in: documents, spreadsheets, or presentations. */
   app: FolderApp;
   parentId: string | null;
   name: string;
@@ -198,6 +198,12 @@ export interface FolderNode extends Folder {
 export interface SheetFolderNode extends Omit<FolderNode, 'children' | 'documentCount'> {
   children: SheetFolderNode[];
   spreadsheetCount: number;
+}
+
+/** A folder in the Slides tree, with how many presentations are filed in it. */
+export interface SlideFolderNode extends Omit<FolderNode, 'children' | 'documentCount'> {
+  children: SlideFolderNode[];
+  presentationCount: number;
 }
 
 /**

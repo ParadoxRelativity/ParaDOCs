@@ -318,6 +318,8 @@ export function useChatEvents({
           // Ids only, as with projects: the sidebar and listings ask again.
           if (event.app === 'sheets') {
             void qc.invalidateQueries({ queryKey: keys.sheetTree(event.workspaceId) });
+          } else if (event.app === 'slides') {
+            void qc.invalidateQueries({ queryKey: keys.slideTree(event.workspaceId) });
           } else {
             void qc.invalidateQueries({ queryKey: keys.tree(event.workspaceId) });
             void qc.invalidateQueries({ queryKey: ['allDocuments', event.workspaceId] });
@@ -385,6 +387,7 @@ export function useChatEvents({
     void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
+    void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
   }, [status, workspaceId, qc]);
 
   // Another tab may have been the one to ask.

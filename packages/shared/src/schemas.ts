@@ -97,7 +97,7 @@ export const updateWorkspaceSchema = createWorkspaceSchema.partial().extend({
     .optional(),
 });
 
-export const folderAppSchema = z.enum(['docs', 'sheets']);
+export const folderAppSchema = z.enum(['docs', 'sheets', 'slides']);
 
 export const createFolderSchema = z.object({
   name: z.string().min(1).max(120),
@@ -308,5 +308,28 @@ export const updateSpreadsheetSchema = z.object({
   icon: z.string().trim().max(8).nullish(),
   archived: z.boolean().optional(),
   /** Pass null to take it out of its folder; omit to leave it where it is. */
+  folderId: uuid.nullish(),
+});
+
+// --- presentations -----------------------------------------------------------
+
+export const createPresentationSchema = z.object({
+  title: z.string().trim().max(200).optional(),
+  icon: z.string().trim().max(8).nullish(),
+  /** A Slides folder to file it in. */
+  folderId: uuid.nullish(),
+});
+
+export const updatePresentationSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  icon: z.string().trim().max(8).nullish(),
+  archived: z.boolean().optional(),
+  /** Pass null to take it out of its folder; omit to leave it where it is. */
+  folderId: uuid.nullish(),
+});
+
+/** Copies are filed beside the original unless told otherwise. */
+export const duplicatePresentationSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
   folderId: uuid.nullish(),
 });
