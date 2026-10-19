@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   NOTES_SIZE_DEFAULT,
   clampNotesSize,
+  describeNextBuild,
   formatDuration,
   nextPreview,
   pauseTimer,
@@ -367,6 +368,13 @@ function PresenterBody({ controller, theme, size: slideSize, slides, ydoc, exit,
                   ) : null
                 }
               </Preview>
+            )}
+            {upcoming === 'build' && slide && (
+              <ul className="mt-1 text-xs text-[var(--color-muted)]">
+                {describeNextBuild(slide, step).map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
             )}
           </div>
 
