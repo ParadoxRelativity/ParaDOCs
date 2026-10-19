@@ -3,6 +3,7 @@ import type * as Y from 'yjs';
 import {
   resolveSlideColor,
   type CanvasElement,
+  type DeckSnapshot,
   type SlideElement,
   type SlideElementType,
   type SlideSnapshot,
@@ -123,6 +124,8 @@ export interface SlideEditorContext {
   /** Selected elements on the current slide. */
   selection: SlideElement[];
   theme: Theme;
+  /** The whole deck as last read: settings, themes, layouts and master among them. */
+  deck: DeckSnapshot;
   /** Every edit the editor makes, scoped to this person's undo history. */
   actions: SlidesActions;
   /** Selects elements on the stage (replacing the selection), e.g. the one just inserted. */

@@ -1017,7 +1017,8 @@ export function usePresentationDeck(id: string | undefined) {
 export function useCreatePresentation(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { title?: string; folderId?: string | null } = {}) =>
+    // `themeId` starts the deck from a starter theme with a first Title slide.
+    mutationFn: (input: { title?: string; folderId?: string | null; themeId?: string } = {}) =>
       api.post<PresentationSummary>(`/workspaces/${workspaceId}/presentations`, input),
     onSuccess: (deck) => {
       qc.setQueryData(keys.presentation(deck.id), deck);

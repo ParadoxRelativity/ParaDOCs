@@ -19,7 +19,7 @@ import type { PeerSlideState } from '../../lib/slidesPresence';
 import type { SlidesActions } from '../../lib/slidesStore';
 import { cx } from '../../lib/util';
 import PeerCursors from '../canvas/PeerCursors';
-import { elementBoxStyle, slideBackgroundStyle } from './SlideView';
+import { SlideFrameLayer, elementBoxStyle, slideBackgroundStyle } from './SlideView';
 import { SlideDocContext, slideElementRenderer } from './slideExtensions';
 
 /** Grid spacing in slide units; moves snap to it while the grid is on. */
@@ -349,6 +349,8 @@ export default memo(function SlideStage({
                 }}
               />
             )}
+
+            <SlideFrameLayer slide={slide} theme={theme} />
 
             {slide.elements.map((element) => (
               <StageElement

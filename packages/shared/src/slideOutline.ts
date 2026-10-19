@@ -158,13 +158,11 @@ export function parseOutline(text: string): OutlineSlide[] {
   return slides;
 }
 
-const SIZES: Partial<Record<LayoutPlaceholder['kind'], number>> = { title: 64, subtitle: 36, body: 32 };
-
-/** An outline line as a rich text paragraph: a bullet with its depth, text at the placeholder's size. */
-function paragraph(text: string, size?: number, item?: OutlineItem): RichParagraph {
+/** An outline line as a rich text paragraph: a bullet with its depth. Its size and style come from the placeholder. */
+function paragraph(text: string, item?: OutlineItem): RichParagraph {
   return {
     ...(item?.bullet ? { bullet: 'bullet' as const, ...(item.level > 0 ? { level: item.level } : {}) } : {}),
-    runs: [size ? { text, marks: { fontSize: size } } : { text }],
+    runs: [{ text }],
   };
 }
 
@@ -198,14 +196,11 @@ export function addOutlineSlides(doc: Y.Doc, slides: OutlineSlide[], index?: num
         setSlideElement(doc, id, {
           id: crypto.randomUUID(),
           type: 'richText',
+          // No position or size: the box inherits both from the layout's placeholder, so editing the layout moves it.
           placeholder: slot.id,
-          x: slot.x,
-          y: slot.y,
-          width: slot.width,
-          height: slot.height,
           z,
-          paragraphs: items.map((item) => paragraph(item.text, SIZES[kind], item)),
-        });
+          paragraphs: items.map((item) => paragraph(item.text, item)),
+        } as unknown as SlideElement);
       };
       place('title', outline.title ? [{ text: outline.title, bullet: false, level: 0 }] : [], 1);
       place(subtitleOnly ? 'subtitle' : 'body', outline.items, 2);

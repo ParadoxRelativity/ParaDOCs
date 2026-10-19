@@ -38,6 +38,23 @@ describe('presentation routes', () => {
     expect(await titles(viewer)).toContain('Kickoff');
   });
 
+  it('starts from a starter theme with a first Title slide, and from nothing when none is named', async () => {
+    const themed = await create(editor, { title: 'Dark deck', themeId: 'midnight' });
+    expect(themed.status).toBe(201);
+    const deck = (await api.call(editor, 'GET', `/presentations/${themed.body.id}/deck`)).body;
+    expect(deck.settings.themeId).toBe('midnight');
+    expect(deck.themes.map((t: { id: string }) => t.id)).toEqual(['midnight']);
+    expect(deck.layouts).toHaveLength(8);
+    expect(deck.slides).toHaveLength(1);
+    expect(deck.slides[0]).toMatchObject({ layoutId: 'title' });
+    expect(deck.slides[0].frame.background).toMatchObject({ kind: 'color' });
+
+    const blank = await create(editor, { title: 'Blank deck' });
+    const empty = (await api.call(editor, 'GET', `/presentations/${blank.body.id}/deck`)).body;
+    expect(empty.slides).toEqual([]);
+    expect(empty.settings.themeId).toBe('default');
+  });
+
   it('needs slides.create to create, and slides.edit to change', async () => {
     expect((await create(viewer)).status).toBe(403);
     const made = await create(owner, { title: 'Locked down' });

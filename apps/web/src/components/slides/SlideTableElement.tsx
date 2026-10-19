@@ -36,7 +36,7 @@ function cellStyle(table: TableElement, cell: TableCell | undefined, row: number
   return {
     border: borderWidth > 0 ? `${borderWidth}px solid ${borderColor}` : 'none',
     background: fill ? resolveSlideColor(fill, theme) : undefined,
-    color: resolveSlideColor(cell?.color ?? 'theme:dark1', theme),
+    color: resolveSlideColor(cell?.color ?? 'theme:text1', theme),
     fontSize: cell?.fontSize ?? table.fontSize ?? DEFAULT_SIZE,
     fontWeight: cell?.bold || header ? 700 : 400,
     fontStyle: cell?.italic ? 'italic' : undefined,

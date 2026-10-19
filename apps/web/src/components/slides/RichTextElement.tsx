@@ -93,7 +93,7 @@ function Frame({
     };
   }, []);
 
-  const heading = element.placeholder === 'title';
+  const heading = element.placeholderKind === 'title' || element.placeholder === 'title';
   const family = element.fontFamily ?? (heading ? theme.fonts.heading : theme.fonts.body);
   const style: CSSProperties = {
     display: 'flex',
@@ -109,18 +109,18 @@ function Frame({
     lineHeight: element.lineSpacing ?? DEFAULT_LINE_SPACING,
     // Set outright: a thumbnail sits in a button that centres, a slide in a page that does not, and the text must not depend on either.
     textAlign: element.align ?? 'left',
-    fontWeight: 400,
-    fontStyle: 'normal',
+    fontWeight: element.bold ? 700 : 400,
+    fontStyle: element.italic ? 'italic' : 'normal',
     letterSpacing: 'normal',
     textTransform: 'none',
-    color: resolveSlideColor(element.color ?? 'theme:dark1', theme),
+    color: resolveSlideColor(element.color ?? 'theme:text1', theme),
     background: element.fill && element.fill !== 'transparent' ? resolveSlideColor(element.fill, theme) : undefined,
     border: element.stroke ? `${element.strokeWidth ?? 2}px solid ${resolveSlideColor(element.stroke, theme)}` : undefined,
     ['--slide-link' as string]: theme.colors.hyperlink,
   };
   return (
     <div ref={outer} className="slide-text" style={style} data-rich-text>
-      <div ref={inner} style={{ flex: 'none', position: 'relative' }} data-placeholder={!readOnly && empty ? 'Click to add text' : undefined} className={!readOnly && empty ? 'slide-text-empty' : undefined}>
+      <div ref={inner} style={{ flex: 'none', position: 'relative' }} data-placeholder={!readOnly && empty ? (element.prompt ?? 'Click to add text') : undefined} className={!readOnly && empty ? 'slide-text-empty' : undefined}>
         {children}
       </div>
     </div>
