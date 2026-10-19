@@ -45,14 +45,14 @@ export async function syncWorkItemMentions(
   );
 }
 
-export type WorkItemNotificationReason = 'role' | 'mention' | 'comment' | 'status';
+export type WorkItemNotificationReason = 'role' | 'mention' | 'comment' | 'status' | 'escalated';
 
 /**
- * How much a notification matters: being handed an item outranks being named
- * in it, and both outrank hearing that it moved on. An unread notification is
+ * How much a notification matters: being handed an item, or its being
+ * escalated, outranks being named in it, and both outrank hearing that it moved on. An unread notification is
  * only replaced by one that matters as much or more.
  */
-const RANK_SQL = (reason: string) => `CASE ${reason} WHEN 'role' THEN 3 WHEN 'mention' THEN 2 ELSE 1 END`;
+const RANK_SQL = (reason: string) => `CASE ${reason} WHEN 'role' THEN 3 WHEN 'escalated' THEN 3 WHEN 'mention' THEN 2 ELSE 1 END`;
 
 /**
  * What an existing row becomes when another reason arrives for the same person
@@ -68,14 +68,15 @@ const UPSERT_SQL = `
          OR ${RANK_SQL('EXCLUDED.reason')} >= ${RANK_SQL('work_item_notifications.reason')}`;
 
 /**
- * Tells people about a work item: that they were given a role on it, or named
- * in it. Only people who can open its project are told, and nobody is told
- * about their own doing. A new reason brings back a notification already read.
+ * Tells people about a work item: that they were given a role on it, named
+ * in it, or that it was escalated to them or past them. Only people who can
+ * open its project are told, and nobody is told about their own doing. A new
+ * reason brings back a notification already read.
  */
 export async function notifyAboutWorkItem(
   itemId: string,
   userIds: string[],
-  reason: 'role' | 'mention',
+  reason: 'role' | 'mention' | 'escalated',
   detail: string | null,
   /** Who did it, who is not told; null for work that came in from outside. */
   by: string | null,

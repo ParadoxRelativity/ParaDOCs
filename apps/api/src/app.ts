@@ -45,6 +45,7 @@ import { oauthDiscoveryRoutes, oauthRoutes } from './routes/oauth.js';
 import { mcpRoutes } from './mcp/routes.js';
 import { scheduleWorkItemArchiving } from './lib/workItemArchive.js';
 import { scheduleShiftNotices } from './lib/scheduleNotifications.js';
+import { scheduleEscalations } from './lib/escalations.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -177,6 +178,7 @@ export async function buildApp() {
   // puts finished work away too.
   scheduleWorkItemArchiving(app);
   scheduleShiftNotices(app);
+  scheduleEscalations(app);
 
   return app;
 }

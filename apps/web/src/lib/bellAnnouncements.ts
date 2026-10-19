@@ -21,6 +21,8 @@ function workItemTitle(item: WorkItemNotification): string {
       return `${by} commented on ${item.key}`;
     case 'status':
       return item.status ? `${by} moved ${item.key} to ${item.status}` : `${by} changed the status of ${item.key}`;
+    case 'escalated':
+      return `${item.key} was escalated`;
     default:
       return `${by} mentioned you in ${item.key}`;
   }
@@ -49,7 +51,7 @@ function announcements(notifications: Notifications): BellAnnouncement[] {
     ...(notifications.workItems ?? []).map((item) => ({
       key: `item:${item.workItemId}:${item.reason}:${item.createdAt}`,
       title: workItemTitle(item),
-      body: item.title,
+      body: item.reason === 'escalated' && item.escalation ? `${item.title} · ${item.escalation}` : item.title,
       path: `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`,
     })),
     ...(notifications.schedules ?? []).map((n) => ({

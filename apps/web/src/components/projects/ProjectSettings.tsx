@@ -27,6 +27,7 @@ import { Button, IconButton } from '../ui';
 import { CATEGORY_ICON, PROJECT_KIND, StatusPill, TypeIcon } from './projectUi';
 import { positionBetween } from './ProjectBoard';
 import IntakeSection from './ProjectIntake';
+import ResponseTimeSection from './ProjectResponseTime';
 import { RuleSection } from './ProjectRules';
 import { SaveTemplateSection } from './ProjectTemplates';
 
@@ -65,6 +66,7 @@ export default function ProjectSettings({
         <StatusCommentSection project={project} canEdit={canEdit} />
         <RuleSection project={project} canEdit={canEdit} />
         <RoleSection project={project} canEdit={canEdit} />
+        {project.kind === 'queue' && <ResponseTimeSection project={project} canEdit={canEdit} />}
         {project.kind === 'project' && <SprintSection project={project} canEdit={canEdit} />}
         <ArchiveSection project={project} canEdit={canEdit} />
         {project.kind === 'queue' && canEdit && <IntakeSection project={project} />}
