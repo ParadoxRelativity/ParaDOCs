@@ -1121,7 +1121,13 @@ function Workspace({
             )
           ) : slides ? (
             presentationId ? (
-              <PresentationView key={presentationId} presentationId={presentationId} />
+              <PresentationView
+                key={presentationId}
+                workspaceId={workspaceId}
+                presentationId={presentationId}
+                self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+                canEdit={openPresentation.data?.permission === 'edit'}
+              />
             ) : (
               <EmptyState icon="easel2" title="No presentation open" />
             )
