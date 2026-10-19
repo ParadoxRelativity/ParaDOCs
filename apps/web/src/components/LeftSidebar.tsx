@@ -60,7 +60,7 @@ import DeleteFolderDialog, { DOCUMENT_NOUN } from './DeleteFolderDialog';
 import ManageTagsDialog from './ManageTagsDialog';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
-export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'projects' | 'schedules' | 'access';
+export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'slides' | 'projects' | 'schedules' | 'access';
 
 interface Props {
   /** The signed-in account, shown at the foot of the sidebar. */
@@ -314,6 +314,7 @@ export default function LeftSidebar(props: Props) {
                 mentions: props.mentionTotal,
               },
               { id: 'sheets', label: 'Sheets', icon: 'table' },
+              { id: 'slides', label: 'Slides', icon: 'easel2' },
               { id: 'projects', label: 'Projects', icon: 'kanban' },
               { id: 'schedules', label: 'Schedules', icon: 'calendar-week' },
               { id: 'access', label: 'Access', icon: 'shield-lock' },

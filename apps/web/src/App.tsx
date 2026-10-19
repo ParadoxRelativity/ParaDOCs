@@ -787,6 +787,8 @@ function Workspace({
               else if (next === 'sheets') navigate(sheetId ? `/w/${workspaceId}/s/${sheetId}` : `/w/${workspaceId}/s`);
               else if (next === 'projects') navigate(projectId ? `/w/${workspaceId}/p/${projectId}` : `/w/${workspaceId}/p`);
               else if (next === 'schedules') navigate(scheduleId ? `/w/${workspaceId}/sc/${scheduleId}` : `/w/${workspaceId}/sc`);
+              // Slides has no page until presentations can be listed and opened.
+              else if (next === 'slides') return;
               else if (next === 'access') navigate(`/w/${workspaceId}/access`);
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}

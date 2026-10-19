@@ -498,6 +498,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const { workspaceId, role, roleId, app: folderApp } = await assertFolderAccess(req, req.params.id, 'delete');
       const deleteContents = req.query.contents === 'delete' || req.query.documents === 'delete';
+      // Presentations arrive with the Slides data model, which adds its entry to FOLDER_CONTENTS.
+      if (folderApp === 'slides') throw notFound('Folder not found');
       const items = FOLDER_CONTENTS[folderApp];
       if (!managesAccess(role)) {
         // Subfolders go with it, so someone who could not change one of them

@@ -27,6 +27,11 @@ export const WORKSPACE_PERMISSIONS = [
   'sheets.edit',
   'sheets.create',
   'sheets.delete',
+  'slides.view',
+  'slides.edit',
+  'slides.create',
+  'slides.delete',
+  'slides.present',
   'chat.view',
   'chat.post',
   'chat.direct',
@@ -69,7 +74,7 @@ export interface PermissionInfo {
 }
 
 export interface PermissionGroup {
-  id: 'docs' | 'sheets' | 'chat' | 'projects' | 'queues' | 'schedules' | 'workspace';
+  id: 'docs' | 'sheets' | 'slides' | 'chat' | 'projects' | 'queues' | 'schedules' | 'workspace';
   label: string;
   permissions: PermissionInfo[];
 }
@@ -106,6 +111,32 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       },
       { id: 'sheets.create', label: 'Create spreadsheets', description: 'Add spreadsheets and folders.', requires: ['sheets.edit'] },
       { id: 'sheets.delete', label: 'Delete spreadsheets', description: 'Delete spreadsheets and folders.', requires: ['sheets.edit'] },
+    ],
+  },
+  {
+    id: 'slides',
+    label: 'Slides',
+    permissions: [
+      {
+        id: 'slides.view',
+        label: 'See presentations',
+        description: 'Open presentations and their folders, present them to themselves and export them.',
+        requires: [],
+      },
+      {
+        id: 'slides.edit',
+        label: 'Edit presentations',
+        description: 'Change slides, notes, themes and layouts, and where presentations are filed.',
+        requires: ['slides.view'],
+      },
+      { id: 'slides.create', label: 'Create presentations', description: 'Add or import presentations and folders.', requires: ['slides.edit'] },
+      { id: 'slides.delete', label: 'Delete presentations', description: 'Delete presentations and folders.', requires: ['slides.edit'] },
+      {
+        id: 'slides.present',
+        label: 'Present live',
+        description: 'Start a live presentation that workspace members can follow.',
+        requires: ['slides.view'],
+      },
     ],
   },
   {
@@ -310,6 +341,7 @@ export const VIEWER_PERMISSIONS: WorkspacePermission[] = [
   'docs.view',
   'docs.comment',
   'sheets.view',
+  'slides.view',
   'chat.view',
   'chat.post',
   'chat.direct',

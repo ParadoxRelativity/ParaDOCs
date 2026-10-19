@@ -18,6 +18,7 @@ import { forbidden } from './http.js';
 const LABELS: Record<WorkspaceApp, string> = {
   docs: 'Docs',
   sheets: 'Sheets',
+  slides: 'Slides',
   chat: 'Chat',
   projects: 'Projects',
   schedules: 'Schedules',
