@@ -42,6 +42,7 @@ import './slideShowLive';
 import './slideContent';
 import { CANVAS_CLIP_MIME, SlideInsertDialogs, parseCanvasClip, pasteCanvasSelection } from './SlideLiveElements';
 import { SlideDesignHost } from './slideDesign';
+import { SlideExportHost } from './slideExport';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -589,6 +590,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
       </div>
 
       <SlideDesignHost ctx={ctx} />
+      <SlideExportHost ctx={ctx} />
 
       {show && (
         <SlideShow

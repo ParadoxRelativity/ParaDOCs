@@ -24,6 +24,7 @@ import { useToast } from '../Toast';
 import { Button, IconButton, InlineIconNameForm, LoadMore, Spinner } from '../ui';
 import Icon from '../Icon';
 import NewPresentationMenu from './NewPresentationMenu';
+import SlideExportDialog from './SlideExportDialog';
 import SheetContextMenu, { type SheetMenuItem } from '../sheet/SheetContextMenu';
 
 /** What a dragged presentation carries, so only a presentation can be dropped on a folder. */
@@ -560,6 +561,7 @@ function FolderPresentations({ folderId, depth, ...props }: RowProps & { folderI
 function PresentationRow({ deck, depth, ...props }: RowProps & { deck: PresentationSummary; depth: number }) {
   const { workspaceId, can, canManageAccess } = props;
   const [confirming, setConfirming] = useState(false);
+  const [exporting, setExporting] = useState<'pptx' | 'pdf' | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const remove = useDeletePresentation(workspaceId);
   const update = useUpdatePresentation(workspaceId);
@@ -571,7 +573,11 @@ function PresentationRow({ deck, depth, ...props }: RowProps & { deck: Presentat
   const path = `/w/${workspaceId}/sl/${deck.id}`;
   const canChange = deck.permission === 'edit';
 
-  const menuItems: SheetMenuItem[] = [];
+  // Taking a copy out needs no more than being able to open the presentation.
+  const menuItems: SheetMenuItem[] = [
+    { label: 'Export to PowerPoint…', icon: 'filetype-pptx', onSelect: () => setExporting('pptx') },
+    { label: 'Export to PDF…', icon: 'filetype-pdf', onSelect: () => setExporting('pdf') },
+  ];
   if (can('slides.create')) {
     menuItems.push({
       label: 'Duplicate',
@@ -673,6 +679,8 @@ function PresentationRow({ deck, depth, ...props }: RowProps & { deck: Presentat
       )}
 
       {menu && <SheetContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+
+      {exporting && <SlideExportDialog presentationId={deck.id} title={deck.title} initialFormat={exporting} onClose={() => setExporting(null)} />}
 
       {confirming && (
         <ConfirmDialog
