@@ -24,6 +24,7 @@ export * from './sheetCompute.js';
 export * from './sheetFormat.js';
 export * from './sheetRefs.js';
 export * from './slideOutline.js';
+export * from './slideComments.js';
 export * from './slides.js';
 export * from './slideGeometry.js';
 export * from './slideEdit.js';

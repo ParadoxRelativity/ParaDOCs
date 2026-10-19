@@ -469,10 +469,12 @@ export function fragmentText(fragment: Y.XmlFragment): string {
     if (node instanceof Y.XmlText) {
       return (node.toDelta() as { insert?: unknown }[]).map((op) => (typeof op.insert === 'string' ? op.insert : '')).join('');
     }
+    // BlockNote nests a line per block inside group and container nodes (speaker notes are written with it); runs inside a block join.
+    const blocks = node instanceof Y.XmlElement && (node.nodeName === 'blockGroup' || node.nodeName === 'blockContainer');
     return node
       .toArray()
       .map((child) => visit(child as Y.XmlElement | Y.XmlText))
-      .join('');
+      .join(blocks ? '\n' : '');
   };
   return fragment
     .toArray()

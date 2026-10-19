@@ -29,6 +29,8 @@ import {
   type SlideEditorContext,
 } from './slideExtensions';
 import './slideBuiltins';
+import './slideNotes';
+import './slideComments';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];

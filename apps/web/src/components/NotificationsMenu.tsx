@@ -5,6 +5,7 @@ import type {
   AccountRequestNotification,
   InviteNotification,
   MentionNotification,
+  SlideMentionNotification,
   MessageNotification,
   MessageReportNotification,
   Notifications,
@@ -14,11 +15,12 @@ import type {
   WorkItemNotification,
   WorkspaceSuspensionNotification,
 } from '@paradocs/shared';
-import { scheduleNotificationText } from '@paradocs/shared';
+import { scheduleNotificationText, slideMentionPath } from '@paradocs/shared';
 import {
   useAcceptInvite,
   useDeclineInvite,
   useMarkMentionsRead,
+  useMarkSlideMentionsRead,
   useMarkNotificationsRead,
   useMarkScheduleNotificationsRead,
   useMarkWorkItemsRead,
@@ -60,6 +62,8 @@ interface Actions {
   openChannel: (message: MessageNotification, newTab: boolean) => void;
   /** Opens the document or canvas someone tagged you in, and clears the tag. */
   openMention: (mention: MentionNotification, newTab: boolean) => void;
+  /** Opens the deck on the slide a comment named you on. Opening it clears the mention. */
+  openSlideMention?: (mention: SlideMentionNotification, newTab: boolean) => void;
   /** Opens a work item you were given a role on or named in. */
   openWorkItem: (item: WorkItemNotification, newTab: boolean) => void;
   /** Opens the schedule a shift notification is about, and clears it. */
@@ -89,6 +93,7 @@ function countOf(notifications: Notifications): number {
     notifications.invites.length +
     notifications.messages.length +
     (notifications.mentions?.length ?? 0) +
+    (notifications.slideMentions?.length ?? 0) +
     (notifications.workItems?.length ?? 0) +
     (notifications.schedules?.length ?? 0) +
     (notifications.serverUpdate ? 1 : 0) +
@@ -185,6 +190,7 @@ export default function NotificationsMenu() {
   const declineInvite = useDeclineInvite();
   const markRead = useMarkNotificationsRead();
   const markMentionsRead = useMarkMentionsRead();
+  const markSlideMentionsRead = useMarkSlideMentionsRead();
   const markWorkItemsRead = useMarkWorkItemsRead();
   const markSchedulesRead = useMarkScheduleNotificationsRead();
   const resolveReport = useResolveReport();
@@ -251,6 +257,13 @@ export default function NotificationsMenu() {
           // Going to look at it is what answers the tag.
           markMentionsRead.mutate([mention.documentId]);
         },
+        openSlideMention: (mention, newTab) => {
+          close();
+          const path = slideMentionPath(mention.workspace.id, mention.presentationId, mention.slideId);
+          if (newTab) openTab(path, mention.title);
+          else navigate(path);
+          markSlideMentionsRead.mutate([mention.presentationId]);
+        },
         openWorkItem: (item, newTab) => {
           close();
           const path = `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`;
@@ -302,6 +315,7 @@ export default function NotificationsMenu() {
             await Promise.all([
               markRead.mutateAsync(undefined),
               markMentionsRead.mutateAsync(undefined),
+              markSlideMentionsRead.mutateAsync(undefined),
               markWorkItemsRead.mutateAsync(undefined),
               markSchedulesRead.mutateAsync(undefined),
             ]);
@@ -339,6 +353,11 @@ export default function NotificationsMenu() {
           close();
           void settle(bridge.notifications.markMentionsRead(connection.id, [mention.documentId]));
           void settle(bridge.connections.open(connection.id, `/w/${mention.workspace.id}/d/${mention.documentId}`));
+        },
+        // The deck marks it read when it opens there.
+        openSlideMention: (mention) => {
+          close();
+          void settle(bridge.connections.open(connection.id, slideMentionPath(mention.workspace.id, mention.presentationId, mention.slideId)));
         },
         // Opening it there is what marks it read, as it is here.
         openWorkItem: (item) => {
@@ -378,6 +397,7 @@ export default function NotificationsMenu() {
     (group) =>
       group.notifications.invites.length > 0 ||
       (group.notifications.mentions?.length ?? 0) > 0 ||
+      (group.notifications.slideMentions?.length ?? 0) > 0 ||
       (group.notifications.workItems?.length ?? 0) > 0 ||
       (group.notifications.schedules ?? []).some((n) => n.reason === 'request' || n.reason === 'approval') ||
       group.notifications.messages.some((m) => m.mentions > 0 || m.direct) ||
@@ -441,6 +461,7 @@ export default function NotificationsMenu() {
 function NotificationGroup({ group, labelled }: { group: Group; labelled: boolean }) {
   const { invites, messages } = group.notifications;
   const mentions = group.notifications.mentions ?? [];
+  const slideMentions = group.notifications.slideMentions ?? [];
   const workItems = group.notifications.workItems ?? [];
   const schedules = group.notifications.schedules ?? [];
   const serverUpdate = group.notifications.serverUpdate ?? null;
@@ -449,7 +470,7 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
   const suspensions = group.notifications.suspensions ?? [];
   const messageReports = group.notifications.messageReports ?? [];
   if (countOf(group.notifications) === 0) return null;
-  const unread = messages.length > 0 || mentions.length > 0 || workItems.length > 0 || schedules.length > 0;
+  const unread = messages.length > 0 || mentions.length > 0 || slideMentions.length > 0 || workItems.length > 0 || schedules.length > 0;
   const heading = labelled && group.connection ? group.connection.label : unread ? 'Unread' : null;
 
   return (
@@ -494,6 +515,13 @@ function NotificationGroup({ group, labelled }: { group: Group; labelled: boolea
           key={mention.documentId}
           mention={mention}
           onOpen={(newTab) => group.actions.openMention(mention, newTab)}
+        />
+      ))}
+      {slideMentions.map((mention) => (
+        <SlideMentionRow
+          key={`${mention.presentationId}:${mention.slideId}`}
+          mention={mention}
+          onOpen={(newTab) => group.actions.openSlideMention?.(mention, newTab)}
         />
       ))}
       {workItems.map((item) => (
@@ -820,6 +848,35 @@ function MentionRow({ mention, onOpen }: { mention: MentionNotification; onOpen:
           <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
             Mentioned you
           </span>
+        </p>
+      </div>
+    </button>
+  );
+}
+
+/** Someone wrote your name in a comment on a slide. */
+function SlideMentionRow({ mention, onOpen }: { mention: SlideMentionNotification; onOpen: (newTab: boolean) => void }) {
+  return (
+    <button onClick={(event) => onOpen(wantsNewTab(event))} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-surface)]">
+      <Avatar
+        name={mention.taggedBy?.name ?? '?'}
+        url={mention.taggedBy?.avatarUrl}
+        seed={mention.taggedBy?.id}
+        size="lg"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
+          <span className="truncate font-medium text-[var(--color-ink)]">
+            <Icon name="easel2" /> {mention.title || 'Untitled'}
+          </span>
+          <span className="truncate">{mention.workspace.name}</span>
+          <span className="ml-auto shrink-0">{formatRelative(mention.createdAt)}</span>
+        </div>
+        <p className="mt-0.5 text-sm">
+          <span className="font-medium">{mention.taggedBy?.name ?? 'Someone'}</span> mentioned you in a comment on a slide
+        </p>
+        <p className="mt-1">
+          <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">Mentioned you</span>
         </p>
       </div>
     </button>

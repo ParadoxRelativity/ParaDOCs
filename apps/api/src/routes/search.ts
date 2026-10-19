@@ -162,7 +162,10 @@ async function searchPresentations(
     const q = `$${params.length}`;
     params.push(input.q!);
     const rawQ = `$${params.length}`;
-    where.push(`(p.search @@ to_tsquery('english', ${q}) OR p.title ILIKE '%' || ${rawQ} || '%')`);
+    // Comments are found too. This search is already limited to decks the reader may open, so a comment is only ever found by someone who could read it.
+    where.push(`(p.search @@ to_tsquery('english', ${q}) OR p.title ILIKE '%' || ${rawQ} || '%'
+      OR EXISTS (SELECT 1 FROM slide_comments sc WHERE sc.presentation_id = p.id
+                  AND to_tsvector('english'::regconfig, sc.body) @@ to_tsquery('english', ${q})))`);
     rankExpr = `ts_rank(p.search, to_tsquery('english', ${q}))`;
     snippetExpr = `ts_headline('english', p.search_text, to_tsquery('english', ${q}),
       'StartSel=<mark>, StopSel=</mark>, MaxWords=28, MinWords=10, ShortWord=2, MaxFragments=1')`;
