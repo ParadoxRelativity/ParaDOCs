@@ -20,6 +20,7 @@ import { teamAccountRoutes } from './routes/teamAccounts.js';
 import { moderationRoutes } from './routes/moderation.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { documentRoutes } from './routes/documents.js';
+import { presentationRoutes } from './routes/presentations.js';
 import { spreadsheetRoutes } from './routes/spreadsheets.js';
 import { searchRoutes } from './routes/search.js';
 import { tagRoutes } from './routes/tags.js';
@@ -138,6 +139,7 @@ export async function buildApp() {
     workspaceRoutes,
     documentRoutes,
     spreadsheetRoutes,
+    presentationRoutes,
     projectRoutes,
     scheduleRoutes,
     scheduleRequestRoutes,

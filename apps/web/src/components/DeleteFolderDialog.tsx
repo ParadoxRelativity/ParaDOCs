@@ -27,6 +27,13 @@ export const SPREADSHEET_NOUN: FolderContentsNoun = {
   alsoLost: ' and everything in them',
 };
 
+export const PRESENTATION_NOUN: FolderContentsNoun = {
+  one: 'presentation',
+  many: 'presentations',
+  keptWhere: 'They move out of any folder, and keep who can see them.',
+  alsoLost: ' and every slide in them',
+};
+
 /**
  * Deleting a folder always takes its subfolders with it. What becomes of what
  * is filed inside is asked each time: keeping it is the safe answer, and

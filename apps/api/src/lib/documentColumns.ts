@@ -1,4 +1,4 @@
-import { documentLevelSql, permissionSql, spreadsheetLevelSql } from './access.js';
+import { documentLevelSql, permissionSql, presentationLevelSql, spreadsheetLevelSql } from './access.js';
 
 /**
  * The column list every document read shares, so the wire shape stays
@@ -33,4 +33,12 @@ export function spreadsheetSummaryColumns(user: string, role: string): string {
   s.id, s.workspace_id AS "workspaceId", s.folder_id AS "folderId", s.title, s.icon,
   s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.archived_at AS "archivedAt",
   s.access, ${permissionSql(spreadsheetLevelSql(user, role))} AS permission`;
+}
+
+/** The same for a presentation, whose table must be aliased `p`. */
+export function presentationSummaryColumns(user: string, role: string): string {
+  return `
+  p.id, p.workspace_id AS "workspaceId", p.folder_id AS "folderId", p.title, p.icon,
+  p.created_at AS "createdAt", p.updated_at AS "updatedAt", p.archived_at AS "archivedAt",
+  p.access, ${permissionSql(presentationLevelSql(user, role))} AS permission`;
 }

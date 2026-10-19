@@ -11,14 +11,16 @@ import {
   type DocumentSummary,
   type FolderApp,
   type FolderNode,
+  type PresentationSummary,
   type SheetFolderNode,
+  type SlideFolderNode,
   type SpreadsheetSummary,
 } from '@paradocs/shared';
 import { query, transaction } from '../db/pool.js';
 import { badRequest, forbidden, notFound, parse } from '../lib/http.js';
 import { decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 import { slugify } from '../lib/auth.js';
-import { documentSummaryColumns, spreadsheetSummaryColumns } from '../lib/documentColumns.js';
+import { documentSummaryColumns, presentationSummaryColumns, spreadsheetSummaryColumns } from '../lib/documentColumns.js';
 import {
   UUID,
   assertFolderAccess,
@@ -377,6 +379,43 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  /** The Slides app's folders, as the Sheets tree is: counts here, the decks a page at a time. */
+  app.get<{ Params: { id: string } }>('/workspaces/:id/slide-tree', async (req) => {
+    const { roleId } = await assertWorkspaceAccess(req, req.params.id, 'slides.view', 'slides');
+
+    const [{ rows: folders }, { rows: counted }] = await Promise.all([
+      query<FolderRow>(
+        `SELECT id, workspace_id, app, parent_id, name, icon, position, created_at, access,
+                ${folderLevelSql('$2', '$3', 'id')} AS level
+           FROM folders WHERE workspace_id = $1 AND app = 'slides' ORDER BY position, name`,
+        [req.params.id, req.user!.id, roleId],
+      ),
+      query<{ folderId: string | null; count: number }>(
+        `SELECT p.folder_id AS "folderId", count(*)::int AS count
+           FROM presentations p
+          WHERE p.workspace_id = $1 AND p.archived_at IS NULL
+            AND ${presentationLevelSql('$2', '$3')} > 0
+          GROUP BY p.folder_id`,
+        [req.params.id, req.user!.id, roleId],
+      ),
+    ]);
+
+    const counts = new Map<string, number>();
+    let unfiledCount = 0;
+    for (const row of counted) {
+      if (row.folderId) counts.set(row.folderId, row.count);
+      else unfiledCount = row.count;
+    }
+    return {
+      folders: buildTree(
+        folders,
+        counts,
+        (f, count): SlideFolderNode => ({ ...folderNodeBase(f), children: [], presentationCount: count }),
+      ),
+      unfiledCount,
+    };
+  });
+
   /**
    * The documents filed in a folder that the reader may see, by title, a page
    * at a time. A folder shown only as the way to something inside it lists
@@ -420,6 +459,29 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
             AND ${spreadsheetLevelSql('$2', '$3')} > 0
             AND ($4::text IS NULL OR (lower(s.title), s.id) > ($4::text, $5::uuid))
           ORDER BY lower(s.title), s.id
+          LIMIT $6`,
+        [req.params.id, req.user!.id, roleId, after?.[0] ?? null, after?.[1] ?? null, limit + 1],
+      );
+      return contentsPage(rows, limit);
+    },
+  );
+
+  /** The same, for the presentations filed in a Slides folder. */
+  app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    '/folders/:id/presentations',
+    async (req): Promise<ContentsPage<PresentationSummary>> => {
+      const folder = await folderOf(req.params.id, 'slides');
+      const { roleId } = await assertWorkspaceAccess(req, folder.workspaceId, 'slides.view', 'slides');
+      const page = parse(contentsPageSchema, req.query ?? {});
+      const limit = page.limit ?? CONTENTS_PAGE_SIZE;
+      const after = page.cursor ? decodeCursor(page.cursor, () => true, isUuid) : null;
+      const { rows } = await query<PresentationSummary & { sortValue: string }>(
+        `SELECT ${presentationSummaryColumns('$2', '$3')}, lower(p.title) AS "sortValue"
+           FROM presentations p
+          WHERE p.folder_id = $1 AND p.archived_at IS NULL
+            AND ${presentationLevelSql('$2', '$3')} > 0
+            AND ($4::text IS NULL OR (lower(p.title), p.id) > ($4::text, $5::uuid))
+          ORDER BY lower(p.title), p.id
           LIMIT $6`,
         [req.params.id, req.user!.id, roleId, after?.[0] ?? null, after?.[1] ?? null, limit + 1],
       );

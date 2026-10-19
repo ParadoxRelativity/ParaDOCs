@@ -36,6 +36,7 @@ import type {
   VideoElement,
   WorkItemElement,
 } from './canvas.js';
+import type { AccessMode, Permission } from './types.js';
 
 /**
  * The collaboration server serves documents, spreadsheets and presentations
@@ -583,4 +584,21 @@ export function deckSearchText(slides: Pick<SlideSnapshot, 'elements' | 'notes'>
     )
     .filter(Boolean)
     .join('\n\n');
+}
+
+/** A presentation as a list shows it. */
+export interface PresentationSummary {
+  id: string;
+  workspaceId: string;
+  /** The Slides folder it is filed in, or null for none. */
+  folderId: string | null;
+  title: string;
+  icon: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+  /** Its own setting; see AccessMode. */
+  access: AccessMode;
+  /** What the signed-in person may do with it: `view` or `edit`. */
+  permission: Permission;
 }
