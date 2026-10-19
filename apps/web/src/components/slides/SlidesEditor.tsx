@@ -33,6 +33,7 @@ import {
 import './slideBuiltins';
 import './slideShowBuiltins';
 import './slideNotes';
+import './presenterView';
 import './slideComments';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
@@ -549,6 +550,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
           theme={theme}
           presentationId={presentation.id}
           workspaceId={workspaceId}
+          ydoc={session.ydoc}
           startId={show.startId}
           onExit={() => setShow(null)}
         />

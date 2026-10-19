@@ -15,6 +15,7 @@ import {
   activeConnectionId,
   broadcast,
   connectionForWebContents,
+  getAppWindow,
   loadedOrigin,
   onActiveChanged,
   openConnection,
@@ -32,6 +33,7 @@ import {
   sendToPopout,
   setPopoutCall,
 } from './popouts.js';
+import { arrangePresenter } from './presenter.js';
 import { buildMenu } from './menu.js';
 import {
   check as checkForUpdates,
@@ -371,6 +373,12 @@ export function registerIpc(): void {
       ? { ok: true }
       : { ok: false, error: `${caller.label} is not open.` };
   });
+
+  /**
+   * The slideshow's two windows go to the two displays: slides on the external
+   * one and the presenter view on this one, or the other way round when `swap`.
+   */
+  handle('desktop:presenter:arrange', (_caller, swap) => arrangePresenter(getAppWindow(), swap === true));
 
   // --- notifications from the other connections ------------------------------
 

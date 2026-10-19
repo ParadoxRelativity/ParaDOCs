@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import type { SlideSnapshot, Theme } from '@paradocs/shared';
+import type * as Y from 'yjs';
+import type { SlideSize, SlideSnapshot, Theme } from '@paradocs/shared';
 import type { SlideShowController } from '../../lib/slideShow';
 
 /**
@@ -37,8 +38,15 @@ export function slideShowSteps(slide: SlideSnapshot): number {
 export interface SlideShowAddonContext {
   controller: SlideShowController;
   theme: Theme;
+  /** The deck's slide size and every slide (hidden ones included), for drawing previews. */
+  size: SlideSize;
+  slides: SlideSnapshot[];
   presentationId: string;
   workspaceId: string;
+  /** The deck's live Y.Doc, for what the show does not carry itself: speaker notes. */
+  ydoc: Y.Doc;
+  /** Toggles the show's full screen, as the F key does (leaving it this way keeps the show going). */
+  toggleFullscreen: () => void;
   /** Leaves the show. */
   exit: () => void;
 }

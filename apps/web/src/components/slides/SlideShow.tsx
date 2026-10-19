@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
+import type * as Y from 'yjs';
 import {
   fitScale,
   showCommandForKey,
@@ -25,6 +26,7 @@ interface Props {
   theme: Theme;
   presentationId: string;
   workspaceId: string;
+  ydoc: Y.Doc;
   /** The slide to begin on; the first shown slide when null or hidden. */
   startId: string | null;
   onExit: () => void;
@@ -53,7 +55,7 @@ interface Leaving {
  * registered in slideShowExtensions.tsx receive: the presenter view, build
  * animations and live following all hang off that.
  */
-export default function SlideShow({ slides, size, theme, presentationId, workspaceId, startId, onExit }: Props) {
+export default function SlideShow({ slides, size, theme, presentationId, workspaceId, ydoc, startId, onExit }: Props) {
   const controller = useSlideShow(slides, startId, slideShowSteps);
   const { slide, blank, state } = controller;
   const root = useRef<HTMLDivElement>(null);
@@ -249,7 +251,7 @@ export default function SlideShow({ slides, size, theme, presentationId, workspa
   const layerStyle = useMemo(() => ({ left: (box.width - width) / 2, top: (box.height - height) / 2, width, height }), [box, width, height]);
 
   const addons = slideShowAddons();
-  const addonContext = { controller, theme, presentationId, workspaceId, exit: onExit };
+  const addonContext = { controller, theme, size, slides, presentationId, workspaceId, ydoc, toggleFullscreen: () => run({ type: 'fullscreen' }), exit: onExit };
 
   return createPortal(
     <div
