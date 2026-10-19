@@ -1806,10 +1806,13 @@ export function useUploadFile(workspaceId: string) {
     mutationFn: async ({
       file,
       documentId,
+      presentationId,
     }: {
       file: File;
       /** Recorded on the attachment so the file is not treated as orphaned. */
       documentId?: string;
+      /** A picture on a slide: served to whoever may open the presentation. */
+      presentationId?: string;
     }): Promise<UploadedFile> => {
       // Refused here as well as on the server, which cuts an oversized upload
       // off partway and cannot always get its explanation back to the browser.
@@ -1822,6 +1825,7 @@ export function useUploadFile(workspaceId: string) {
       // The document id must precede the file: the server reads fields that
       // arrived before the file part.
       if (documentId) body.append('documentId', documentId);
+      if (presentationId) body.append('presentationId', presentationId);
       body.append('file', file);
       const res = await fetch(serverUrl(`/api/workspaces/${workspaceId}/uploads`), {
         method: 'POST',

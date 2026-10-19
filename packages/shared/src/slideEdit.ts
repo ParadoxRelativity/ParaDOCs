@@ -6,7 +6,16 @@
  */
 
 import * as Y from 'yjs';
-import { ELEMENT_BODY_KEY, SLIDE_ELEMENTS_KEY, SLIDE_ORDER, notesFragmentName, slideMapName, type SlideElement } from './slides.js';
+import {
+  ELEMENT_BODY_KEY,
+  SLIDE_ELEMENTS_KEY,
+  SLIDE_ORDER,
+  notesFragmentName,
+  slideMapName,
+  type SlideElement,
+  type TableCell,
+  type TableElement,
+} from './slides.js';
 
 function elementsOf(doc: Y.Doc, slideId: string): Y.Map<Y.Map<unknown>> | null {
   const elements = doc.getMap<unknown>(slideMapName(slideId)).get(SLIDE_ELEMENTS_KEY);
@@ -42,6 +51,89 @@ export function patchSlideElements(
         else map.set(key, value);
       }
     }
+  });
+}
+
+/** The Y.XmlFragment holding a rich text box's text, for an editor to bind to; null if the box is gone. */
+export function richTextBody(doc: Y.Doc, slideId: string, elementId: string): Y.XmlFragment | null {
+  const body = elementsOf(doc, slideId)?.get(elementId)?.get(ELEMENT_BODY_KEY);
+  return body instanceof Y.XmlFragment ? body : null;
+}
+
+/**
+ * Formatting for a whole rich text box, applied without an editor open:
+ * `marks` sets (an object: `{}` for bold, `{ size: 40 }` for a size) or removes
+ * (null) a mark on all its text, `paragraph` sets or removes (null) an
+ * attribute on every paragraph. The same attributes the editor writes.
+ */
+export interface BodyFormat {
+  marks?: Record<string, Record<string, unknown> | null>;
+  paragraph?: Record<string, string | null>;
+}
+
+export function formatRichBody(doc: Y.Doc, slideId: string, elementId: string, format: BodyFormat): void {
+  doc.transact(() => {
+    const body = elementsOf(doc, slideId)?.get(elementId)?.get(ELEMENT_BODY_KEY);
+    if (!(body instanceof Y.XmlFragment)) return;
+    for (const paragraph of body.toArray()) {
+      if (!(paragraph instanceof Y.XmlElement)) continue;
+      for (const [name, value] of Object.entries(format.paragraph ?? {})) {
+        if (value === null) paragraph.removeAttribute(name);
+        else paragraph.setAttribute(name, value);
+      }
+      if (!format.marks) continue;
+      for (const child of paragraph.toArray()) {
+        if (child instanceof Y.XmlText && child.length > 0) child.format(0, child.length, format.marks);
+      }
+    }
+  });
+}
+
+function cellsOf(map: Y.Map<unknown>): Y.Map<TableCell> {
+  const existing = map.get('cells');
+  if (existing instanceof Y.Map) return existing as Y.Map<TableCell>;
+  // A table written whole (a patch) holds its cells as plain data; they become per-cell keys on first edit.
+  const cells = new Y.Map<TableCell>();
+  if (existing && typeof existing === 'object') for (const [key, cell] of Object.entries(existing)) cells.set(key, cell as TableCell);
+  map.set('cells', cells);
+  return cells;
+}
+
+/**
+ * Sets or clears cells of a table, each its own key, so two people typing in
+ * different cells both keep their text. A null clears the cell.
+ */
+export function setTableCells(doc: Y.Doc, slideId: string, elementId: string, changes: Record<string, TableCell | null>): void {
+  doc.transact(() => {
+    const map = elementsOf(doc, slideId)?.get(elementId);
+    if (!map || map.get('type') !== 'table') return;
+    const cells = cellsOf(map);
+    for (const [key, cell] of Object.entries(changes)) {
+      if (cell === null) cells.delete(key);
+      else cells.set(key, cell);
+    }
+  });
+}
+
+/** Replaces a table's structure (rows, columns, weights and every cell) in one step: what inserting, deleting or merging produces. */
+export function setTableStructure(
+  doc: Y.Doc,
+  slideId: string,
+  elementId: string,
+  table: Pick<TableElement, 'rows' | 'columns' | 'cells' | 'columnWidths' | 'rowHeights'>,
+): void {
+  doc.transact(() => {
+    const map = elementsOf(doc, slideId)?.get(elementId);
+    if (!map || map.get('type') !== 'table') return;
+    map.set('rows', table.rows);
+    map.set('columns', table.columns);
+    if (table.columnWidths) map.set('columnWidths', table.columnWidths);
+    else map.delete('columnWidths');
+    if (table.rowHeights) map.set('rowHeights', table.rowHeights);
+    else map.delete('rowHeights');
+    const cells = new Y.Map<TableCell>();
+    for (const [key, cell] of Object.entries(table.cells)) cells.set(key, cell);
+    map.set('cells', cells);
   });
 }
 

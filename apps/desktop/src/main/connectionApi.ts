@@ -287,6 +287,8 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
           documentId: text(mention.documentId),
           title: text(mention.title, 'Untitled').slice(0, 200),
           mode: mention.mode === 'canvas' ? ('canvas' as const) : ('page' as const),
+          ...(mention.app === 'slides' ? { app: 'slides' as const } : {}),
+          ...(typeof mention.path === 'string' && mention.path.startsWith('/w/') ? { path: mention.path.slice(0, 300) } : {}),
           workspace: await workspace(mention.workspace),
           taggedBy: author
             ? {

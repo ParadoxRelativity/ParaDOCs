@@ -245,7 +245,7 @@ export default function NotificationsMenu() {
         },
         openMention: (mention, newTab) => {
           close();
-          const path = `/w/${mention.workspace.id}/d/${mention.documentId}`;
+          const path = mention.path ?? `/w/${mention.workspace.id}/d/${mention.documentId}`;
           if (newTab) openTab(path, mention.title);
           else navigate(path);
           // Going to look at it is what answers the tag.
@@ -338,7 +338,7 @@ export default function NotificationsMenu() {
         openMention: (mention) => {
           close();
           void settle(bridge.notifications.markMentionsRead(connection.id, [mention.documentId]));
-          void settle(bridge.connections.open(connection.id, `/w/${mention.workspace.id}/d/${mention.documentId}`));
+          void settle(bridge.connections.open(connection.id, mention.path ?? `/w/${mention.workspace.id}/d/${mention.documentId}`));
         },
         // Opening it there is what marks it read, as it is here.
         openWorkItem: (item) => {
@@ -806,7 +806,7 @@ function MentionRow({ mention, onOpen }: { mention: MentionNotification; onOpen:
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]">
           <span className="truncate font-medium text-[var(--color-ink)]">
-            <Icon name={mention.mode === 'canvas' ? 'easel' : 'file-earmark-text'} />{' '}
+            <Icon name={mention.app === 'slides' || mention.mode === 'canvas' ? 'easel' : 'file-earmark-text'} />{' '}
             {mention.title || 'Untitled'}
           </span>
           <span className="truncate">{mention.workspace.name}</span>
@@ -814,7 +814,7 @@ function MentionRow({ mention, onOpen }: { mention: MentionNotification; onOpen:
         </div>
         <p className="mt-0.5 text-sm">
           <span className="font-medium">{mention.taggedBy?.name ?? 'Someone'}</span> mentioned you in this{' '}
-          {mention.mode === 'canvas' ? 'canvas' : 'document'}
+          {mention.app === 'slides' ? 'presentation' : mention.mode === 'canvas' ? 'canvas' : 'document'}
         </p>
         <p className="mt-1">
           <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">

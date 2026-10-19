@@ -407,9 +407,14 @@ export interface MessageNotification {
  * however many times your name appears in it.
  */
 export interface MentionNotification {
+  /** The document's id; for a deck (`app` is `slides`), the presentation's. */
   documentId: string;
   title: string;
   mode: DocumentMode;
+  /** Set for a tag in a Slides presentation. Absent from older servers. */
+  app?: 'slides';
+  /** Where the tag opens, when it is not the document's own address: a deck's slide. */
+  path?: string;
   workspace: NotificationWorkspace;
   /** Who was editing when the tag appeared. Null if that account is gone. */
   taggedBy: { id: string; name: string; avatarUrl: string | null } | null;

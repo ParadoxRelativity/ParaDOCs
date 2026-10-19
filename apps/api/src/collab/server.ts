@@ -14,6 +14,7 @@ import {
   blockWorkItems,
   canvasSearchText,
   canvasWorkItems,
+  deckMentions,
   deckSearchText,
   normalizeBlocks,
   presentationIdFromCollabName,
@@ -26,7 +27,7 @@ import {
   type CanvasElement,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions } from '../lib/documentMentions.js';
+import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions, recordPresentationMentions } from '../lib/documentMentions.js';
 import { presentationAccessForUser } from '../lib/presentationAccess.js';
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
 import { setLiveDocumentEditor, setLiveDocumentLookup } from '../lib/liveDocuments.js';
@@ -199,6 +200,8 @@ export function createCollabServer(log: FastifyBaseLogger) {
             WHERE id = $1`,
           [presentationId, state, searchText, user?.id ?? null],
         );
+        // Tagging someone on a slide tells them, and the tell opens that slide.
+        await recordPresentationMentions(presentationId, deckMentions(document), user?.id ?? null);
         return;
       }
 

@@ -228,7 +228,7 @@ function announcements(notifications: Notifications): Announcement[] {
       title: `${mention.taggedBy?.name ?? 'Someone'} tagged you`,
       body: `${mention.title} · ${mention.workspace.name}`,
       picture: mention.taggedBy?.avatarUrl ?? null,
-      path: `/w/${mention.workspace.id}/d/${mention.documentId}`,
+      path: mention.path ?? `/w/${mention.workspace.id}/d/${mention.documentId}`,
       documentId: mention.documentId,
       sound: 'notification_generic',
       heardBy: () => true,

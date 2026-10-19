@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_THEME,
+  plainTextParagraphs,
   slideElementText,
   type PresentationSummary,
   type SlideElement,
@@ -23,12 +24,13 @@ import SlideInspector from './SlideInspector';
 import SlideRail from './SlideRail';
 import SlideStage, { type Zoom } from './SlideStage';
 import {
+  slideFileHandlers,
   slideInsertTools,
   slidePanels,
   slideToolbarActions,
   type SlideEditorContext,
 } from './slideExtensions';
-import './slideBuiltins';
+import './slideContent';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -279,6 +281,8 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     if (inTextField(e.target) || !canEdit || !slide) return;
     const clip = parseClip(e.clipboardData.getData(CLIP_MIME));
     e.preventDefault();
+    // Pictures and video on the clipboard (a screenshot, a copied image) go to whoever takes that kind of file.
+    if (!clip && e.clipboardData.files.length && handleFiles([...e.clipboardData.files])) return;
     if (clip) {
       // A copy pasted onto the slide it came from lands beside the original rather than on top of it.
       const offset = clip.presentationId === presentation.id && clip.slideId === slide.id ? 40 : 0;
@@ -288,16 +292,43 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     const text = e.clipboardData.getData('text/plain').trim().slice(0, 5000);
     if (!text) return;
     const width = 960;
+    const paragraphs = plainTextParagraphs(text);
     const id = actions.createElement(slide.id, {
-      type: 'text',
-      text,
+      type: 'richText',
+      paragraphs,
       fontSize: 48,
       width,
-      height: 90,
+      // Tall enough for its lines at the default size; autofit shrinks the rest.
+      height: Math.min(settings.size.height - 80, Math.max(150, paragraphs.length * 72 + 24)),
       x: Math.round(settings.size.width / 2 - width / 2),
-      y: Math.round(settings.size.height / 2 - 45),
+      y: Math.round(settings.size.height / 2 - 75),
     });
     setSelectedIds(new Set([id]));
+  };
+
+  // ---- files (paste and drop) -----------------------------------------------
+
+  /** Hands files to the handlers that take them; returns whether any did. */
+  const handleFiles = (files: File[], at?: { x: number; y: number }): boolean => {
+    if (!canEdit || !slide) return false;
+    let taken = false;
+    for (const handler of slideFileHandlers()) {
+      const mine = files.filter(handler.accepts);
+      if (mine.length === 0) continue;
+      taken = true;
+      void handler.run(ctx, mine, at);
+    }
+    return taken;
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (canEdit && slide && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (!e.dataTransfer.files.length) return;
+    const page = (e.currentTarget as HTMLElement).querySelector('[data-slide-stage] [role="group"]');
+    const rect = page?.getBoundingClientRect();
+    const at = rect && scale > 0 ? { x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale } : undefined;
+    if (handleFiles([...e.dataTransfer.files], at)) e.preventDefault();
   };
 
   // ---- keyboard -------------------------------------------------------------
@@ -463,7 +494,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
         )}
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="relative min-h-0 flex-1">
+          <div className="relative min-h-0 flex-1" onDragOver={onDragOver} onDrop={onDrop}>
             {slide ? (
               <SlideStage
                 // One stage per slide, so a drag, a text edit or a selection never carries over to another.

@@ -10,6 +10,7 @@ import {
 } from '@paradocs/shared';
 import { assetUrl } from '../../lib/server';
 import { slideElementRenderer } from './slideExtensions';
+import './slideContent';
 
 const NO_MEMBERS: WorkspaceMember[] = [];
 const noop = () => {};

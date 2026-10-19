@@ -1,5 +1,5 @@
 import { query } from '../db/pool.js';
-import { UUID, documentAccess, workItemAccess } from './access.js';
+import { UUID, documentAccess, presentationAccess, workItemAccess } from './access.js';
 import { channelAccessFor } from './channels.js';
 
 /**
@@ -15,7 +15,8 @@ import { channelAccessFor } from './channels.js';
  * - `chat/<channel>/…` — whoever can read the channel or conversation.
  * - `work-items/<item>/…` — whoever can see the work item.
  * - `<workspace>/…` — a document's or canvas's file, for whoever can see that
- *   document; one belonging to no document, for anyone in the workspace.
+ *   document; a picture on a slide, for whoever can open that presentation;
+ *   one belonging to neither, for anyone in the workspace.
  *
  * Anything else, or anything malformed, is refused.
  */
@@ -36,12 +37,14 @@ export async function mayReadUpload(userId: string | null, storageKey: string): 
 
   const [workspaceId] = parts;
   if (parts.length !== 2 || !UUID.test(workspaceId)) return false;
-  const { rows } = await query<{ document_id: string | null }>(
-    'SELECT document_id FROM attachments WHERE storage_key = $1 AND workspace_id = $2',
+  const { rows } = await query<{ document_id: string | null; presentation_id: string | null }>(
+    'SELECT document_id, presentation_id FROM attachments WHERE storage_key = $1 AND workspace_id = $2',
     [storageKey, workspaceId],
   );
   const documentId = rows[0]?.document_id;
   if (documentId) return (await documentAccess(userId, documentId)) !== null;
+  const presentationId = rows[0]?.presentation_id;
+  if (presentationId) return (await presentationAccess(userId, presentationId)) !== null;
   const { rows: member } = await query('SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
     workspaceId,
     userId,

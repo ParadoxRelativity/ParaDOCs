@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   attachmentSummary,
   messagePreview,
+  presentationPath,
   type DocumentMode,
   type MentionNotification,
   type AccountRequestNotification,
@@ -20,7 +21,7 @@ import { query } from '../db/pool.js';
 import { publishToUser } from '../chat/hub.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
+import { channelLevelSql, documentLevelSql, presentationLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
@@ -102,6 +103,16 @@ interface MentionRow extends WorkspaceColumns {
   document_id: string;
   title: string;
   mode: DocumentMode;
+  created_at: string;
+  author_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
+}
+
+interface DeckMentionRow extends WorkspaceColumns {
+  presentation_id: string;
+  slide_id: string | null;
+  title: string;
   created_at: string;
   author_id: string | null;
   author_name: string | null;
@@ -359,6 +370,29 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       ),
     ]);
 
+    // Decks someone tagged this person in, checked as documents' tags are: the
+    // workspace's Slides app and the person's access are asked now.
+    const { rows: deckMentionRows } = await query<DeckMentionRow>(
+      `SELECT pm.presentation_id, pm.slide_id, pm.created_at, p.title,
+              ${WORKSPACE_SELECT},
+              author.id AS author_id, author.name AS author_name,
+              ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+         FROM presentation_mentions pm
+         JOIN presentations p ON p.id = pm.presentation_id
+         JOIN workspaces w ON w.id = p.workspace_id
+         JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
+         LEFT JOIN users author ON author.id = pm.created_by
+        WHERE pm.user_id = $1
+          AND pm.read_at IS NULL
+          AND ${notBlockedAuthorSql('$1', 'pm.created_by')}
+          AND p.archived_at IS NULL
+          AND ${appEnabledSql('p.workspace_id', 'slides')}
+          AND ${presentationLevelSql('$1', 'wm.role_id')} > 0
+        ORDER BY pm.created_at DESC
+        LIMIT ${MAX_MENTIONS}`,
+      [user.id],
+    );
+
     // Only administrators hear about releases, and only while there is one, so
     // the usual request costs no extra query.
     const release = availableServerUpdate();
@@ -474,18 +508,35 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         workspace: workspaceOf(row),
       })),
       messages,
-      mentions: mentionRows.map(
-        (row): MentionNotification => ({
-          documentId: row.document_id,
-          title: row.title,
-          mode: row.mode,
-          workspace: workspaceOf(row),
-          taggedBy: row.author_id
-            ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
-            : null,
-          createdAt: row.created_at,
-        }),
-      ),
+      mentions: [
+        ...mentionRows.map(
+          (row): MentionNotification => ({
+            documentId: row.document_id,
+            title: row.title,
+            mode: row.mode,
+            workspace: workspaceOf(row),
+            taggedBy: row.author_id
+              ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+              : null,
+            createdAt: row.created_at,
+          }),
+        ),
+        // A deck reads as a document here, with where it opens: `documentId` is the presentation's id.
+        ...deckMentionRows.map(
+          (row): MentionNotification => ({
+            documentId: row.presentation_id,
+            title: row.title,
+            mode: 'page',
+            app: 'slides',
+            path: presentationPath(row.workspace_id, row.presentation_id, row.slide_id ?? undefined),
+            workspace: workspaceOf(row),
+            taggedBy: row.author_id
+              ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+              : null,
+            createdAt: row.created_at,
+          }),
+        ),
+      ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
       workItems: workItemRows.map(
         (row): WorkItemNotification => ({
           workItemId: row.work_item_id,
@@ -571,7 +622,15 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           AND ($2::uuid[] IS NULL OR document_id = ANY($2::uuid[]))`,
       [req.user!.id, input.documentIds ?? null],
     );
-    if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
+    const { rowCount: decks } = await query(
+      `UPDATE presentation_mentions
+          SET read_at = now()
+        WHERE user_id = $1
+          AND read_at IS NULL
+          AND ($2::uuid[] IS NULL OR presentation_id = ANY($2::uuid[]))`,
+      [req.user!.id, input.documentIds ?? null],
+    );
+    if (rowCount || decks) publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
   });
 

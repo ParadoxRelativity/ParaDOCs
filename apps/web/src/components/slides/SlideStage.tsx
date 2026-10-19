@@ -20,7 +20,7 @@ import type { SlidesActions } from '../../lib/slidesStore';
 import { cx } from '../../lib/util';
 import PeerCursors from '../canvas/PeerCursors';
 import { elementBoxStyle, slideBackgroundStyle } from './SlideView';
-import { slideElementRenderer } from './slideExtensions';
+import { SlideDocContext, slideElementRenderer } from './slideExtensions';
 
 /** Grid spacing in slide units; moves snap to it while the grid is on. */
 export const GRID = 40;
@@ -301,6 +301,8 @@ export default memo(function SlideStage({
     } else if (d.kind === 'resize' || d.kind === 'rotate') actions.checkpoint();
   };
 
+  const docContext = useMemo(() => ({ ydoc: session.ydoc, slideId: slide.id, actions }), [session.ydoc, slide.id, actions]);
+
   const only = useMemo(() => {
     const here = new Set(peers.filter((peer) => peer.slideId === slide.id).map((peer) => peer.clientId));
     return (clientId: number) => here.has(clientId);
@@ -314,6 +316,7 @@ export default memo(function SlideStage({
   const pageHeight = size.height * scale;
 
   return (
+    <SlideDocContext.Provider value={docContext}>
     <div
       ref={frame}
       tabIndex={-1}
@@ -433,6 +436,7 @@ export default memo(function SlideStage({
         </div>
       </div>
     </div>
+    </SlideDocContext.Provider>
   );
 });
 

@@ -1,10 +1,12 @@
-import { themeColor, type ShapeKind } from '@paradocs/shared';
+import { themeColor, type SlideShapeKind } from '@paradocs/shared';
+import type { IconName } from '../Icon';
 import { registerSlideInsertTool, type SlideEditorContext } from './slideExtensions';
 
 /**
- * What the editor can insert before any other story registers more: a text box
- * and the canvas shapes. Rich text boxes, tables, images and media (PARA-90)
- * register themselves the same way, and may take over these ids.
+ * What the editor can insert: a text box, shapes, and a table. Pictures,
+ * video and web pages register themselves from SlideMediaElements.tsx the same
+ * way. The text box is a rich text box (a Y.XmlFragment body), not the canvas
+ * text element it started as.
  */
 
 /** A new element is centred on the slide, then offset a little per element already there so repeats do not stack exactly. */
@@ -14,16 +16,17 @@ function placed(ctx: SlideEditorContext, width: number, height: number) {
   return { x: Math.round(ctx.center.x - width / 2 + nudge), y: Math.round(ctx.center.y - height / 2 + nudge), width, height };
 }
 
-function insertShape(shape: ShapeKind) {
+function insertShape(shape: SlideShapeKind) {
   return (ctx: SlideEditorContext) => {
     if (!ctx.slide) return;
+    const line = shape === 'line';
     const id = ctx.actions.createElement(ctx.slide.id, {
       type: 'shape',
       shape,
-      ...placed(ctx, 360, 240),
-      fill: themeColor('accent1'),
-      stroke: themeColor('accent1'),
-      strokeWidth: 2,
+      ...(line ? placed(ctx, 480, 40) : placed(ctx, 360, 240)),
+      fill: line ? 'transparent' : themeColor('accent1'),
+      stroke: line ? themeColor('dark1') : themeColor('accent1'),
+      strokeWidth: line ? 6 : 2,
     });
     ctx.select([id]);
   };
@@ -37,17 +40,44 @@ registerSlideInsertTool({
   run: (ctx) => {
     if (!ctx.slide) return;
     const id = ctx.actions.createElement(ctx.slide.id, {
-      type: 'text',
-      text: '',
+      type: 'richText',
       fontSize: 48,
       color: themeColor('dark1'),
-      ...placed(ctx, 640, 90),
+      ...placed(ctx, 800, 150),
     });
     ctx.select([id]);
     ctx.edit(id);
   },
 });
-registerSlideInsertTool({ id: 'shape-rectangle', label: 'Rectangle', icon: 'square', order: 20, run: insertShape('rectangle') });
-registerSlideInsertTool({ id: 'shape-ellipse', label: 'Ellipse', icon: 'circle', order: 21, run: insertShape('ellipse') });
-registerSlideInsertTool({ id: 'shape-triangle', label: 'Triangle', icon: 'triangle', order: 22, run: insertShape('triangle') });
-registerSlideInsertTool({ id: 'shape-diamond', label: 'Diamond', icon: 'diamond', order: 23, run: insertShape('diamond') });
+
+const SHAPES: [SlideShapeKind, string, IconName][] = [
+  ['rectangle', 'Rectangle', 'square'],
+  ['roundRect', 'Rounded rectangle', 'app'],
+  ['ellipse', 'Ellipse', 'circle'],
+  ['triangle', 'Triangle', 'triangle'],
+  ['diamond', 'Diamond', 'diamond'],
+  ['arrowRight', 'Arrow', 'arrow-right'],
+  ['callout', 'Callout', 'chat-square'],
+  ['star', 'Star', 'star'],
+  ['line', 'Line', 'dash-lg'],
+];
+SHAPES.forEach(([shape, label, icon], i) => registerSlideInsertTool({ id: `shape-${shape}`, label, icon, order: 20 + i / 10, run: insertShape(shape) }));
+
+registerSlideInsertTool({
+  id: 'table',
+  label: 'Table',
+  icon: 'table',
+  order: 40,
+  run: (ctx) => {
+    if (!ctx.slide) return;
+    const id = ctx.actions.createElement(ctx.slide.id, {
+      type: 'table',
+      rows: 3,
+      columns: 3,
+      cells: {},
+      headerRow: true,
+      ...placed(ctx, 1200, 360),
+    });
+    ctx.select([id]);
+  },
+});

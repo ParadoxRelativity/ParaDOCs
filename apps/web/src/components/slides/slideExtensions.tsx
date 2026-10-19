@@ -1,4 +1,5 @@
-import type { ComponentType, ReactNode } from 'react';
+import { createContext, type ComponentType, type ReactNode } from 'react';
+import type * as Y from 'yjs';
 import {
   resolveSlideColor,
   type CanvasElement,
@@ -43,6 +44,14 @@ export interface SlideElementRendererProps {
   onUpdate: (id: string, patch: Record<string, unknown>) => void;
   onStopEditing: (id: string) => void;
 }
+
+/**
+ * What an element renderer that edits collaborative content (a rich text box
+ * binds an editor to its Y.XmlFragment) needs beyond its props: the document
+ * and the slide it is on. Provided by the stage; absent in thumbnails and the
+ * slideshow, where nothing is ever edited.
+ */
+export const SlideDocContext = createContext<{ ydoc: Y.Doc; slideId: string; actions: SlidesActions } | null>(null);
 
 const renderers = new Map<string, ComponentType<SlideElementRendererProps>>();
 
@@ -157,6 +166,15 @@ export interface SlidePanel {
   render: (ctx: SlideEditorContext) => ReactNode;
 }
 
+/** Takes files pasted or dropped on the stage (pictures, video), the way an insert tool takes a click. */
+export interface SlideFileHandler {
+  id: string;
+  order?: number;
+  accepts: (file: File) => boolean;
+  /** `at` is where on the slide a file was dropped, in slide units; absent for a paste. */
+  run: (ctx: SlideEditorContext, files: File[], at?: { x: number; y: number }) => void | Promise<void>;
+}
+
 function registry<T extends { id: string; order?: number }>() {
   const items = new Map<string, T>();
   return {
@@ -170,11 +188,14 @@ const insertTools = registry<SlideInsertTool>();
 const toolbarActions = registry<SlideToolbarAction>();
 const inspectorSections = registry<SlideInspectorSection>();
 const panels = registry<SlidePanel>();
+const fileHandlers = registry<SlideFileHandler>();
 
 export const registerSlideInsertTool = insertTools.register;
 export const registerSlideToolbarAction = toolbarActions.register;
 export const registerSlideInspectorSection = inspectorSections.register;
 export const registerSlidePanel = panels.register;
+export const registerSlideFileHandler = fileHandlers.register;
+export const slideFileHandlers = fileHandlers.all;
 
 export const slideInsertTools = insertTools.all;
 export const slideToolbarActions = toolbarActions.all;
