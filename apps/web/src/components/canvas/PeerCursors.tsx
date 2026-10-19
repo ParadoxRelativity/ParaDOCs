@@ -7,9 +7,18 @@ import type { Viewport } from './CanvasSurface';
  * zoom. The layer follows this person's own panning instantly; only each
  * cursor's own motion is eased, which smooths over the gaps between updates.
  */
-export default function PeerCursors({ session, viewport }: { session: CollabSession; viewport: Viewport }) {
+export default function PeerCursors({
+  session,
+  viewport,
+  only,
+}: {
+  session: CollabSession;
+  viewport: Viewport;
+  /** Shows only the people this accepts: a deck's cursors are only meaningful on the slide they are on. */
+  only?: (clientId: number) => boolean;
+}) {
   const pointers = usePeerPointers(session);
-  const visible = pointers.filter((pointer) => pointer.active);
+  const visible = pointers.filter((pointer) => pointer.active && (!only || only(pointer.clientId)));
   if (visible.length === 0) return null;
 
   return (
