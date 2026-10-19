@@ -37,11 +37,13 @@ function lookup(id: string): Promise<WorkItemReference | null> {
 }
 
 /** One work item, or null once it is known not to be available to this reader. */
-export function useWorkItemRef(id: string | null | undefined) {
+export function useWorkItemRef(id: string | null | undefined, live = false) {
   return useQuery({
     queryKey: ['workItemRef', id ?? ''],
     queryFn: () => lookup(id!.toLowerCase()),
     enabled: Boolean(id),
     staleTime: 30_000,
+    // A card on a slide being watched keeps up with the item even where no socket event reaches it.
+    refetchInterval: live ? 5000 : false,
   });
 }

@@ -38,7 +38,7 @@ function Placeholder({ label }: { label: string }) {
  * with controls, or one that swallows the click meant to open its slide, would
  * be worse than a still frame.
  */
-function useWatched<T extends HTMLElement>() {
+export function useWatched<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [watched, setWatched] = useState(false);
   useLayoutEffect(() => {
