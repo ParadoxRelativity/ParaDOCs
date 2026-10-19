@@ -20,6 +20,7 @@ import { presentationSummaryColumns } from '../lib/documentColumns.js';
 import { treeChanged } from '../lib/treeEvents.js';
 import { loadDeck } from '../lib/deck.js';
 import { liveDocument } from '../lib/liveDocuments.js';
+import { activeShows } from '../lib/liveShows.js';
 
 /**
  * Presentations, as their own application.
@@ -90,6 +91,12 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
       };
     },
   );
+
+  /** Presentations being shown live in the workspace that the reader may follow. */
+  app.get<{ Params: { id: string } }>('/workspaces/:id/live-shows', async (req) => {
+    await assertWorkspaceAccess(req, req.params.id, 'slides.view', 'slides');
+    return activeShows(req.user!.id, req.params.id);
+  });
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/presentations', async (req, reply) => {
     await assertWorkspaceAccess(req, req.params.id, 'slides.create', 'slides');

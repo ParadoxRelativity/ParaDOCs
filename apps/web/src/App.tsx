@@ -88,6 +88,7 @@ import { useToast } from './components/Toast';
 import PopoutWindow from './components/PopoutWindow';
 import SpreadsheetView from './components/sheet/SpreadsheetView';
 import PresentationView from './components/slides/PresentationView';
+import { LiveShowHost } from './components/slides/LiveFollower';
 import AccessApp, { isAccessSection } from './components/AccessApp';
 import ProjectsApp from './components/projects/ProjectsApp';
 import SchedulesApp from './components/schedules/SchedulesApp';
@@ -1234,6 +1235,9 @@ function Workspace({
           onSelectPresentation={appOn('slides') ? (hit) => show(presentationPath(workspaceId, hit.id, hit.slideId ?? undefined)) : undefined}
         />
       )}
+
+      {/* Follows a presenter's live slideshow, from a banner or a link, over whatever is open. */}
+      {workspaceId && <LiveShowHost />}
 
       {directCalls.incoming && (
         <IncomingCallCard

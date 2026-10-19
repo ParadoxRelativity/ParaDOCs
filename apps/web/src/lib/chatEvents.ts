@@ -24,6 +24,7 @@ import { desktop } from './desktop';
 import { notify } from './browserNotifications';
 import { playSound } from './sounds';
 import { setTyping } from './typing';
+import { liveShowBus, liveShowKeys } from './liveShow';
 
 export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
 
@@ -330,6 +331,18 @@ export function useChatEvents({
             void qc.invalidateQueries({ queryKey: keys.tags(event.workspaceId) });
           }
           return;
+        case 'shows.changed':
+          // Ids only: the list of live shows is asked for again.
+          void qc.invalidateQueries({ queryKey: liveShowKeys.list(event.workspaceId) });
+          return;
+        case 'show.started':
+        case 'show.joined':
+        case 'show.state':
+        case 'show.viewers':
+        case 'show.ended':
+        case 'show.refused':
+          liveShowBus.emit(event);
+          return;
         case 'voice.changed':
           qc.setQueryData<Record<string, VoiceOccupant[]>>(keys.voiceParticipants(event.workspaceId), (current) => {
             if (!current) return current;
@@ -372,6 +385,12 @@ export function useChatEvents({
     onEvent: apply,
   });
 
+  // Presenting and following a slideshow ride this socket from wherever they are.
+  useEffect(() => {
+    liveShowBus.attach(status === 'connected' ? send : null);
+    return () => liveShowBus.attach(null);
+  }, [status, send]);
+
   const sendTyping = useCallback(
     (channelId: string, typing: boolean) => send({ type: 'typing', channelId, typing }),
     [send],
@@ -391,6 +410,7 @@ export function useChatEvents({
     void qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+    void qc.invalidateQueries({ queryKey: liveShowKeys.list(workspaceId) });
   }, [status, workspaceId, qc]);
 
   // Another tab may have been the one to ask.

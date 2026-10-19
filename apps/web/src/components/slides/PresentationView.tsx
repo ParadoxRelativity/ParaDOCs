@@ -2,6 +2,7 @@ import { slidesCollabName } from '@paradocs/shared';
 import { usePresentation } from '../../api/hooks';
 import { useCollaboration } from '../../lib/collaboration';
 import { EmptyState, Spinner } from '../ui';
+import LiveShowBanner from './LiveShowBanner';
 import SlidesEditor from './SlidesEditor';
 
 /**
@@ -39,15 +40,21 @@ export default function PresentationView({
   if (!session) return <Spinner />;
 
   return (
-    <SlidesEditor
-      // Rebuilt per presentation, so selection and an open text edit never carry over from the last one.
-      key={presentationId}
-      presentation={record.data}
-      workspaceId={workspaceId}
-      canEdit={canEdit}
-      session={session}
-      peers={peers}
-      status={status}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Someone presenting this deck live: a link in chat lands here. */}
+      <LiveShowBanner workspaceId={workspaceId} presentationId={presentationId} />
+      <div className="min-h-0 flex-1">
+        <SlidesEditor
+          // Rebuilt per presentation, so selection and an open text edit never carry over from the last one.
+          key={presentationId}
+          presentation={record.data}
+          workspaceId={workspaceId}
+          canEdit={canEdit}
+          session={session}
+          peers={peers}
+          status={status}
+        />
+      </div>
+    </div>
   );
 }
