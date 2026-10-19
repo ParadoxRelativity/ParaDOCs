@@ -29,6 +29,7 @@ export * from './slides.js';
 export * from './slideBuilds.js';
 export * from './slideGeometry.js';
 export * from './slideEdit.js';
+export * from './slideLayoutEdit.js';
 export * from './slideTable.js';
 export * from './types.js';
 export * from './version.js';

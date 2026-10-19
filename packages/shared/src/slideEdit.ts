@@ -18,6 +18,7 @@ import {
   type TableElement,
 } from './slides.js';
 import { animatedElements, readAnimation, supportsParagraphBuild, type ElementAnimation } from './slideBuilds.js';
+import { inheritedPlaceholderProps } from './slideLayoutEdit.js';
 
 function elementsOf(doc: Y.Doc, slideId: string): Y.Map<Y.Map<unknown>> | null {
   const elements = doc.getMap<unknown>(slideMapName(slideId)).get(SLIDE_ELEMENTS_KEY);
@@ -173,9 +174,13 @@ export function duplicateSlideElements(
       if (!source) continue;
       const newId = makeId();
       top += 1;
-      const x = Number(source.get('x') ?? 0) + offset;
-      const y = Number(source.get('y') ?? 0) + offset;
-      to.set(newId, cloneElementMap(source, { id: newId, x, y, z: top }));
+      // A box filling a layout placeholder may have no position of its own; the copy is a plain box, so it gets the placeholder's.
+      const inherited = inheritedPlaceholderProps(doc, fromSlideId, source);
+      const x = Number(source.get('x') ?? inherited?.x ?? 0) + offset;
+      const y = Number(source.get('y') ?? inherited?.y ?? 0) + offset;
+      const copy = cloneElementMap(source, { ...inherited, id: newId, x, y, z: top });
+      if (inherited) copy.delete('placeholder');
+      to.set(newId, copy);
       created.push(newId);
     }
   });

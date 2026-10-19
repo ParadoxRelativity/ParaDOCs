@@ -16,6 +16,7 @@ import {
   reorderZ,
   setElementAnimations,
   setSlideElement,
+  setSlideLayout,
   setSlidesHidden,
   setTableCells,
   setTableStructure,
@@ -54,13 +55,15 @@ function share(previous: DeckSnapshot | null, next: DeckSnapshot): DeckSnapshot 
       old.hidden === slide.hidden &&
       old.notes === slide.notes &&
       JSON.stringify(old.background) === JSON.stringify(slide.background) &&
+      JSON.stringify(old.frame) === JSON.stringify(slide.frame) &&
       JSON.stringify(old.transition) === JSON.stringify(slide.transition);
     return same ? old : { ...slide, elements };
   });
   const themes = JSON.stringify(previous.themes) === JSON.stringify(next.themes) ? previous.themes : next.themes;
   const layouts = JSON.stringify(previous.layouts) === JSON.stringify(next.layouts) ? previous.layouts : next.layouts;
   const settings = JSON.stringify(previous.settings) === JSON.stringify(next.settings) ? previous.settings : next.settings;
-  return { settings, slides, themes, layouts };
+  const master = JSON.stringify(previous.master) === JSON.stringify(next.master) ? previous.master : next.master;
+  return { settings, slides, themes, layouts, master };
 }
 
 /**
@@ -143,10 +146,16 @@ export function useSlidesDeck(ydoc: Y.Doc) {
         const at = afterId ? order.indexOf(afterId) : -1;
         let id = '';
         transactNow(() => {
-          id = createSlide(ydoc, { layoutId, index: at >= 0 ? at + 1 : order.length });
+          id = createSlide(ydoc, { layoutId: BLANK_LAYOUT_ID, index: at >= 0 ? at + 1 : order.length });
+          // Fills in the layout's empty placeholders, so a new slide opens ready to type into.
+          setSlideLayout(ydoc, id, layoutId);
         });
         return id;
       },
+      /** Moves a slide to another layout; its text boxes follow the matching placeholders. */
+      setLayout: (slideId: string, layoutId: string) => transactNow(() => setSlideLayout(ydoc, slideId, layoutId)),
+      /** Runs a shared edit (theme, master, layouts; see slideLayoutEdit.ts) as one step of this person's undo history. */
+      edit: (change: (doc: Y.Doc) => void) => transactNow(() => change(ydoc)),
       /** Copies each slide to just after itself. Returns the new ids. */
       duplicateSlides: (ids: string[]): string[] => {
         const created: string[] = [];
@@ -221,7 +230,8 @@ export function useSlidesDeck(ydoc: Y.Doc) {
           for (const element of elements) {
             const id = randomId();
             z += 1;
-            setSlideElement(ydoc, slideId, { ...element, id, x: element.x + offset, y: element.y + offset, z });
+            // A copy is a plain box where it was (its snapshot carries the position it inherited), not a second claim on the placeholder.
+            setSlideElement(ydoc, slideId, { ...element, placeholder: undefined, id, x: element.x + offset, y: element.y + offset, z } as SlideElement);
             created.push(id);
           }
         });

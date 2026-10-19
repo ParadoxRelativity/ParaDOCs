@@ -5,6 +5,7 @@ import {
   CONTENTS_PAGE_SIZE,
   MAX_CONTENTS_PAGE_SIZE,
   createPresentationSchema,
+  createStyledDeck,
   duplicatePresentationSchema,
   slidesCollabName,
   updatePresentationSchema,
@@ -104,10 +105,18 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
     // Filing into a folder takes being allowed to change what is in it.
     if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id, 'slides');
     const { rows } = await query<{ id: string }>(
-      `INSERT INTO presentations (workspace_id, folder_id, title, icon, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO presentations (workspace_id, folder_id, title, icon, created_by, ydoc)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id`,
-      [req.params.id, input.folderId ?? null, input.title || 'Untitled', input.icon ?? null, req.user!.id],
+      [
+        req.params.id,
+        input.folderId ?? null,
+        input.title || 'Untitled',
+        input.icon ?? null,
+        req.user!.id,
+        // Starting from a theme: its styling and a first Title slide, so the theme shows at once.
+        input.themeId ? Buffer.from(createStyledDeck(input.themeId)) : null,
+      ],
     );
     treeChanged(req.params.id, 'slides');
     reply.status(201);

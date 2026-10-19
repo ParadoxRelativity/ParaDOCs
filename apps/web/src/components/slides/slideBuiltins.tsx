@@ -25,7 +25,7 @@ function insertShape(shape: SlideShapeKind) {
       shape,
       ...(line ? placed(ctx, 480, 40) : placed(ctx, 360, 240)),
       fill: line ? 'transparent' : themeColor('accent1'),
-      stroke: line ? themeColor('dark1') : themeColor('accent1'),
+      stroke: line ? themeColor('text1') : themeColor('accent1'),
       strokeWidth: line ? 6 : 2,
     });
     ctx.select([id]);
@@ -42,7 +42,7 @@ registerSlideInsertTool({
     const id = ctx.actions.createElement(ctx.slide.id, {
       type: 'richText',
       fontSize: 48,
-      color: themeColor('dark1'),
+      color: themeColor('text1'),
       ...placed(ctx, 800, 150),
     });
     ctx.select([id]);

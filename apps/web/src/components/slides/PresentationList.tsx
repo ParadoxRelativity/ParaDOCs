@@ -23,6 +23,7 @@ import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton, InlineIconNameForm, LoadMore, Spinner } from '../ui';
 import Icon from '../Icon';
+import NewPresentationMenu from './NewPresentationMenu';
 import SheetContextMenu, { type SheetMenuItem } from '../sheet/SheetContextMenu';
 
 /** What a dragged presentation carries, so only a presentation can be dropped on a folder. */
@@ -105,9 +106,9 @@ export function PresentationList({
   const [moving, setMoving] = useState<PresentationSummary | null>(null);
   const [unfiledDrop, setUnfiledDrop] = useState(false);
 
-  async function newPresentation(folderId: string | null = null) {
+  async function newPresentation(folderId: string | null = null, themeId?: string) {
     try {
-      const deck = await create.mutateAsync({ folderId });
+      const deck = await create.mutateAsync({ folderId, ...(themeId ? { themeId } : {}) });
       onSelect(deck.id);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not create the presentation', 'error');
@@ -172,9 +173,7 @@ export function PresentationList({
             <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
               <Icon name="folder-plus" />
             </IconButton>
-            <IconButton label="New presentation" onClick={() => void newPresentation()} disabled={create.isPending}>
-              <Icon name="plus-lg" />
-            </IconButton>
+            <NewPresentationMenu onCreate={(themeId) => void newPresentation(null, themeId)} disabled={create.isPending} />
           </span>
         )}
       </div>

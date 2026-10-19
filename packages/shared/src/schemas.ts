@@ -320,6 +320,8 @@ export const createPresentationSchema = z.object({
   icon: z.string().trim().max(8).nullish(),
   /** A Slides folder to file it in. */
   folderId: uuid.nullish(),
+  /** A starter theme (see STARTER_THEMES) to begin from, with a first Title slide. Omit for an empty deck. */
+  themeId: z.string().trim().max(64).optional(),
 });
 
 export const updatePresentationSchema = z.object({

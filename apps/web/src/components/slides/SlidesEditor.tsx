@@ -40,6 +40,7 @@ import './slideComments';
 import './slideBuildBuiltins';
 import './slideShowLive';
 import './slideContent';
+import { SlideDesignHost } from './slideDesign';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -183,6 +184,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     slides,
     selection,
     theme,
+    deck,
     actions,
     select: (ids) => setSelectedIds(new Set(ids)),
     edit: setEditingId,
@@ -211,7 +213,9 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
 
   const addSlide = () => {
     if (!canEdit) return;
-    openSlide(actions.addSlide(currentId));
+    // A new slide uses the layout of the one it follows (Title and content after a Title slide), so it opens ready to type into.
+    const after = slide?.layoutId;
+    openSlide(actions.addSlide(currentId, !after || after === 'title' ? 'titleAndContent' : after));
   };
   const duplicateSlides = () => {
     const ids = railIds();
@@ -576,6 +580,8 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
           </div>
         )}
       </div>
+
+      <SlideDesignHost ctx={ctx} />
 
       {show && (
         <SlideShow

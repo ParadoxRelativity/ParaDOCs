@@ -44,19 +44,7 @@ export default function SlideInspector({ ctx, handlers }: { ctx: SlideEditorCont
 
   return (
     <div className="scroll-thin h-full w-full space-y-4 overflow-y-auto p-3 text-sm">
-      {scope === 'slide' ? (
-        <Section title="Slide">
-          <Row label="Background">
-            <ColorField
-              value={slide.background?.kind === 'color' ? slide.background.color : undefined}
-              fallback={resolveSlideColor('theme:light1', theme) ?? '#ffffff'}
-              disabled={!canEdit}
-              onChange={(color) => actions.setBackground(slide.id, color ? { kind: 'color', color } : null)}
-              clearable={slide.background !== null}
-            />
-          </Row>
-        </Section>
-      ) : (
+      {scope === 'slide' ? null : (
         <>
           <Section title={single ? 'Position and size' : `${selection.length} elements`}>
             {single && (

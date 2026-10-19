@@ -13,6 +13,7 @@
  *   notes:<id>      Y.XmlFragment  the speaker notes of a slide
  *   themes          Y.Map    theme id -> Theme
  *   layouts         Y.Map    layout id -> SlideLayout
+ *   master          Y.Map    the slide master, one key per field (slideTheme.ts)
  *
  * Order is kept apart from content so reordering never conflicts with editing,
  * and every element is its own Y.Map so two people editing different elements,
@@ -48,10 +49,26 @@ import {
   type RichParagraph,
 } from './slideRichText.js';
 import type { SlideShapeKind } from './slideShapes.js';
+import {
+  DEFAULT_THEME,
+  DEFAULT_THEME_ID,
+  BLANK_LAYOUT_ID,
+  defaultLayouts,
+  defaultMaster,
+  normalizeTheme,
+  resolveSlide,
+  type SlideBackground,
+  type SlideFrame,
+  type PlaceholderKind,
+  type SlideLayout,
+  type SlideMaster,
+  type Theme,
+} from './slideTheme.js';
 
 export * from './slideRichText.js';
 export * from './slideShapes.js';
 export * from './slideFonts.js';
+export * from './slideTheme.js';
 
 /**
  * The collaboration server serves documents, spreadsheets and presentations
@@ -104,116 +121,8 @@ export function fitScale(size: SlideSize, boxWidth: number, boxHeight: number): 
 }
 
 // ---------------------------------------------------------------------------
-// Themes and layouts
-// ---------------------------------------------------------------------------
-
-export const THEME_COLOR_SLOTS = [
-  'dark1',
-  'light1',
-  'dark2',
-  'light2',
-  'accent1',
-  'accent2',
-  'accent3',
-  'accent4',
-  'accent5',
-  'accent6',
-  'hyperlink',
-] as const;
-export type ThemeColorSlot = (typeof THEME_COLOR_SLOTS)[number];
-
-export interface Theme {
-  id: string;
-  name: string;
-  colors: Record<ThemeColorSlot, string>;
-  fonts: { heading: string; body: string };
-}
-
-export const DEFAULT_THEME_ID = 'default';
-
-export const DEFAULT_THEME: Theme = {
-  id: DEFAULT_THEME_ID,
-  name: 'Default',
-  colors: {
-    dark1: '#111827',
-    light1: '#ffffff',
-    dark2: '#374151',
-    light2: '#f3f4f6',
-    accent1: '#2563eb',
-    accent2: '#dc2626',
-    accent3: '#16a34a',
-    accent4: '#d97706',
-    accent5: '#7c3aed',
-    accent6: '#0891b2',
-    hyperlink: '#2563eb',
-  },
-  fonts: { heading: 'Inter', body: 'Inter' },
-};
-
-const THEME_COLOR_PREFIX = 'theme:';
-
-/** How an element names a theme color slot in a color field, so a theme change restyles it. */
-export function themeColor(slot: ThemeColorSlot): string {
-  return `${THEME_COLOR_PREFIX}${slot}`;
-}
-
-export function themeSlotOf(value: string | undefined): ThemeColorSlot | null {
-  if (!value?.startsWith(THEME_COLOR_PREFIX)) return null;
-  const slot = value.slice(THEME_COLOR_PREFIX.length) as ThemeColorSlot;
-  return (THEME_COLOR_SLOTS as readonly string[]).includes(slot) ? slot : null;
-}
-
-/** A color field as a concrete color: a slot is looked up in the theme, anything else passes through. */
-export function resolveSlideColor(value: string | undefined, theme: Theme): string | undefined {
-  if (value === undefined) return undefined;
-  const slot = themeSlotOf(value);
-  return slot ? theme.colors[slot] : value;
-}
-
-export type PlaceholderKind = 'title' | 'subtitle' | 'body' | 'image' | 'footer' | 'slideNumber' | 'date';
-
-export interface LayoutPlaceholder {
-  id: string;
-  kind: PlaceholderKind;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface SlideLayout {
-  id: string;
-  name: string;
-  placeholders: LayoutPlaceholder[];
-}
-
-export const BLANK_LAYOUT_ID = 'blank';
-
-export const DEFAULT_LAYOUTS: SlideLayout[] = [
-  { id: BLANK_LAYOUT_ID, name: 'Blank', placeholders: [] },
-  {
-    id: 'title',
-    name: 'Title',
-    placeholders: [
-      { id: 'title', kind: 'title', x: 160, y: 340, width: 1600, height: 220 },
-      { id: 'subtitle', kind: 'subtitle', x: 160, y: 580, width: 1600, height: 120 },
-    ],
-  },
-  {
-    id: 'titleAndContent',
-    name: 'Title and content',
-    placeholders: [
-      { id: 'title', kind: 'title', x: 120, y: 80, width: 1680, height: 140 },
-      { id: 'body', kind: 'body', x: 120, y: 260, width: 1680, height: 720 },
-    ],
-  },
-];
-
-// ---------------------------------------------------------------------------
 // Slides
 // ---------------------------------------------------------------------------
-
-export type SlideBackground = { kind: 'color'; color: string } | { kind: 'image'; url: string };
 
 export const SLIDE_TRANSITION_KINDS = ['none', 'fade', 'push', 'wipe', 'zoom'] as const;
 export type SlideTransitionKind = (typeof SLIDE_TRANSITION_KINDS)[number];
@@ -222,11 +131,6 @@ export interface SlideTransition {
   kind: SlideTransitionKind;
   durationMs?: number;
 }
-
-export const slideBackgroundSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('color'), color: z.string().max(64) }),
-  z.object({ kind: z.literal('image'), url: z.string().max(2000) }),
-]);
 
 export const slideTransitionSchema = z.object({
   kind: z.enum(SLIDE_TRANSITION_KINDS),
@@ -260,6 +164,10 @@ export type SlideImageElement = ImageElement & {
   /** The part of the picture shown, as fractions of its width and height. */
   crop?: { x: number; y: number; width: number; height: number };
   opacity?: number;
+  /** A layout placeholder this picture fills (an empty `url` is a placeholder waiting for one). */
+  placeholder?: string;
+  placeholderKind?: PlaceholderKind;
+  prompt?: string;
 };
 
 /** Canvas element types that mean the same on a slide as on a board. */
@@ -287,8 +195,16 @@ export type RichTextVerticalAlign = 'top' | 'middle' | 'bottom';
  */
 export interface RichTextElement extends SlideElementBase {
   type: 'richText';
-  /** A placeholder this box fills, by id, in the slide's layout. */
+  /**
+   * A placeholder this box fills, by id, in the slide's layout. Position and
+   * text style it does not set itself come from that placeholder.
+   */
   placeholder?: string;
+  /** Derived when a deck is read: the kind of that placeholder, and what it says while empty. */
+  placeholderKind?: PlaceholderKind;
+  prompt?: string;
+  bold?: boolean;
+  italic?: boolean;
   /** Plain digest of the body, filled in when a slide is read. */
   text?: string;
   /** The body as data, filled in when a slide is read, and read to give a new box its content. */
@@ -360,6 +276,7 @@ export const DECK_MAP = 'deck';
 export const SLIDE_ORDER = 'slideOrder';
 export const THEMES_MAP = 'themes';
 export const LAYOUTS_MAP = 'layouts';
+export const MASTER_MAP = 'master';
 export const SLIDE_ELEMENTS_KEY = 'elements';
 export const ELEMENT_BODY_KEY = 'body';
 
@@ -378,6 +295,8 @@ export interface DeckSettings {
   showSlideNumber: boolean;
   showDate: boolean;
   footerText: string;
+  /** Text shown for the date when it is on; empty shows today's date. */
+  dateText: string;
 }
 
 export interface SlideSnapshot {
@@ -389,6 +308,8 @@ export interface SlideSnapshot {
   elements: SlideElement[];
   /** Speaker notes as plain text, paragraphs separated by newlines. */
   notes: string;
+  /** Derived when a deck is read: the page behind the elements and the footer; see resolveSlide. */
+  frame?: SlideFrame;
 }
 
 export interface DeckSnapshot {
@@ -396,6 +317,7 @@ export interface DeckSnapshot {
   slides: SlideSnapshot[];
   themes: Theme[];
   layouts: SlideLayout[];
+  master: SlideMaster;
 }
 
 /** A Y type read as plain JSON, so snapshots carry no Y types. */
@@ -412,6 +334,7 @@ export function readDeckSettings(doc: Y.Doc): DeckSettings {
     showSlideNumber: deck.get('showSlideNumber') === true,
     showDate: deck.get('showDate') === true,
     footerText: typeof deck.get('footerText') === 'string' ? (deck.get('footerText') as string) : '',
+    dateText: typeof deck.get('dateText') === 'string' ? (deck.get('dateText') as string) : '',
   };
 }
 
@@ -424,7 +347,7 @@ export function writeDeckSettings(doc: Y.Doc, settings: Partial<DeckSettings>): 
       deck.set('width', size.width);
       deck.set('height', size.height);
     }
-    for (const key of ['themeId', 'showFooter', 'showSlideNumber', 'showDate', 'footerText'] as const) {
+    for (const key of ['themeId', 'showFooter', 'showSlideNumber', 'showDate', 'footerText', 'dateText'] as const) {
       if (settings[key] !== undefined) deck.set(key, settings[key]);
     }
   });
@@ -512,6 +435,8 @@ export function setSlideElement(doc: Y.Doc, slideId: string, element: SlideEleme
       // The body of a rich text box is a Y.XmlFragment the editor owns, and its
       // digest is derived, so neither is written from a snapshot.
       if (value === undefined || (element.type === 'richText' && (key === 'text' || key === 'paragraphs' || key === ELEMENT_BODY_KEY))) continue;
+      // Derived from the placeholder's layout when a deck is read, never stored.
+      if (key === 'placeholderKind' || key === 'prompt') continue;
       if (element.type === 'table' && key === 'cells') {
         let cells = map.get('cells') as Y.Map<TableCell> | undefined;
         if (!(cells instanceof Y.Map)) {
@@ -602,16 +527,28 @@ function readCollection<T extends { id: string }>(doc: Y.Doc, name: string): T[]
  * skipped. A deck nobody has edited yet reads with the default theme and layouts.
  */
 export function readDeck(doc: Y.Doc): DeckSnapshot {
-  const themes = readCollection<Theme>(doc, THEMES_MAP);
-  const layouts = readCollection<SlideLayout>(doc, LAYOUTS_MAP);
+  const settings = readDeckSettings(doc);
+  const themes = readCollection<Theme>(doc, THEMES_MAP).map(normalizeTheme);
+  const stored = readCollection<SlideLayout>(doc, LAYOUTS_MAP);
+  const layouts = stored.length ? stored : defaultLayouts(settings.size);
+  const master = readMaster(doc, settings.size);
+  const today = new Date().toLocaleDateString();
+  const order = readSlideOrder(doc).filter((id) => elementsOf(doc, id));
   return {
-    settings: readDeckSettings(doc),
-    slides: readSlideOrder(doc)
-      .filter((id) => elementsOf(doc, id))
-      .map((id) => readSlide(doc, id)),
+    settings,
+    slides: order.map((id, i) => resolveSlide(readSlide(doc, id), { layouts, master, settings, number: i + 1, today })),
     themes: themes.length ? themes : [DEFAULT_THEME],
-    layouts: layouts.length ? layouts : DEFAULT_LAYOUTS,
+    layouts,
+    master,
   };
+}
+
+/** The deck's master: each field as stored, else the default for the slide size. */
+export function readMaster(doc: Y.Doc, size: SlideSize = DEFAULT_SLIDE_SIZE): SlideMaster {
+  const stored = doc.getMap<unknown>(MASTER_MAP);
+  const fallback = defaultMaster(size);
+  const field = <K extends keyof SlideMaster>(key: K): SlideMaster[K] => (stored.has(key) ? plain<SlideMaster[K]>(stored.get(key)) : fallback[key]);
+  return { id: field('id'), name: field('name'), background: field('background'), placeholders: field('placeholders'), elements: field('elements') };
 }
 
 const TEXT_TAG = /<@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})>/gi;

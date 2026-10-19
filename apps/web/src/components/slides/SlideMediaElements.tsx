@@ -57,9 +57,10 @@ function useWatched<T extends HTMLElement>() {
 // Image
 // ---------------------------------------------------------------------------
 
-const ImageRenderer = memo(function ImageRenderer({ element }: SlideElementRendererProps) {
+const ImageRenderer = memo(function ImageRenderer({ element, readOnly }: SlideElementRendererProps) {
   const image = element as unknown as SlideImageElement;
-  if (!image.url) return <Placeholder label="Image" />;
+  // An empty picture placeholder shows its prompt to people editing and nothing on a thumbnail or in the show.
+  if (!image.url) return readOnly ? null : <Placeholder label={image.prompt ?? 'Image'} />;
   const crop = image.crop;
   const fit = image.fit ?? 'cover';
   return (
