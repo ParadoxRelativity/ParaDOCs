@@ -38,3 +38,15 @@ export function SpreadsheetIcon({
   if (sheet.icon) return <span className={className}>{sheet.icon}</span>;
   return <Icon name="table" className={className} />;
 }
+
+/** The same, for a presentation. */
+export function PresentationIcon({
+  presentation,
+  className,
+}: {
+  presentation: { icon?: string | null };
+  className?: string;
+}) {
+  if (presentation.icon) return <span className={className}>{presentation.icon}</span>;
+  return <Icon name="easel2" className={className} />;
+}
