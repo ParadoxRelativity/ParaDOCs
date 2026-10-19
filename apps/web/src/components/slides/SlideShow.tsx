@@ -17,6 +17,7 @@ import { assetUrl, isNativeApp } from '../../lib/server';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import SlideView from './SlideView';
+import './slideBuildBuiltins';
 import { SlideShowStepContext, slideShowAddons, slideShowSteps } from './slideShowExtensions';
 
 interface Props {

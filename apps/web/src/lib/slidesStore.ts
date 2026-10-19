@@ -7,15 +7,18 @@ import {
   deleteSlide,
   duplicateSlide,
   duplicateSlideElements,
+  moveElementAnimation,
   moveSlides,
   patchSlideElements,
   readDeck,
   removeSlideElement,
   reorderZ,
+  setElementAnimations,
   setSlideElement,
   setSlidesHidden,
   slideMapName,
   type DeckSnapshot,
+  type ElementAnimation,
   type SlideBackground,
   type SlideElement,
   type SlideSnapshot,
@@ -166,6 +169,10 @@ export function useSlidesDeck(ydoc: Y.Doc) {
       },
       updateElements: (slideId: string, patches: { id: string; patch: Record<string, unknown> }[]) =>
         transact(() => patchSlideElements(ydoc, slideId, patches)),
+      /** Animates elements (changing only the fields given), or removes it with null; see slideBuilds.ts. */
+      setAnimation: (slideId: string, ids: string[], change: Partial<Omit<ElementAnimation, 'order'>> | null) =>
+        transact(() => setElementAnimations(ydoc, slideId, ids, change)),
+      moveAnimation: (slideId: string, elementId: string, toIndex: number) => transact(() => moveElementAnimation(ydoc, slideId, elementId, toIndex)),
       deleteElements: (slideId: string, ids: string[]) =>
         transact(() => {
           for (const id of ids) removeSlideElement(ydoc, slideId, id);

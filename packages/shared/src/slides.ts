@@ -36,6 +36,7 @@ import type {
   VideoElement,
   WorkItemElement,
 } from './canvas.js';
+import type { ElementAnimation } from './slideBuilds.js';
 import type { AccessMode, Permission } from './types.js';
 
 /**
@@ -225,9 +226,11 @@ export const slideTransitionSchema = z.object({
 /** What every slide element carries: the canvas base (x, y, width, height, z, color) plus rotation in degrees. */
 export interface SlideElementBase extends Omit<CanvasElementBase, 'type'> {
   rotation?: number;
+  /** How it builds in or out during the slideshow; see slideBuilds.ts. */
+  animation?: ElementAnimation;
 }
 
-type OnSlide<T extends CanvasElementBase> = T & { rotation?: number };
+type OnSlide<T extends CanvasElementBase> = T & { rotation?: number; animation?: ElementAnimation };
 
 /** Canvas element types that mean the same on a slide as on a board. */
 export type SlideCanvasElement =
