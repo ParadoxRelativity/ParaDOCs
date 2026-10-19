@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { PresenceStatus } from './presence.js';
 import type { ProjectKind, StatusCategory } from './projects.js';
 import type { AccessMode, FolderApp, Permission } from './types.js';
+import type { LiveShowEvent } from './slideLive.js';
 
 /**
  * A voice channel is a place to meet; it carries no messages. A direct
@@ -390,7 +391,14 @@ export interface BlocksEvent {
   type: 'blocks.changed';
 }
 
-export type ChatEvent = ChatMessageEvent | CallEvent | WorkspaceEvent | TypingEvent | NotificationsEvent | BlocksEvent;
+export type ChatEvent =
+  | ChatMessageEvent
+  | CallEvent
+  | WorkspaceEvent
+  | TypingEvent
+  | NotificationsEvent
+  | BlocksEvent
+  | LiveShowEvent;
 
 /** How often a client repeats that someone is still typing. */
 export const TYPING_INTERVAL_MS = 3_000;

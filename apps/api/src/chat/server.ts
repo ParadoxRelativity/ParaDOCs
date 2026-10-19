@@ -10,6 +10,7 @@ import { subscribeToChannel, subscribeToUser, subscribeToWorkspace } from './hub
 import { appearsOffline, connectPresence } from './presence.js';
 import { onAccessChanged } from '../lib/accessEvents.js';
 import { onSignedOut } from '../lib/accountEvents.js';
+import { endShow, joinShow, leaveShow, recheckOwner, releaseOwner, startShow, updateShow } from '../lib/liveShows.js';
 
 export const CHAT_PATH = '/chat';
 
@@ -20,8 +21,11 @@ interface ClientMessage {
    * whether this window has gone idle. Typing says the person is writing in a
    * channel, or has stopped.
    */
-  type: 'subscribe' | 'unsubscribe' | 'activity' | 'typing';
-  channelId?: string;
+  type: 'subscribe' | 'unsubscribe' | 'activity' | 'typing' | 'show.start' | 'show.state' | 'show.end' | 'show.join' | 'show.leave';
+  channelId?: string | null;
+  /** A live slideshow, for the show.* messages (PARA-99). */
+  presentationId?: string;
+  state?: unknown;
   workspaceId?: string;
   idle?: boolean;
   typing?: boolean;
@@ -58,6 +62,8 @@ export function createChatServer(log: FastifyBaseLogger) {
     const subscriptions = new Map<string, () => void>();
     const typingAccess = new Map<string, { access: ChannelAccess | null; checkedAt: number; sentAt: number }>();
     let closed = false;
+    // Which party this socket is to a live slideshow: only the one that started it moves it.
+    const showOwner = Symbol('live-show');
     alive.set(socket, true);
 
     socket.on('pong', () => alive.set(socket, true));
@@ -132,6 +138,31 @@ export function createChatServer(log: FastifyBaseLogger) {
           return;
         }
 
+        if (typeof parsed.type === 'string' && parsed.type.startsWith('show.')) {
+          const id = parsed.presentationId;
+          if (typeof id !== 'string' || !UUID.test(id)) return;
+          switch (parsed.type) {
+            case 'show.start':
+              await startShow(user, showOwner, id, typeof parsed.channelId === 'string' ? parsed.channelId : null, send);
+              if (closed) releaseOwner(showOwner);
+              break;
+            case 'show.state':
+              updateShow(showOwner, id, parsed.state);
+              break;
+            case 'show.end':
+              endShow(showOwner, id);
+              break;
+            case 'show.join':
+              await joinShow(user, showOwner, id, send);
+              if (closed) releaseOwner(showOwner);
+              break;
+            case 'show.leave':
+              leaveShow(showOwner, id);
+              break;
+          }
+          return;
+        }
+
         const target =
           typeof parsed.channelId === 'string'
             ? { kind: 'channel' as const, id: parsed.channelId }
@@ -176,6 +207,7 @@ export function createChatServer(log: FastifyBaseLogger) {
      */
     async function recheck(workspaceId: string) {
       typingAccess.clear();
+      await recheckOwner(user, showOwner);
       for (const key of [...subscriptions.keys()]) {
         const [kind, id] = key.split(':');
         let allowed: boolean;
@@ -198,6 +230,7 @@ export function createChatServer(log: FastifyBaseLogger) {
       for (const unsubscribe of subscriptions.values()) unsubscribe();
       subscriptions.clear();
       typingAccess.clear();
+      releaseOwner(showOwner);
       stopPersonal();
       stopAccess();
       stopSignedOut();

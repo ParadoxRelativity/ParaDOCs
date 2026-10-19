@@ -5,6 +5,7 @@ import type { Call } from '../../lib/call';
 import { EmptyState } from '../ui';
 import Icon from '../Icon';
 import { CallStage } from './CallStage';
+import LiveShowBanner from '../slides/LiveShowBanner';
 
 /**
  * The view of a voice channel.
@@ -48,6 +49,9 @@ export function VoiceRoom({
         )}
         {actions && <span className="ml-auto flex shrink-0 items-center gap-2">{actions}</span>}
       </header>
+
+      {/* A deck presented live and announced on this channel's call. */}
+      <LiveShowBanner workspaceId={channel.workspaceId} channelId={channel.id} />
 
       {!joined ? (
         <div className="grid min-h-0 flex-1 place-items-center">
