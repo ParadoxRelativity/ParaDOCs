@@ -27,5 +27,6 @@ export function countByWorkspace(notifications: Notifications | undefined): Map<
   // A server that predates tagging or work items sends neither.
   for (const mention of notifications.mentions ?? []) add(mention.workspace.id, true);
   for (const item of notifications.workItems ?? []) add(item.workspace.id, true);
+  for (const n of notifications.schedules ?? []) add(n.workspace.id, n.reason === 'request' || n.reason === 'approval');
   return counts;
 }

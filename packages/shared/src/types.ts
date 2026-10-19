@@ -3,6 +3,7 @@
 import type { DocumentMode } from './canvas.js';
 import type { WorkspacePermission } from './permissions.js';
 import type { WorkItemNotification } from './projects.js';
+import type { ScheduleNotification } from './schedules.js';
 import type { SpreadsheetSummary } from './sheet.js';
 import type { ReleaseInfo } from './version.js';
 
@@ -97,7 +98,7 @@ export interface AccessSettings {
  * The apps a workspace can turn on and off. Access is not among them: it is
  * where membership is managed, so every workspace has it.
  */
-export const WORKSPACE_APPS = ['docs', 'sheets', 'chat', 'projects'] as const;
+export const WORKSPACE_APPS = ['docs', 'sheets', 'chat', 'projects', 'schedules'] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 /** Which app a folder belongs to. Each app that files things has a tree of its own. */
@@ -281,6 +282,15 @@ export interface SheetSearchHit {
 }
 
 /** A work item that matched a search. */
+/** A schedule found by name or description. */
+export interface ScheduleSearchHit {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  timeZone: string;
+}
+
 export interface WorkItemSearchHit {
   id: string;
   projectId: string;
@@ -506,4 +516,6 @@ export interface Notifications {
   suspensions?: WorkspaceSuspensionNotification[];
   /** Reported chat messages, for the owners and admins of their workspaces. Absent from older servers. */
   messageReports?: MessageReportNotification[];
+  /** Your shifts and swaps. Absent from older servers. */
+  schedules?: ScheduleNotification[];
 }

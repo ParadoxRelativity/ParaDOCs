@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { SearchHit, SheetSearchHit, WorkItemSearchHit } from '@paradocs/shared';
+import type { ScheduleSearchHit, SearchHit, SheetSearchHit, WorkItemSearchHit } from '@paradocs/shared';
 import { useAppEnabled, useSearch, useTags } from '../api/hooks';
 import { useBackHandler } from '../lib/back';
 import { cx, formatRelative, plainSnippet, useDebounced } from '../lib/util';
@@ -14,6 +14,8 @@ interface Props {
   onSelectSheet: (spreadsheetId: string) => void;
   /** And a work item opens in its project. */
   onSelectWorkItem?: (hit: WorkItemSearchHit) => void;
+  /** And a schedule in Schedules. */
+  onSelectSchedule?: (hit: ScheduleSearchHit) => void;
   initialTagIds?: string[];
 }
 
@@ -21,7 +23,8 @@ interface Props {
 type Result =
   | { kind: 'document'; hit: SearchHit }
   | { kind: 'sheet'; hit: SheetSearchHit }
-  | { kind: 'workItem'; hit: WorkItemSearchHit };
+  | { kind: 'workItem'; hit: WorkItemSearchHit }
+  | { kind: 'schedule'; hit: ScheduleSearchHit };
 
 export default function SearchPalette({
   workspaceId,
@@ -29,6 +32,7 @@ export default function SearchPalette({
   onSelect,
   onSelectSheet,
   onSelectWorkItem,
+  onSelectSchedule,
   initialTagIds = [],
 }: Props) {
   const [text, setText] = useState('');
@@ -52,17 +56,21 @@ export default function SearchPalette({
   const hits = search.data?.hits ?? [];
   const sheets = search.data?.sheets ?? [];
   const workItems = onSelectWorkItem ? (search.data?.workItems ?? []) : [];
+  const schedules = onSelectSchedule ? (search.data?.schedules ?? []) : [];
   const results: Result[] = [
     ...hits.map((hit): Result => ({ kind: 'document', hit })),
     ...sheets.map((hit): Result => ({ kind: 'sheet', hit })),
     ...workItems.map((hit): Result => ({ kind: 'workItem', hit })),
+    ...schedules.map((hit): Result => ({ kind: 'schedule', hit })),
   ];
   const open = (result: Result) =>
     result.kind === 'document'
       ? onSelect(result.hit.id)
       : result.kind === 'sheet'
         ? onSelectSheet(result.hit.id)
-        : onSelectWorkItem?.(result.hit);
+        : result.kind === 'workItem'
+          ? onSelectWorkItem?.(result.hit)
+          : onSelectSchedule?.(result.hit);
 
   useEffect(() => setCursor(0), [debounced, tagIds, from, to]);
 
@@ -258,6 +266,33 @@ export default function SearchPalette({
                 <span className="shrink-0 text-[10px] text-[var(--color-muted)]">
                   {hit.projectName} · {hit.statusName}
                 </span>
+              </button>
+            );
+          })}
+          {schedules.length > 0 && (
+            <div className="border-b border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Schedules
+            </div>
+          )}
+          {schedules.map((hit, offset) => {
+            const index = hits.length + sheets.length + workItems.length + offset;
+            return (
+              <button
+                key={`schedule-${hit.id}`}
+                onMouseEnter={() => setCursor(index)}
+                onClick={() => {
+                  onSelectSchedule?.(hit);
+                  onClose();
+                }}
+                className={cx(
+                  'flex w-full items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5 text-left last:border-0',
+                  index === cursor && 'bg-[var(--color-surface)]',
+                )}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: hit.color }} />
+                <Icon name="calendar-week" className="shrink-0 text-xs text-[var(--color-muted)]" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{hit.name}</span>
+                {hit.description && <span className="min-w-0 max-w-[40%] truncate text-[10px] text-[var(--color-muted)]">{hit.description}</span>}
               </button>
             );
           })}

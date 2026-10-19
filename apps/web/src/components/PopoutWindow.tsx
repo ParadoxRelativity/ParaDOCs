@@ -236,6 +236,7 @@ export default function PopoutWindow({ user }: { user: User }) {
         onOpenSpreadsheet={(id) => showInMain(`/w/${workspaceId}/s/${id}`)}
         onOpenWorkItem={(item) => showInMain(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
         onOpenProject={(project) => showInMain(projectPath(workspaceId, project.id, project.kind))}
+        onOpenSchedule={(schedule) => showInMain(`/w/${workspaceId}/sc/${schedule.id}`)}
         onOpenChannel={(id) => showInMain(`/w/${workspaceId}/c/${id}`)}
       />
     </div>

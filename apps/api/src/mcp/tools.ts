@@ -10,13 +10,19 @@ import {
   type Channel,
   type Message,
   type MessageReferences,
+  type MyShift,
   type Project,
   type ProjectSummary,
+  type Schedule,
+  type ScheduleRequest,
+  type ScheduleShifts,
+  type ScheduleSummary,
   type WorkItem,
   type WorkItemListing,
   type WorkItemSummary,
   type WorkItemTimeline,
 } from '@paradocs/shared';
+import { DateTime } from 'luxon';
 import { query } from '../db/pool.js';
 import { UUID } from '../lib/access.js';
 import { INTERNAL_CALL_HEADER, internalCallSecret, type AiCaller } from '../lib/aiTokens.js';
@@ -599,6 +605,49 @@ function stripMarks(text: string | null | undefined): string {
   return (text ?? '').replace(/<\/?mark>/g, '').replace(/\s+/g, ' ').trim();
 }
 
+
+// --- schedules ------------------------------------------------------------------
+
+/** A schedule by name or id, among those the person can see. */
+async function scheduleArg(ctx: ToolContext, arg: string, workspace?: string): Promise<Schedule> {
+  const want = arg.trim().toLowerCase();
+  const found: ScheduleSummary[] = [];
+  for (const w of await workspacesFor(ctx, workspace, 'schedules')) {
+    const list = await call<ScheduleSummary[]>(ctx, 'GET', `/workspaces/${w.id}/schedules`);
+    found.push(...list.filter((s) => s.id === want || s.name.toLowerCase() === want));
+  }
+  if (found.length === 0) {
+    // A name partly given is fine when only one schedule fits it.
+    for (const w of await workspacesFor(ctx, workspace, 'schedules')) {
+      const list = await call<ScheduleSummary[]>(ctx, 'GET', `/workspaces/${w.id}/schedules`);
+      found.push(...list.filter((s) => s.name.toLowerCase().includes(want)));
+    }
+  }
+  if (found.length === 0) throw new ToolError(`No schedule "${arg}". list_schedules shows them.`);
+  if (found.length > 1) {
+    throw new ToolError(`More than one schedule matches "${arg}": ${found.map((s) => `"${s.name}"`).join(', ')}. Name one exactly.`);
+  }
+  return call<Schedule>(ctx, 'GET', `/schedules/${found[0].id}`);
+}
+
+/** A time as the assistant gave it, or now: ISO, or a date and time read in `zone`. */
+function timeArg(value: string | undefined, zone: string, what: string): DateTime {
+  if (!value) return DateTime.now();
+  const parsed = DateTime.fromISO(value.trim().replace(' ', 'T'), { zone });
+  if (!parsed.isValid) throw new ToolError(`${what} must be a date and time such as 2026-03-01T09:00 or 2026-03-01T09:00Z`);
+  return parsed;
+}
+
+/** A moment in a schedule's own zone, readably. */
+function zoned(iso: string, zone: string): string {
+  return DateTime.fromISO(iso).setZone(zone).toFormat("ccc d LLL yyyy HH:mm");
+}
+
+async function memberNames(ctx: ToolContext, workspaceId: string): Promise<Map<string, string>> {
+  const members = await call<{ userId: string; name: string }[]>(ctx, 'GET', `/workspaces/${workspaceId}/members`);
+  return new Map(members.map((m) => [m.userId, m.name]));
+}
+
 // --- the tools ----------------------------------------------------------------
 
 export interface Tool {
@@ -635,7 +684,7 @@ export const TOOLS: Tool[] = [
     name: 'search',
     title: 'Search',
     description:
-      'Full-text search across documents, spreadsheets and work items. Returns titles, ids and snippets; read one with read_document, read_spreadsheet or get_work_item.',
+      'Full-text search across documents, spreadsheets, work items and schedules. Returns titles, ids and snippets; read one with read_document, read_spreadsheet, get_work_item or who_is_on.',
     params: {
       query: { type: 'string', description: 'What to look for', required: true },
       workspace: { ...WORKSPACE, description: 'Workspace name or id. Left out, every workspace is searched.' },
@@ -649,11 +698,13 @@ export const TOOLS: Tool[] = [
           hits: { id: string; title: string; snippet: string | null }[];
           sheets: { id: string; title: string; snippet: string | null }[];
           workItems: { key: string; title: string; statusName: string; projectName: string }[];
+          schedules?: { id: string; name: string; description: string }[];
         }>(ctx, 'GET', `/workspaces/${w.id}/search${qs({ q: str(args, 'query'), limit: 20 })}`);
         const lines = [
           ...found.hits.map((d) => `- document "${d.title}" (id ${d.id}): ${stripMarks(d.snippet)}`),
           ...found.sheets.map((s) => `- spreadsheet "${s.title}" (id ${s.id}): ${stripMarks(s.snippet)}`),
           ...found.workItems.map((i) => `- work item ${i.key}: ${i.title} [${i.statusName}] in ${i.projectName}`),
+          ...(found.schedules ?? []).map((s) => `- schedule "${s.name}" (id ${s.id})${s.description ? `: ${s.description.slice(0, 160)}` : ''}`),
         ];
         if (lines.length) out.push(list.length > 1 ? `## ${w.name}\n${lines.join('\n')}` : lines.join('\n'));
       }
@@ -1096,6 +1147,139 @@ export const TOOLS: Tool[] = [
       const channel = await channelArg(ctx, str(args, 'channel')!, str(args, 'workspace'));
       await call(ctx, 'POST', `/channels/${channel.id}/messages`, { body: str(args, 'text') });
       return `Posted to #${channel.name}.`;
+    },
+  },
+
+  // --- schedules -----------------------------------------------------------------
+  {
+    name: 'list_schedules',
+    title: 'List schedules',
+    description: 'On-call rotations, shift patterns and work schedules in a workspace, and whether you are on each.',
+    params: { workspace: WORKSPACE },
+    writes: false,
+    async run(ctx, args) {
+      const out: string[] = [];
+      const list = await workspacesFor(ctx, str(args, 'workspace'), 'schedules');
+      for (const w of list) {
+        const schedules = await call<ScheduleSummary[]>(ctx, 'GET', `/workspaces/${w.id}/schedules`);
+        const lines = schedules.map(
+          (s) =>
+            `- ${s.name} (id ${s.id}; ${s.timeZone}; ${s.memberCount} people${s.isMember ? '; you are on it' : ''}${s.isManager ? ', as a manager' : ''})${s.description ? ` — ${s.description.slice(0, 160)}` : ''}`,
+        );
+        if (lines.length) out.push(list.length > 1 ? `## ${w.name}\n${lines.join('\n')}` : lines.join('\n'));
+      }
+      return out.length ? out.join('\n\n') : 'No schedules.';
+    },
+  },
+  {
+    name: 'who_is_on',
+    title: 'Who is on',
+    description: 'Who is on a schedule now, or at a given time, and until when, overall and on each of its layers.',
+    params: {
+      schedule: { type: 'string', description: 'Schedule name or id', required: true },
+      at: { type: 'string', description: "A date and time, in the schedule's zone unless it says otherwise. Now, when left out." },
+      workspace: WORKSPACE,
+    },
+    writes: false,
+    async run(ctx, args) {
+      const schedule = await scheduleArg(ctx, str(args, 'schedule')!, str(args, 'workspace'));
+      const at = timeArg(str(args, 'at'), schedule.timeZone, 'at');
+      const from = at.toUTC().toISO()!;
+      const to = at.plus({ minutes: 1 }).toUTC().toISO()!;
+      const result = await call<ScheduleShifts>(ctx, 'GET', `/schedules/${schedule.id}/shifts${qs({ from, to })}`);
+      const names = await memberNames(ctx, schedule.workspaceId);
+      const t = at.toMillis();
+      const running = (list: ScheduleShifts['shifts']) => list.filter((x) => Date.parse(x.start) <= t && Date.parse(x.end) > t);
+      const person = (id: string | null | undefined) => (id ? (names.get(id) ?? 'a former member') : '');
+      const describe = (shift: ScheduleShifts['shifts'][number]) =>
+        `${person(shift.userId)}${shift.overriddenFrom ? ` (covering for ${person(shift.overriddenFrom)})` : ''}${shift.label ? ` · ${shift.label}` : ''}, until ${zoned(shift.end, schedule.timeZone)}`;
+      const on = running(result.shifts);
+      const lines = [
+        `${schedule.name}, at ${zoned(from, schedule.timeZone)} (${schedule.timeZone}):`,
+        on.length ? on.map((s) => `- ${describe(s)}`).join('\n') : '- Nobody is on.',
+      ];
+      if (result.layers.length > 1) {
+        lines.push('By layer:');
+        for (const layer of result.layers) {
+          const here = running(layer.shifts);
+          lines.push(`- ${layer.name}: ${here.length ? here.map((s) => person(s.userId)).join(', ') : 'nobody'}`);
+        }
+      }
+      lines.push(`${ctx.origin}/w/${schedule.workspaceId}/sc/${schedule.id}`);
+      return lines.join('\n');
+    },
+  },
+  {
+    name: 'my_shifts',
+    title: 'My shifts',
+    description: 'Your own shifts across every schedule, from now for two weeks unless a range is given.',
+    params: {
+      from: { type: 'string', description: 'Start, as an ISO date and time. Now, when left out.' },
+      to: { type: 'string', description: 'End, as an ISO date and time. Up to 100 days after the start.' },
+      workspace: WORKSPACE,
+    },
+    writes: false,
+    async run(ctx, args) {
+      const from = timeArg(str(args, 'from'), 'UTC', 'from');
+      const to = str(args, 'to') ? timeArg(str(args, 'to'), 'UTC', 'to') : from.plus({ days: 14 });
+      const out: string[] = [];
+      const list = await workspacesFor(ctx, str(args, 'workspace'), 'schedules');
+      for (const w of list) {
+        const mine = await call<{ shifts: MyShift[] }>(
+          ctx,
+          'GET',
+          `/workspaces/${w.id}/my-shifts${qs({ from: from.toUTC().toISO()!, to: to.toUTC().toISO()! })}`,
+        );
+        const lines = mine.shifts.map(
+          (s) =>
+            `- ${s.scheduleName}: ${zoned(s.start, s.timeZone)} to ${zoned(s.end, s.timeZone)} (${s.timeZone})${s.label ? ` · ${s.label}` : ''}${s.overriddenFrom ? ' (covering)' : ''} [schedule id ${s.scheduleId}; start ${s.start}; end ${s.end}]`,
+        );
+        if (lines.length) out.push(list.length > 1 ? `## ${w.name}\n${lines.join('\n')}` : lines.join('\n'));
+      }
+      return out.length ? out.join('\n\n') : 'No shifts in that time.';
+    },
+  },
+  {
+    name: 'request_replacement',
+    title: 'Request a replacement',
+    description:
+      'Asks others on the same schedule to cover one of your shifts, or part of it, or to swap it. Only people on that schedule can be asked. my_shifts gives the start and end of your shifts.',
+    params: {
+      schedule: { type: 'string', description: 'Schedule name or id', required: true },
+      start: { type: 'string', description: "Start of the time to cover, in the schedule's zone unless it says otherwise", required: true },
+      end: { type: 'string', description: 'End of the time to cover', required: true },
+      kind: { type: 'string', description: 'cover (someone takes it) or swap (you take one of theirs). Default cover.', enum: ['cover', 'swap'] },
+      people: { type: 'string', description: 'Names of people on the schedule to ask, comma-separated. Everyone on it, when left out.' },
+      note: { type: 'string', description: 'Why, for the people asked' },
+      workspace: WORKSPACE,
+    },
+    writes: true,
+    async run(ctx, args) {
+      const schedule = await scheduleArg(ctx, str(args, 'schedule')!, str(args, 'workspace'));
+      const start = timeArg(str(args, 'start'), schedule.timeZone, 'start');
+      const end = timeArg(str(args, 'end'), schedule.timeZone, 'end');
+      const asked = (str(args, 'people') ?? '')
+        .split(',')
+        .map((n) => n.trim().toLowerCase())
+        .filter(Boolean);
+      const askUserIds = asked.map((name) => {
+        const member = schedule.members.find((m) => m.name.toLowerCase() === name);
+        if (!member) {
+          throw new ToolError(
+            `"${name}" is not on ${schedule.name}, and only people on it can be asked. On it: ${schedule.members.map((m) => m.name).join(', ')}.`,
+          );
+        }
+        return member.userId;
+      });
+      const request = await call<ScheduleRequest>(ctx, 'POST', `/schedules/${schedule.id}/requests`, {
+        kind: str(args, 'kind') ?? 'cover',
+        startsAt: start.toUTC().toISO(),
+        endsAt: end.toUTC().toISO(),
+        note: str(args, 'note'),
+        askUserIds: askUserIds.length ? askUserIds : undefined,
+      });
+      const who = request.askEveryone ? `everyone on ${schedule.name}` : request.candidates.map((c) => c.name).join(', ');
+      return `Asked ${who} to ${request.kind === 'swap' ? 'swap' : 'cover'} ${zoned(request.startsAt, schedule.timeZone)} to ${zoned(request.endsAt, schedule.timeZone)} (${schedule.timeZone}). ${ctx.origin}/w/${schedule.workspaceId}/sc/${schedule.id}`;
     },
   },
 ];

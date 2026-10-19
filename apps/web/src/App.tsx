@@ -27,6 +27,7 @@ import {
   useOpenDirect,
   usePresence,
   useProject,
+  useSchedule,
   useSpreadsheet,
   useWorkItemListing,
   usePresenceSettings,
@@ -86,6 +87,7 @@ import PopoutWindow from './components/PopoutWindow';
 import SpreadsheetView from './components/sheet/SpreadsheetView';
 import AccessApp, { isAccessSection } from './components/AccessApp';
 import ProjectsApp from './components/projects/ProjectsApp';
+import SchedulesApp from './components/schedules/SchedulesApp';
 import { Button, EmptyState, IconButton, Spinner } from './components/ui';
 import Icon from './components/Icon';
 
@@ -153,6 +155,8 @@ export default function App() {
           <Route path="/w/:workspaceId/p/:projectId/:itemId" element={<Workspace user={me.data.user} projects />} />
           <Route path="/w/:workspaceId/p/:projectId" element={<Workspace user={me.data.user} projects />} />
           <Route path="/w/:workspaceId/p" element={<Workspace user={me.data.user} projects />} />
+          <Route path="/w/:workspaceId/sc/:scheduleId" element={<Workspace user={me.data.user} schedules />} />
+          <Route path="/w/:workspaceId/sc" element={<Workspace user={me.data.user} schedules />} />
           <Route path="/w/:workspaceId/access/:accessSection" element={<Workspace user={me.data.user} access />} />
           <Route path="/w/:workspaceId/access" element={<Workspace user={me.data.user} access />} />
           {/* Access was once called People; links and tabs from then still land. */}
@@ -277,7 +281,9 @@ function appHome(workspaceId: string, app: WorkspaceApp): string {
       ? `/w/${workspaceId}/c`
       : app === 'projects'
         ? `/w/${workspaceId}/p`
-        : `/w/${workspaceId}`;
+        : app === 'schedules'
+          ? `/w/${workspaceId}/sc`
+          : `/w/${workspaceId}`;
 }
 
 /** A channel's name, or for a direct conversation, the other people's. */
@@ -291,6 +297,7 @@ function Workspace({
   chat = false,
   sheets = false,
   projects = false,
+  schedules = false,
   access = false,
 }: {
   user: User;
@@ -300,11 +307,14 @@ function Workspace({
   sheets?: boolean;
   /** The Projects app: your work, or a project and perhaps one of its items. */
   projects?: boolean;
+  /** The Schedules app: your shifts, or one schedule open. */
+  schedules?: boolean;
   /** The Access app: the workspace's members and teams, and its own settings. */
   access?: boolean;
 }) {
   const userId = user.id;
-  const { workspaceId = '', documentId, channelId, sheetId, projectId, itemId, accessSection: accessParam } = useParams();
+  const { workspaceId = '', documentId, channelId, sheetId, projectId, itemId, scheduleId, accessSection: accessParam } =
+    useParams();
   const accessSection = isAccessSection(accessParam) ? accessParam : 'members';
   // Spreadsheets are their own records, fetched here only to name the header
   // and the tab; the grid itself loads inside the Sheets view.
@@ -343,10 +353,13 @@ function Workspace({
       ? 'sheets'
       : projects
         ? 'projects'
-        : access
-          ? 'access'
-          : 'docs';
+        : schedules
+          ? 'schedules'
+          : access
+            ? 'access'
+            : 'docs';
   const openProject = useProject(projects ? projectId : undefined);
+  const openSchedule = useSchedule(schedules ? scheduleId : undefined);
   // Counted for the sidebar while Projects is open, and only then.
   const myWork = useWorkItemListing(projects && appOn('projects') ? workspaceId : undefined, { mine: true, open: true, limit: 200 });
   const channels = useChannels(appOn('chat') ? workspaceId : undefined);
@@ -555,6 +568,10 @@ function Workspace({
         ? projectId
           ? (openProject.data?.name ?? '')
           : 'My work'
+        : schedules
+          ? scheduleId
+            ? (openSchedule.data?.name ?? '')
+            : 'My shifts'
         : access
           ? 'Access'
           : allDocuments
@@ -568,6 +585,8 @@ function Workspace({
       ? 'sheet'
       : projects
         ? 'project'
+        : schedules
+          ? 'schedule'
         : access
           ? 'access'
         : allDocuments
@@ -767,12 +786,16 @@ function Workspace({
               if (next === 'docs') navigate(`/w/${workspaceId}`);
               else if (next === 'sheets') navigate(sheetId ? `/w/${workspaceId}/s/${sheetId}` : `/w/${workspaceId}/s`);
               else if (next === 'projects') navigate(projectId ? `/w/${workspaceId}/p/${projectId}` : `/w/${workspaceId}/p`);
+              else if (next === 'schedules') navigate(scheduleId ? `/w/${workspaceId}/sc/${scheduleId}` : `/w/${workspaceId}/sc`);
               else if (next === 'access') navigate(`/w/${workspaceId}/access`);
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}
             activeProjectId={projects ? (projectId ?? null) : null}
             onSelectProject={(id) => show(`/w/${workspaceId}/p/${id}`)}
             onOpenMyWork={() => show(`/w/${workspaceId}/p`)}
+            activeScheduleId={schedules ? (scheduleId ?? null) : null}
+            onSelectSchedule={(id) => show(`/w/${workspaceId}/sc/${id}`)}
+            onOpenMyShifts={() => show(`/w/${workspaceId}/sc`)}
             myWorkCount={myWork.data?.length}
             activeAccessSection={accessSection}
             onSelectAccessSection={(next) => show(`/w/${workspaceId}/access/${next}`)}
@@ -866,6 +889,10 @@ function Workspace({
                   ? projectId
                     ? `Projects / ${openProject.data?.name ?? ''}`
                     : 'Projects'
+                  : schedules
+                    ? scheduleId
+                      ? `Schedules / ${openSchedule.data?.name ?? ''}`
+                      : 'Schedules'
                   : access
                   ? 'Access'
                   : allDocuments
@@ -875,7 +902,7 @@ function Workspace({
           {/* Writing and drawing are two views of one document, so moving
               between them belongs beside the document rather than inside a
               panel. */}
-          {!chat && !sheets && !projects && !access && !allDocuments && document.data && (
+          {!chat && !sheets && !projects && !schedules && !access && !allDocuments && document.data && (
             <ModeSwitch
               mode={document.data.mode}
               disabled={document.data.permission !== 'edit'}
@@ -892,7 +919,7 @@ function Workspace({
             >
               <Icon name="people" />
             </IconButton>
-          ) : sheets || projects || access ? null : (
+          ) : sheets || projects || schedules || access ? null : (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
                 <Icon name="search" />
@@ -988,6 +1015,7 @@ function Workspace({
                 onOpenChannel={(id) => navigate(`/w/${workspaceId}/c/${id}`)}
                 onOpenWorkItem={(item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
                 onOpenProject={(project) => navigate(projectPath(workspaceId, project.id, project.kind))}
+                onOpenSchedule={(schedule) => navigate(`/w/${workspaceId}/sc/${schedule.id}`)}
               />
             ) : channelId && directs.isLoading ? (
               <Spinner />
@@ -1012,6 +1040,18 @@ function Workspace({
                 onOpenItem={(project, item) => navigate(`/w/${workspaceId}/p/${project}/${item}`)}
                 onCloseItem={() => navigate(`/w/${workspaceId}/p/${projectId}`)}
                 onProjectDeleted={() => navigate(`/w/${workspaceId}/p`)}
+              />
+            ) : (
+              <Spinner />
+            )
+          ) : schedules ? (
+            workspace ? (
+              <SchedulesApp
+                workspace={workspace}
+                user={user}
+                scheduleId={scheduleId ?? null}
+                onOpenSchedule={(id) => navigate(`/w/${workspaceId}/sc/${id}`)}
+                onScheduleDeleted={() => navigate(`/w/${workspaceId}/sc`)}
               />
             ) : (
               <Spinner />
@@ -1093,7 +1133,7 @@ function Workspace({
             onCall={(id, video) => void callMember(id, video)}
           />
         </SidePanel>
-      ) : sheets || projects || access ? null : (
+      ) : sheets || projects || schedules || access ? null : (
         <SidePanel open={rightShown} width="w-72" mobile={mobile} onClose={() => setRightShown(false)}>
           <RightSidebar
             tab={rightTab}
@@ -1140,6 +1180,7 @@ function Workspace({
           onSelectWorkItem={
             appOn('projects') ? (hit) => show(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
           }
+          onSelectSchedule={appOn('schedules') ? (hit) => show(`/w/${workspaceId}/sc/${hit.id}`) : undefined}
         />
       )}
 

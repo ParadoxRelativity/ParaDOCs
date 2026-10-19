@@ -53,13 +53,14 @@ import { useDocumentImport } from './ImportDocument';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
 import { ProjectList } from './projects/ProjectList';
+import { ScheduleList } from './schedules/ScheduleList';
 import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
 import SheetContextMenu, { type SheetMenuItem } from './sheet/SheetContextMenu';
 import DeleteFolderDialog, { DOCUMENT_NOUN } from './DeleteFolderDialog';
 import ManageTagsDialog from './ManageTagsDialog';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
-export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'projects' | 'access';
+export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'projects' | 'schedules' | 'access';
 
 interface Props {
   /** The signed-in account, shown at the foot of the sidebar. */
@@ -97,6 +98,10 @@ interface Props {
   activeProjectId: string | null;
   onSelectProject: (id: string) => void;
   onOpenMyWork: () => void;
+  /** Null while My shifts is showing. */
+  activeScheduleId: string | null;
+  onSelectSchedule: (id: string) => void;
+  onOpenMyShifts: () => void;
   /** Open work items the signed-in person holds a role on. */
   myWorkCount?: number;
   /** The page open in the Access app. */
@@ -310,6 +315,7 @@ export default function LeftSidebar(props: Props) {
               },
               { id: 'sheets', label: 'Sheets', icon: 'table' },
               { id: 'projects', label: 'Projects', icon: 'kanban' },
+              { id: 'schedules', label: 'Schedules', icon: 'calendar-week' },
               { id: 'access', label: 'Access', icon: 'shield-lock' },
             ] satisfies AppEntry[]
           ).filter((app) => app.id === 'access' || (current?.visibleApps ?? []).includes(app.id as WorkspaceApp))}
@@ -383,6 +389,14 @@ export default function LeftSidebar(props: Props) {
             />
           )}
         </div>
+      ) : props.section === 'schedules' ? (
+        <ScheduleList
+          workspaceId={workspaceId}
+          activeScheduleId={props.activeScheduleId}
+          can={props.can}
+          onOpenMine={props.onOpenMyShifts}
+          onSelect={props.onSelectSchedule}
+        />
       ) : props.section === 'projects' ? (
         <ProjectList
           workspaceId={workspaceId}

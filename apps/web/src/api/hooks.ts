@@ -85,6 +85,20 @@ import type {
   WorkItemSearchHit,
   WorkItemSummary,
   WorkItemTimeline,
+  CreateLayerInput,
+  ScheduleSearchHit,
+  CreateOverrideInput,
+  CreateRequestInput,
+  ScheduleSettings,
+  ScheduleRequest,
+  ScheduleOverride,
+  MyShift,
+  CreateScheduleInput,
+  Schedule,
+  ScheduleShifts,
+  UpdateLayerInput,
+  ScheduleSummary,
+  UpdateScheduleInput,
 } from '@paradocs/shared';
 import { WORKSPACE_APPS } from '@paradocs/shared';
 import { canFrom, roleName, seesApp, withPermissions } from '../lib/permissions';
@@ -506,7 +520,7 @@ export function useDeleteFolder(workspaceId: string, app: FolderApp = 'docs') {
 
 /** Something that can be locked. */
 export interface AccessTarget {
-  kind: 'folder' | 'document' | 'spreadsheet' | 'channel' | 'project';
+  kind: 'folder' | 'document' | 'spreadsheet' | 'channel' | 'project' | 'schedule';
   id: string;
 }
 
@@ -516,6 +530,7 @@ const ACCESS_PATHS = {
   spreadsheet: 'spreadsheets',
   channel: 'channels',
   project: 'projects',
+  schedule: 'schedules',
 } as const;
 
 /**
@@ -1570,6 +1585,15 @@ export function useMarkWorkItemsRead() {
   });
 }
 
+/** Clears schedule notifications: the ones given, or all of them. */
+export function useMarkScheduleNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids?: string[]) => api.post('/notifications/schedules/read', ids ? { ids } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
+  });
+}
+
 // --- tags ------------------------------------------------------------------
 
 export function useTags(workspaceId: string | undefined) {
@@ -1749,6 +1773,8 @@ export interface SearchResults {
   hits: SearchHit[];
   sheets?: SheetSearchHit[];
   workItems?: WorkItemSearchHit[];
+  /** Absent from servers that predate Schedules. */
+  schedules?: ScheduleSearchHit[];
   query: string;
 }
 
@@ -2219,5 +2245,242 @@ export function useVoiceParticipants(workspaceId: string | undefined, enabled: b
 export function useJoinCall() {
   return useMutation({
     mutationFn: (channelId: string) => api.post<CallCredentials>(`/channels/${channelId}/call`),
+  });
+}
+
+// --- schedules -----------------------------------------------------------------
+//
+// Everything about one schedule is keyed under ['schedule', id], and everyone's
+// own shifts under ['myShifts', workspace], so a `schedules.changed` event
+// refreshes it all at once.
+
+export function useSchedules(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['schedules', workspaceId ?? ''] as const,
+    queryFn: () => api.get<ScheduleSummary[]>(`/workspaces/${workspaceId}/schedules`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useSchedule(id: string | undefined) {
+  return useQuery({
+    queryKey: ['schedule', id ?? ''] as const,
+    queryFn: () => api.get<Schedule>(`/schedules/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+function invalidateSchedule(qc: QueryClient, workspaceId: string, scheduleId: string) {
+  void qc.invalidateQueries({ queryKey: ['schedules', workspaceId] });
+  void qc.invalidateQueries({ queryKey: ['schedule', scheduleId] });
+  void qc.invalidateQueries({ queryKey: ['myShifts', workspaceId] });
+}
+
+export function useCreateSchedule(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateScheduleInput) => api.post<Schedule>(`/workspaces/${workspaceId}/schedules`, input),
+    onSuccess: (schedule) => {
+      qc.setQueryData(['schedule', schedule.id], schedule);
+      invalidateSchedule(qc, workspaceId, schedule.id);
+    },
+  });
+}
+
+/** Changes a schedule, replacing it in the cache with what the server answers. */
+function useScheduleWrite<I>(workspaceId: string, scheduleId: string, send: (input: I) => Promise<Schedule>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: send,
+    onSuccess: (schedule) => {
+      qc.setQueryData(['schedule', scheduleId], schedule);
+      invalidateSchedule(qc, workspaceId, scheduleId);
+    },
+  });
+}
+
+export function useUpdateSchedule(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (input: UpdateScheduleInput) =>
+    api.patch<Schedule>(`/schedules/${scheduleId}`, input),
+  );
+}
+
+export function useSetScheduleMembers(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (members: { userId: string; manager: boolean }[]) =>
+    api.put<Schedule>(`/schedules/${scheduleId}/members`, { members }),
+  );
+}
+
+export function useSetOverrideGrants(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (entries: { teamId?: string; userId?: string }[]) =>
+    api.put<Schedule>(`/schedules/${scheduleId}/override-grants`, { entries }),
+  );
+}
+
+export function useDeleteSchedule(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (scheduleId: string) => api.delete(`/schedules/${scheduleId}`),
+    onSuccess: (_result, scheduleId) => {
+      qc.removeQueries({ queryKey: ['schedule', scheduleId] });
+      void qc.invalidateQueries({ queryKey: ['schedules', workspaceId] });
+      void qc.invalidateQueries({ queryKey: ['myShifts', workspaceId] });
+    },
+  });
+}
+
+export function useCreateLayer(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (input: CreateLayerInput) =>
+    api.post<Schedule>(`/schedules/${scheduleId}/layers`, input),
+  );
+}
+
+export function useUpdateLayer(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, ({ lineageId, ...input }: UpdateLayerInput & { lineageId: string }) =>
+    api.patch<Schedule>(`/schedules/${scheduleId}/layers/${lineageId}`, input),
+  );
+}
+
+export function useOrderLayers(workspaceId: string, scheduleId: string) {
+  return useScheduleWrite(workspaceId, scheduleId, (lineageIds: string[]) =>
+    api.put<Schedule>(`/schedules/${scheduleId}/layers/order`, { lineageIds }),
+  );
+}
+
+export function useEndLayer(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (lineageId: string) => api.delete(`/schedules/${scheduleId}/layers/${lineageId}`),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+/** Who is on a schedule over [from, to), and each layer's own shifts. */
+export function useScheduleShifts(scheduleId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ['schedule', scheduleId ?? '', 'shifts', from, to] as const,
+    queryFn: () =>
+      api.get<ScheduleShifts>(`/schedules/${scheduleId}/shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    enabled: Boolean(scheduleId),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** The viewer's own shifts across every schedule, over [from, to). */
+export function useMyShifts(workspaceId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ['myShifts', workspaceId ?? '', from, to] as const,
+    queryFn: () =>
+      api.get<{ from: string; to: string; shifts: MyShift[] }>(
+        `/workspaces/${workspaceId}/my-shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      ),
+    enabled: Boolean(workspaceId),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useScheduleOverrides(scheduleId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ['schedule', scheduleId ?? '', 'overrides', from, to] as const,
+    queryFn: () =>
+      api.get<ScheduleOverride[]>(`/schedules/${scheduleId}/overrides?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    enabled: Boolean(scheduleId),
+  });
+}
+
+export function useCreateOverride(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateOverrideInput) => api.post<ScheduleOverride>(`/schedules/${scheduleId}/overrides`, input),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+export function useDeleteOverride(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (overrideId: string) => api.delete(`/schedules/${scheduleId}/overrides/${overrideId}`),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+export function useScheduleRequests(scheduleId: string | undefined, all = false) {
+  return useQuery({
+    queryKey: ['schedule', scheduleId ?? '', 'requests', all] as const,
+    queryFn: () => api.get<ScheduleRequest[]>(`/schedules/${scheduleId}/requests${all ? '?all=true' : ''}`),
+    enabled: Boolean(scheduleId),
+  });
+}
+
+/** Requests the viewer made or was asked on, across every schedule. */
+export function useMyRequests(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: ['myShifts', workspaceId ?? '', 'requests'] as const,
+    queryFn: () => api.get<ScheduleRequest[]>(`/workspaces/${workspaceId}/my-requests`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
+export function useCreateRequest(workspaceId: string, scheduleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateRequestInput) => api.post<ScheduleRequest>(`/schedules/${scheduleId}/requests`, input),
+    onSuccess: () => invalidateSchedule(qc, workspaceId, scheduleId),
+  });
+}
+
+/** Something done to a request: cancel it, and later take, approve or decline it. */
+export function useRequestAction(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ request, action, body }: { request: ScheduleRequest; action: string; body?: object }) =>
+      api.post<ScheduleRequest>(`/schedules/${request.scheduleId}/requests/${request.id}/${action}`, body ?? {}),
+    onSuccess: (request) => invalidateSchedule(qc, workspaceId, request.scheduleId),
+  });
+}
+
+export function useScheduleSettings() {
+  return useQuery({ queryKey: ['scheduleSettings'] as const, queryFn: () => api.get<ScheduleSettings>('/schedule-settings') });
+}
+
+export function useUpdateScheduleSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: ScheduleSettings) => api.put<ScheduleSettings>('/schedule-settings', settings),
+    onSuccess: (settings) => qc.setQueryData(['scheduleSettings'], settings),
+  });
+}
+
+/** Whether there is a calendar feed for the viewer's shifts, or one schedule's. Its address is only shown when made. */
+export interface CalendarFeedStatus {
+  hint: string | null;
+  createdAt: string | null;
+  url?: string;
+}
+
+function feedPath(workspaceId: string, scheduleId?: string) {
+  return `/workspaces/${workspaceId}/calendar-feed${scheduleId ? `?scheduleId=${scheduleId}` : ''}`;
+}
+
+export function useCalendarFeed(workspaceId: string, scheduleId?: string) {
+  return useQuery({
+    queryKey: ['calendarFeed', workspaceId, scheduleId ?? ''] as const,
+    queryFn: () => api.get<CalendarFeedStatus>(feedPath(workspaceId, scheduleId)),
+  });
+}
+
+export function useResetCalendarFeed(workspaceId: string, scheduleId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<CalendarFeedStatus>(feedPath(workspaceId, scheduleId), {}),
+    onSuccess: (status) => qc.setQueryData(['calendarFeed', workspaceId, scheduleId ?? ''], { hint: status.hint, createdAt: status.createdAt }),
+  });
+}
+
+export function useDeleteCalendarFeed(workspaceId: string, scheduleId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete(feedPath(workspaceId, scheduleId)),
+    onSuccess: () => qc.setQueryData(['calendarFeed', workspaceId, scheduleId ?? ''], { hint: null, createdAt: null }),
   });
 }

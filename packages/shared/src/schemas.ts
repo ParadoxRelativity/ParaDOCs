@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { WORKSPACE_PERMISSIONS } from './permissions.js';
+import { WORKSPACE_APPS } from './types.js';
 
 /** The most of each kind a picker's search returns. */
 export const MAX_LINK_TARGETS = 50;
@@ -85,14 +86,14 @@ export const createWorkspaceSchema = z.object({
   icon: z.string().max(16).nullish(),
 });
 
-export const workspaceAppSchema = z.enum(['docs', 'sheets', 'chat', 'projects']);
+export const workspaceAppSchema = z.enum(WORKSPACE_APPS);
 
 export const updateWorkspaceSchema = createWorkspaceSchema.partial().extend({
   /** The apps to have on. Anything left out is turned off; Access always stays on. */
   apps: z
     .array(workspaceAppSchema)
     .min(1, 'Keep at least one app turned on')
-    .max(4)
+    .max(WORKSPACE_APPS.length)
     .optional(),
 });
 

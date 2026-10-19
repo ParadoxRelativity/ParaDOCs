@@ -36,11 +36,15 @@ import { directRoutes } from './routes/direct.js';
 import { presenceRoutes } from './routes/presence.js';
 import { accessRoutes } from './routes/access.js';
 import { projectRoutes } from './routes/projects.js';
+import { scheduleRoutes } from './routes/schedules.js';
+import { scheduleRequestRoutes } from './routes/scheduleRequests.js';
+import { scheduleFeedRoutes } from './routes/scheduleFeeds.js';
 import { intakeRoutes } from './routes/intake.js';
 import { aiConnectionRoutes } from './routes/aiConnections.js';
 import { oauthDiscoveryRoutes, oauthRoutes } from './routes/oauth.js';
 import { mcpRoutes } from './mcp/routes.js';
 import { scheduleWorkItemArchiving } from './lib/workItemArchive.js';
+import { scheduleShiftNotices } from './lib/scheduleNotifications.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -134,6 +138,9 @@ export async function buildApp() {
     documentRoutes,
     spreadsheetRoutes,
     projectRoutes,
+    scheduleRoutes,
+    scheduleRequestRoutes,
+    scheduleFeedRoutes,
     intakeRoutes,
     searchRoutes,
     tagRoutes,
@@ -169,6 +176,7 @@ export async function buildApp() {
   // Here rather than in server.ts, so the server the desktop app runs locally
   // puts finished work away too.
   scheduleWorkItemArchiving(app);
+  scheduleShiftNotices(app);
 
   return app;
 }

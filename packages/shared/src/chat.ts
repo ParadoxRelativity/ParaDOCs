@@ -269,6 +269,13 @@ export interface ProjectReference {
   icon: string | null;
 }
 
+/** A schedule, as a link to it shows it. */
+export interface ScheduleReference {
+  id: string;
+  name: string;
+  color: string;
+}
+
 /** What a page of messages points at, resolved once. */
 export interface MessageReferences {
   documents: DocumentReference[];
@@ -279,6 +286,8 @@ export interface MessageReferences {
   workItems?: WorkItemReference[];
   /** Absent from servers that predate links to boards and queues. */
   projects?: ProjectReference[];
+  /** Absent from servers that predate Schedules. */
+  schedules?: ScheduleReference[];
 }
 
 /**
@@ -335,6 +344,8 @@ export type WorkspaceEvent =
    * in the workspace; whoever cares asks for what they are allowed to see.
    */
   | { type: 'projects.changed'; workspaceId: string; projectId: string; itemId?: string }
+  /** A schedule, its layers, overrides or requests changed. Ids only. */
+  | { type: 'schedules.changed'; workspaceId: string; scheduleId: string }
   /**
    * Something in the Docs or Sheets tree was added, renamed, moved or removed:
    * a folder, or what is filed in one. Ids only, like `projects.changed`;
@@ -440,8 +451,8 @@ export const RING_TIMEOUT_MS = 45_000;
 /**
  * Documents, spreadsheets, work items, channels and people are referenced by
  * id inside a message, not by name: `<doc:uuid>`, `<sheet:uuid>`,
- * `<item:uuid>`, `<proj:uuid>`, `<#uuid>` and `<@uuid>`. `<proj:…>` is a project's
- * board or a queue: both are projects, told apart by their kind.
+ * `<item:uuid>`, `<proj:uuid>`, `<sched:uuid>`, `<#uuid>` and `<@uuid>`. `<proj:…>` is a
+ * project's board or a queue: both are projects, told apart by their kind.
  * `<!here>` addresses everyone who can read the channel it is posted in.
  * Rendering resolves them, so someone changing their display name updates every
  * message that mentions them instead of leaving a stale name scattered through
@@ -453,7 +464,7 @@ export const RING_TIMEOUT_MS = 45_000;
  * token covering both would have to carry which it meant anyway.
  */
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here)|item:(${UUID})|proj:(${UUID}))>`, 'g');
+const REFERENCE = new RegExp(`<(?:doc:(${UUID})|sheet:(${UUID})|#(${UUID})|@(${UUID})|(!here)|item:(${UUID})|proj:(${UUID})|sched:(${UUID}))>`, 'g');
 
 export type MessageSegment =
   | { type: 'text'; value: string }
@@ -461,6 +472,7 @@ export type MessageSegment =
   | { type: 'spreadsheet'; id: string }
   | { type: 'workItem'; id: string }
   | { type: 'project'; id: string }
+  | { type: 'schedule'; id: string }
   | { type: 'channel'; id: string }
   | { type: 'member'; id: string }
   | { type: 'here' };
@@ -482,6 +494,10 @@ export function workItemRef(id: string): string {
 
 export function projectRef(id: string): string {
   return `<proj:${id}>`;
+}
+
+export function scheduleRef(id: string): string {
+  return `<sched:${id}>`;
 }
 
 export function channelRef(id: string): string {
@@ -508,6 +524,7 @@ export function parseMessage(body: string): MessageSegment[] {
     else if (match[5]) segments.push({ type: 'here' });
     else if (match[6]) segments.push({ type: 'workItem', id: match[6].toLowerCase() });
     else if (match[7]) segments.push({ type: 'project', id: match[7].toLowerCase() });
+    else if (match[8]) segments.push({ type: 'schedule', id: match[8].toLowerCase() });
     index = match.index + match[0].length;
   }
   if (index < body.length) segments.push({ type: 'text', value: body.slice(index) });
@@ -520,6 +537,7 @@ export function collectReferences(bodies: string[]): {
   spreadsheetIds: string[];
   workItemIds: string[];
   projectIds: string[];
+  scheduleIds: string[];
   channelIds: string[];
   userIds: string[];
 } {
@@ -527,6 +545,7 @@ export function collectReferences(bodies: string[]): {
   const spreadsheetIds = new Set<string>();
   const workItemIds = new Set<string>();
   const projectIds = new Set<string>();
+  const scheduleIds = new Set<string>();
   const channelIds = new Set<string>();
   const userIds = new Set<string>();
   for (const body of bodies) {
@@ -535,6 +554,7 @@ export function collectReferences(bodies: string[]): {
       if (segment.type === 'spreadsheet') spreadsheetIds.add(segment.id);
       if (segment.type === 'workItem') workItemIds.add(segment.id);
       if (segment.type === 'project') projectIds.add(segment.id);
+      if (segment.type === 'schedule') scheduleIds.add(segment.id);
       if (segment.type === 'channel') channelIds.add(segment.id);
       if (segment.type === 'member') userIds.add(segment.id);
     }
@@ -544,6 +564,7 @@ export function collectReferences(bodies: string[]): {
     spreadsheetIds: [...spreadsheetIds],
     workItemIds: [...workItemIds],
     projectIds: [...projectIds],
+    scheduleIds: [...scheduleIds],
     channelIds: [...channelIds],
     userIds: [...userIds],
   };
@@ -558,6 +579,7 @@ export function messagePreview(body: string, references: MessageReferences): str
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
   const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
   const projects = new Map((references.projects ?? []).map((p) => [p.id, p]));
+  const schedules = new Map((references.schedules ?? []).map((s) => [s.id, s]));
   const channels = new Map(references.channels.map((c) => [c.id, c]));
   const members = new Map(references.members.map((m) => [m.id, m]));
 
@@ -575,6 +597,7 @@ export function messagePreview(body: string, references: MessageReferences): str
         const project = projects.get(segment.id);
         return project?.name ?? 'a board';
       }
+      if (segment.type === 'schedule') return schedules.get(segment.id)?.name ?? 'a schedule';
       if (segment.type === 'channel') {
         const channel = channels.get(segment.id);
         return channel ? `#${channel.name}` : 'a channel';

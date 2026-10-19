@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { Notifications, WorkItemNotification } from '@paradocs/shared';
+import { scheduleNotificationText, type Notifications, type WorkItemNotification } from '@paradocs/shared';
 import { useNotifications } from '../api/hooks';
 import { notify } from './browserNotifications';
 import { playSound } from './sounds';
@@ -51,6 +51,12 @@ function announcements(notifications: Notifications): BellAnnouncement[] {
       title: workItemTitle(item),
       body: item.title,
       path: `/w/${item.workspace.id}/p/${item.projectId}/${item.workItemId}`,
+    })),
+    ...(notifications.schedules ?? []).map((n) => ({
+      key: `shift:${n.id}`,
+      title: scheduleNotificationText(n),
+      body: n.workspace.name,
+      path: `/w/${n.workspace.id}/sc/${n.scheduleId}`,
     })),
   ];
 }

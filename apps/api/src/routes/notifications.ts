@@ -13,13 +13,14 @@ import {
   type OwnAccountRequestNotification,
   type WorkspaceSuspensionNotification,
   type Role,
+  type ScheduleNotification,
   type WorkItemNotification,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { publishToUser } from '../chat/hub.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql } from '../lib/access.js';
+import { channelLevelSql, documentLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
@@ -412,7 +413,57 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
 
+    // Shifts and swaps. Like work items, whether the schedule can still be
+    // seen, and its app is on, is asked now rather than when it was written.
+    const { rows: scheduleRows } = await query<
+      WorkspaceColumns & {
+        id: string;
+        schedule_id: string;
+        schedule_name: string;
+        request_id: string | null;
+        reason: ScheduleNotification['reason'];
+        starts_at: string | null;
+        ends_at: string | null;
+        detail: string;
+        created_at: string;
+        author_id: string | null;
+        author_name: string | null;
+        author_avatar_url: string | null;
+      }
+    >(
+      `SELECT n.id, n.schedule_id, s.name AS schedule_name, n.request_id, n.reason, n.starts_at, n.ends_at, n.detail,
+              n.created_at, ${WORKSPACE_SELECT},
+              author.id AS author_id, author.name AS author_name, ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+         FROM schedule_notifications n
+         JOIN schedules s ON s.id = n.schedule_id
+         JOIN workspaces w ON w.id = s.workspace_id
+         JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $1
+         LEFT JOIN users author ON author.id = n.actor_id
+        WHERE n.user_id = $1
+          AND n.read_at IS NULL
+          AND ${appEnabledSql('s.workspace_id', 'schedules')}
+          AND ${scheduleLevelSql('$1', 'wm.role_id')} > 0
+        ORDER BY n.created_at DESC
+        LIMIT ${MAX_MENTIONS}`,
+      [user.id],
+    );
+
     return {
+      schedules: scheduleRows.map(
+        (row): ScheduleNotification => ({
+          id: row.id,
+          scheduleId: row.schedule_id,
+          scheduleName: row.schedule_name,
+          requestId: row.request_id,
+          reason: row.reason,
+          startsAt: row.starts_at,
+          endsAt: row.ends_at,
+          detail: row.detail,
+          workspace: workspaceOf(row),
+          by: row.author_id ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url } : null,
+          createdAt: row.created_at,
+        }),
+      ),
       invites: inviteRows.map((row) => ({
         id: row.id,
         token: row.token,
@@ -471,6 +522,18 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           AND read_at IS NULL
           AND ($2::uuid[] IS NULL OR work_item_id = ANY($2::uuid[]))`,
       [req.user!.id, input.itemIds ?? null],
+    );
+    if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
+    reply.status(204);
+  });
+
+  /** Clears schedule notifications — the ones given, or all of them. Opening one is what normally calls this. */
+  app.post('/notifications/schedules/read', async (req, reply) => {
+    const input = parse(z.object({ ids: z.array(z.string().uuid()).max(500).optional() }), req.body ?? {});
+    const { rowCount } = await query(
+      `UPDATE schedule_notifications SET read_at = now()
+        WHERE user_id = $1 AND read_at IS NULL AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))`,
+      [req.user!.id, input.ids ?? null],
     );
     if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
