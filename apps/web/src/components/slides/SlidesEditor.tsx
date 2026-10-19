@@ -40,13 +40,14 @@ import './slideComments';
 import './slideBuildBuiltins';
 import './slideShowLive';
 import './slideContent';
+import { CANVAS_CLIP_MIME, SlideInsertDialogs, parseCanvasClip, pasteCanvasSelection } from './SlideLiveElements';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
 
 /** What a copy puts on the clipboard: readable text for anywhere else, and the elements themselves for another slide. */
 const CLIP_MIME = 'application/x-paradocs-slide-elements';
-const PASTEABLE: SlideElementType[] = ['text', 'shape', 'image', 'video', 'embed', 'sheetCell', 'sheetChart', 'workItem', 'connector', 'richText', 'table'];
+const PASTEABLE: SlideElementType[] = ['text', 'shape', 'image', 'video', 'embed', 'sheetCell', 'sheetChart', 'workItem', 'connector', 'richText', 'table', 'link'];
 const MAX_PASTE = 200;
 
 interface ClipPayload {
@@ -295,6 +296,12 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     e.preventDefault();
     // Pictures and video on the clipboard (a screenshot, a copied image) go to whoever takes that kind of file.
     if (!clip && e.clipboardData.files.length && handleFiles([...e.clipboardData.files])) return;
+    // Elements copied from a canvas land on the slide scaled to fit it.
+    const board = clip ? null : parseCanvasClip(e.clipboardData.getData(CANVAS_CLIP_MIME));
+    if (board) {
+      setSelectedIds(new Set(pasteCanvasSelection(actions, slide.id, settings.size, board)));
+      return;
+    }
     if (clip) {
       // A copy pasted onto the slide it came from lands beside the original rather than on top of it.
       const offset = clip.presentationId === presentation.id && clip.slideId === slide.id ? 40 : 0;
@@ -589,6 +596,8 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
           onExit={() => setShow(null)}
         />
       )}
+
+      <SlideInsertDialogs />
 
       {mobile && sheetOpen && (
         <div className="fixed inset-x-0 bottom-0 z-40 max-h-[60%] overflow-hidden rounded-t-xl border-t border-[var(--color-line)] bg-[var(--color-canvas)] shadow-2xl">

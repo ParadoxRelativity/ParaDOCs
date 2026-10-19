@@ -1028,6 +1028,19 @@ export function useCreatePresentation(workspaceId: string) {
   });
 }
 
+/** A new presentation from a canvas: one slide per frame, in frame order. */
+export function useCanvasToPresentation(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ documentId, ...input }: { documentId: string; title?: string; folderId?: string | null }) =>
+      api.post<PresentationSummary>(`/documents/${documentId}/presentation`, input),
+    onSuccess: (deck) => {
+      qc.setQueryData(keys.presentation(deck.id), deck);
+      void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+    },
+  });
+}
+
 export function useUpdatePresentation(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({

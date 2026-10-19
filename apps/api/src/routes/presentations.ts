@@ -2,7 +2,14 @@ import type { FastifyPluginAsync } from 'fastify';
 import * as Y from 'yjs';
 import { z } from 'zod';
 import {
+  CANVAS_ELEMENTS,
   CONTENTS_PAGE_SIZE,
+  DEFAULT_SLIDE_SIZE,
+  canvasFramesToSlides,
+  deckSearchText,
+  readDeck,
+  writeFrameSlides,
+  type CanvasElement,
   MAX_CONTENTS_PAGE_SIZE,
   createPresentationSchema,
   duplicatePresentationSchema,
@@ -13,8 +20,8 @@ import {
 } from '@paradocs/shared';
 import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 import { query } from '../db/pool.js';
-import { notFound, parse } from '../lib/http.js';
-import { assertWorkspaceAccess } from '../plugins/session.js';
+import { badRequest, notFound, parse } from '../lib/http.js';
+import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
 import { assertFolderAccess, assertMoveKeepsAccess, assertPresentationAccess, presentationLevelSql, roleIdSql } from '../lib/access.js';
 import { presentationSummaryColumns } from '../lib/documentColumns.js';
 import { treeChanged } from '../lib/treeEvents.js';
@@ -112,6 +119,62 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
     treeChanged(req.params.id, 'slides');
     reply.status(201);
     return fetchPresentation(rows[0].id, req.user!.id);
+  });
+
+  /**
+   * A new presentation from a canvas: one slide per frame, in frame order, with
+   * what lies inside each frame copied and scaled to the slide. Needs the right
+   * to see the canvas and to create presentations; the canvas is not changed.
+   * Live spreadsheet, work item and document elements are copied as references,
+   * so each viewer of the deck still sees only what they may see.
+   */
+  app.post<{ Params: { id: string } }>('/documents/:id/presentation', async (req, reply) => {
+    const access = await assertDocumentAccess(req, req.params.id);
+    await assertWorkspaceAccess(req, access.workspaceId, 'slides.create', 'slides');
+    const input = parse(createPresentationSchema, req.body ?? {});
+    if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', access.workspaceId, 'slides');
+
+    const { rows: source } = await query<{ title: string; mode: string; ydoc: Buffer | null }>(
+      'SELECT title, mode, ydoc FROM documents WHERE id = $1',
+      [req.params.id],
+    );
+    if (!source[0]) throw notFound('Document not found');
+    if (source[0].mode !== 'canvas') throw badRequest('Only a canvas has frames to turn into slides');
+
+    // The open canvas is newer than the saved copy by up to the save debounce.
+    const board = liveDocument(req.params.id) ?? new Y.Doc();
+    if (!liveDocument(req.params.id) && source[0].ydoc) Y.applyUpdate(board, new Uint8Array(source[0].ydoc));
+    const elements = [...board.getMap(CANVAS_ELEMENTS).values()]
+      .map((value) => (value instanceof Y.Map ? (value.toJSON() as CanvasElement) : null))
+      .filter((el): el is CanvasElement => Boolean(el && el.type));
+    if (!liveDocument(req.params.id)) board.destroy();
+
+    const slides = canvasFramesToSlides(elements, DEFAULT_SLIDE_SIZE);
+    if (slides.length === 0) throw badRequest('Add a frame to the canvas first: each frame becomes a slide');
+
+    const deck = new Y.Doc();
+    try {
+      writeFrameSlides(deck, slides);
+      const { rows } = await query<{ id: string }>(
+        `INSERT INTO presentations (workspace_id, folder_id, title, icon, ydoc, search_text, created_by, last_edited_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+         RETURNING id`,
+        [
+          access.workspaceId,
+          input.folderId ?? null,
+          input.title || source[0].title || 'Untitled',
+          input.icon ?? null,
+          Buffer.from(Y.encodeStateAsUpdate(deck)),
+          deckSearchText(readDeck(deck).slides),
+          req.user!.id,
+        ],
+      );
+      treeChanged(access.workspaceId, 'slides');
+      reply.status(201);
+      return fetchPresentation(rows[0].id, req.user!.id);
+    } finally {
+      deck.destroy();
+    }
   });
 
   app.get<{ Params: { id: string } }>('/presentations/:id', async (req) => {

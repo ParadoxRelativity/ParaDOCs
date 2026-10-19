@@ -30,6 +30,7 @@ import type {
   ConnectorElement,
   EmbedElement,
   ImageElement,
+  LinkElement,
   ShapeElement,
   SheetCellElement,
   SheetChartElement,
@@ -52,6 +53,7 @@ import type { SlideShapeKind } from './slideShapes.js';
 export * from './slideRichText.js';
 export * from './slideShapes.js';
 export * from './slideFonts.js';
+export * from './slideFromCanvas.js';
 
 /**
  * The collaboration server serves documents, spreadsheets and presentations
@@ -273,6 +275,7 @@ export type SlideCanvasElement =
   | OnSlide<SheetCellElement>
   | OnSlide<SheetChartElement>
   | OnSlide<WorkItemElement>
+  | OnSlide<LinkElement>
   | OnSlide<ConnectorElement>;
 
 export type RichTextVerticalAlign = 'top' | 'middle' | 'bottom';
@@ -658,6 +661,8 @@ export function slideElementText(element: SlideElement): string {
     case 'sheetChart':
     case 'workItem':
       return element.label ?? '';
+    case 'link':
+      return element.title ?? '';
     case 'table':
       return Object.keys(element.cells)
         .sort((a, b) => {
