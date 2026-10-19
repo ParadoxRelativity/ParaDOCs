@@ -8,6 +8,7 @@ import {
   duplicateSlide,
   duplicateSlideElements,
   moveElementAnimation,
+  formatRichBody,
   moveSlides,
   patchSlideElements,
   readDeck,
@@ -16,13 +17,17 @@ import {
   setElementAnimations,
   setSlideElement,
   setSlidesHidden,
+  setTableCells,
+  setTableStructure,
   slideMapName,
+  type BodyFormat,
   type DeckSnapshot,
   type ElementAnimation,
   type SlideBackground,
   type SlideElement,
   type SlideSnapshot,
   type SlideTransition,
+  type TableCell,
   type ZOrder,
 } from '@paradocs/shared';
 import { randomId } from './util';
@@ -111,6 +116,18 @@ export function useSlidesDeck(ydoc: Y.Doc) {
   }, [ydoc, origin]);
 
   const transact = useCallback((fn: () => void) => ydoc.transact(fn, origin), [ydoc, origin]);
+  /**
+   * For what creates things: the snapshot is read at once instead of next
+   * frame, so the editor can select (or start editing) what was just made in
+   * the same event, and does not find it missing and drop the selection.
+   */
+  const transactNow = useCallback(
+    (fn: () => void) => {
+      ydoc.transact(fn, origin);
+      setDeck((previous) => share(previous, readDeck(ydoc)));
+    },
+    [ydoc, origin],
+  );
 
   const actions = useMemo(() => {
     const slide = (id: string): SlideSnapshot | undefined => latest.current.slides.find((s) => s.id === id);
@@ -125,7 +142,7 @@ export function useSlidesDeck(ydoc: Y.Doc) {
         const order = latest.current.slides.map((s) => s.id);
         const at = afterId ? order.indexOf(afterId) : -1;
         let id = '';
-        transact(() => {
+        transactNow(() => {
           id = createSlide(ydoc, { layoutId, index: at >= 0 ? at + 1 : order.length });
         });
         return id;
@@ -133,7 +150,7 @@ export function useSlidesDeck(ydoc: Y.Doc) {
       /** Copies each slide to just after itself. Returns the new ids. */
       duplicateSlides: (ids: string[]): string[] => {
         const created: string[] = [];
-        transact(() => {
+        transactNow(() => {
           for (const id of ids) {
             const copy = duplicateSlide(ydoc, id, randomId);
             if (copy) created.push(copy);
@@ -162,7 +179,7 @@ export function useSlidesDeck(ydoc: Y.Doc) {
       createElement: (slideId: string, props: Record<string, unknown> & { type: SlideElement['type']; x: number; y: number }): string => {
         const id = randomId();
         const size = (DEFAULT_SIZE as Record<string, { width: number; height: number }>)[props.type] ?? { width: 320, height: 200 };
-        transact(() =>
+        transactNow(() =>
           setSlideElement(ydoc, slideId, { width: size.width, height: size.height, ...props, id, z: topZ(slideId) + 1 } as unknown as SlideElement),
         );
         return id;
@@ -173,6 +190,17 @@ export function useSlidesDeck(ydoc: Y.Doc) {
       setAnimation: (slideId: string, ids: string[], change: Partial<Omit<ElementAnimation, 'order'>> | null) =>
         transact(() => setElementAnimations(ydoc, slideId, ids, change)),
       moveAnimation: (slideId: string, elementId: string, toIndex: number) => transact(() => moveElementAnimation(ydoc, slideId, elementId, toIndex)),
+      /** Formats the whole text of rich text boxes (no editor open): see formatRichBody. */
+      formatText: (slideId: string, ids: string[], format: BodyFormat) =>
+        transact(() => {
+          for (const id of ids) formatRichBody(ydoc, slideId, id, format);
+        }),
+      /** Sets (or with null clears) cells of a table, each its own key. */
+      setTableCells: (slideId: string, id: string, changes: Record<string, TableCell | null>) =>
+        transact(() => setTableCells(ydoc, slideId, id, changes)),
+      /** Replaces a table's rows, columns and cells in one undo step. */
+      setTableStructure: (slideId: string, id: string, table: Parameters<typeof setTableStructure>[3]) =>
+        transact(() => setTableStructure(ydoc, slideId, id, table)),
       deleteElements: (slideId: string, ids: string[]) =>
         transact(() => {
           for (const id of ids) removeSlideElement(ydoc, slideId, id);
@@ -180,7 +208,7 @@ export function useSlidesDeck(ydoc: Y.Doc) {
       /** Copies elements on one slide (a duplicate in place), nudged so the copy is visible. */
       duplicateElements: (slideId: string, ids: string[]): string[] => {
         let created: string[] = [];
-        transact(() => {
+        transactNow(() => {
           created = duplicateSlideElements(ydoc, slideId, ids, slideId, { offset: 40, makeId: randomId });
         });
         return created;
@@ -189,7 +217,7 @@ export function useSlidesDeck(ydoc: Y.Doc) {
       pasteElements: (slideId: string, elements: SlideElement[], offset: number): string[] => {
         const created: string[] = [];
         let z = topZ(slideId);
-        transact(() => {
+        transactNow(() => {
           for (const element of elements) {
             const id = randomId();
             z += 1;
@@ -205,7 +233,7 @@ export function useSlidesDeck(ydoc: Y.Doc) {
         if (changes.length) transact(() => patchSlideElements(ydoc, slideId, changes.map(({ id, z }) => ({ id, patch: { z } }))));
       },
     };
-  }, [ydoc, transact]);
+  }, [ydoc, transact, transactNow]);
 
   return { deck, history, actions };
 }

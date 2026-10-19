@@ -25,6 +25,7 @@
 import * as Y from 'yjs';
 import { z } from 'zod';
 import type {
+  AudioElement,
   CanvasElementBase,
   ConnectorElement,
   EmbedElement,
@@ -38,6 +39,19 @@ import type {
 } from './canvas.js';
 import type { ElementAnimation } from './slideBuilds.js';
 import type { AccessMode, Permission } from './types.js';
+import {
+  MENTION_NODE,
+  fragmentMentions,
+  readParagraphs,
+  writeParagraphs,
+  type RichAlign,
+  type RichParagraph,
+} from './slideRichText.js';
+import type { SlideShapeKind } from './slideShapes.js';
+
+export * from './slideRichText.js';
+export * from './slideShapes.js';
+export * from './slideFonts.js';
 
 /**
  * The collaboration server serves documents, spreadsheets and presentations
@@ -232,11 +246,28 @@ export interface SlideElementBase extends Omit<CanvasElementBase, 'type'> {
 
 type OnSlide<T extends CanvasElementBase> = T & { rotation?: number; animation?: ElementAnimation };
 
+/** A shape on a slide: the canvas shape's fill and outline, more outlines to choose from, a shadow, and sized text. */
+export type SlideShapeElement = Omit<ShapeElement, 'shape'> & {
+  shape: SlideShapeKind;
+  shadow?: boolean;
+  /** Size of the text inside, in slide units. */
+  fontSize?: number;
+};
+
+/** A picture: shown filling its box (`cover`) or whole (`contain`), optionally cropped to a part of it. */
+export type SlideImageElement = ImageElement & {
+  fit?: 'cover' | 'contain';
+  /** The part of the picture shown, as fractions of its width and height. */
+  crop?: { x: number; y: number; width: number; height: number };
+  opacity?: number;
+};
+
 /** Canvas element types that mean the same on a slide as on a board. */
 export type SlideCanvasElement =
   | OnSlide<TextElement>
-  | OnSlide<ShapeElement>
-  | OnSlide<ImageElement>
+  | OnSlide<SlideShapeElement>
+  | OnSlide<SlideImageElement>
+  | OnSlide<AudioElement>
   | OnSlide<VideoElement>
   | OnSlide<EmbedElement>
   | OnSlide<SheetCellElement>
@@ -244,14 +275,15 @@ export type SlideCanvasElement =
   | OnSlide<WorkItemElement>
   | OnSlide<ConnectorElement>;
 
-export type RichTextBullet = 'none' | 'bullet' | 'number';
+export type RichTextVerticalAlign = 'top' | 'middle' | 'bottom';
 
 /**
  * A formatted text box. The text itself is a Y.XmlFragment stored under `body`
- * in the element's Y.Map: `paragraph` nodes (attributes `align`, `bullet`,
- * `level`) holding text runs with marks (bold, italic, underline, strike,
- * color, fontSize, fontFamily, link). Snapshots carry only `text`, its plain
- * digest.
+ * in the element's Y.Map (see slideRichText.ts for its shape). Snapshots carry
+ * its plain digest as `text` and its content as `paragraphs`; neither is
+ * written from a snapshot except to give a new box its first content, so a
+ * paste or an import fills a body and every later change goes through the
+ * editor.
  */
 export interface RichTextElement extends SlideElementBase {
   type: 'richText';
@@ -259,13 +291,40 @@ export interface RichTextElement extends SlideElementBase {
   placeholder?: string;
   /** Plain digest of the body, filled in when a slide is read. */
   text?: string;
+  /** The body as data, filled in when a slide is read, and read to give a new box its content. */
+  paragraphs?: RichParagraph[];
+  /** Size of text that has no size of its own, in slide units. Default 32. */
+  fontSize?: number;
+  /** Font of text that has none of its own; the theme's body font when absent. */
+  fontFamily?: string;
+  align?: RichAlign;
+  verticalAlign?: RichTextVerticalAlign;
+  /** Line height of paragraphs that set none, as a multiple of the font size. Default 1.2. */
+  lineSpacing?: number;
+  /** Shrink the text when it overflows the box. On unless set to false. */
+  autofit?: boolean;
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
 }
 
 export interface TableCell {
   text: string;
   bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+  /** In slide units; the table's own size when absent. */
+  fontSize?: number;
   fill?: string;
   align?: 'left' | 'center' | 'right';
+  verticalAlign?: RichTextVerticalAlign;
+  /** Overrides the table's cell border for this cell; a width of 0 draws none. */
+  borderColor?: string;
+  borderWidth?: number;
+  /** On the top-left cell of a merged range: how many columns and rows it spans. */
+  colSpan?: number;
+  rowSpan?: number;
 }
 
 /** Cells are keyed by `tableCellKey(row, column)`; empty cells are simply absent. */
@@ -276,6 +335,14 @@ export interface TableElement extends SlideElementBase {
   columnWidths?: number[];
   rowHeights?: number[];
   cells: Record<string, TableCell>;
+  /** Text size for cells that set none. Default 28. */
+  fontSize?: number;
+  fontFamily?: string;
+  borderColor?: string;
+  /** Border width in slide units; 0 draws none. Default 2. */
+  borderWidth?: number;
+  /** The first row is bold and shaded. */
+  headerRow?: boolean;
 }
 
 export type SlideElement = SlideCanvasElement | RichTextElement | TableElement;
@@ -444,7 +511,7 @@ export function setSlideElement(doc: Y.Doc, slideId: string, element: SlideEleme
     for (const [key, value] of Object.entries(element)) {
       // The body of a rich text box is a Y.XmlFragment the editor owns, and its
       // digest is derived, so neither is written from a snapshot.
-      if (value === undefined || (element.type === 'richText' && (key === 'text' || key === ELEMENT_BODY_KEY))) continue;
+      if (value === undefined || (element.type === 'richText' && (key === 'text' || key === 'paragraphs' || key === ELEMENT_BODY_KEY))) continue;
       if (element.type === 'table' && key === 'cells') {
         let cells = map.get('cells') as Y.Map<TableCell> | undefined;
         if (!(cells instanceof Y.Map)) {
@@ -458,6 +525,9 @@ export function setSlideElement(doc: Y.Doc, slideId: string, element: SlideEleme
     }
     if (element.type === 'richText' && !(map.get(ELEMENT_BODY_KEY) instanceof Y.XmlFragment)) {
       map.set(ELEMENT_BODY_KEY, new Y.XmlFragment());
+      // Only a new box takes content from a snapshot (a paste, an import); an existing body belongs to its editors.
+      const body = map.get(ELEMENT_BODY_KEY) as Y.XmlFragment;
+      if (element.paragraphs?.length) writeParagraphs(body, element.paragraphs);
     }
   });
 }
@@ -472,6 +542,7 @@ export function fragmentText(fragment: Y.XmlFragment): string {
     if (node instanceof Y.XmlText) {
       return (node.toDelta() as { insert?: unknown }[]).map((op) => (typeof op.insert === 'string' ? op.insert : '')).join('');
     }
+    if (node instanceof Y.XmlElement && node.nodeName === MENTION_NODE) return `@${node.getAttribute('label') ?? ''}`;
     // BlockNote nests a line per block inside group and container nodes (speaker notes are written with it); runs inside a block join.
     const blocks = node instanceof Y.XmlElement && (node.nodeName === 'blockGroup' || node.nodeName === 'blockContainer');
     return node
@@ -488,8 +559,10 @@ export function fragmentText(fragment: Y.XmlFragment): string {
 function readElement(value: Y.Map<unknown>): SlideElement | null {
   const json: Record<string, unknown> = {};
   value.forEach((entry, key) => {
-    if (key === ELEMENT_BODY_KEY && entry instanceof Y.XmlFragment) json.text = fragmentText(entry);
-    else json[key] = plain(entry);
+    if (key === ELEMENT_BODY_KEY && entry instanceof Y.XmlFragment) {
+      json.text = fragmentText(entry);
+      json.paragraphs = readParagraphs(entry);
+    } else json[key] = plain(entry);
   });
   if (typeof json.id !== 'string' || typeof json.type !== 'string') return null;
   return json as unknown as SlideElement;
@@ -539,6 +612,28 @@ export function readDeck(doc: Y.Doc): DeckSnapshot {
     themes: themes.length ? themes : [DEFAULT_THEME],
     layouts: layouts.length ? layouts : DEFAULT_LAYOUTS,
   };
+}
+
+const TEXT_TAG = /<@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})>/gi;
+
+/**
+ * Who is tagged on which slide: in a rich text box (a mention in its body) or
+ * in a shape's or text box's plain text (an `<@id>` token, as on a canvas).
+ * Each person is listed once, with the first slide that names them.
+ */
+export function deckMentions(doc: Y.Doc): { userId: string; slideId: string }[] {
+  const found = new Map<string, string>();
+  for (const slideId of readSlideOrder(doc)) {
+    elementsOf(doc, slideId)?.forEach((element) => {
+      if (!(element instanceof Y.Map)) return;
+      const body = element.get(ELEMENT_BODY_KEY);
+      const ids = body instanceof Y.XmlFragment ? fragmentMentions(body) : [];
+      const text = element.get('text');
+      if (typeof text === 'string' && text.includes('<@')) for (const match of text.matchAll(TEXT_TAG)) ids.push(match[1].toLowerCase());
+      for (const id of ids) if (!found.has(id)) found.set(id, slideId);
+    });
+  }
+  return [...found].map(([userId, slideId]) => ({ userId, slideId }));
 }
 
 // ---------------------------------------------------------------------------

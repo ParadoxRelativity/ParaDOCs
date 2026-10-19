@@ -2,17 +2,16 @@ import * as Y from 'yjs';
 import {
   BLANK_LAYOUT_ID,
   DEFAULT_LAYOUTS,
-  ELEMENT_BODY_KEY,
-  SLIDE_ELEMENTS_KEY,
   createSlide,
   notesFragmentName,
+  paragraphNodes,
   readDeck,
   setSlideElement,
   slideElementText,
-  slideMapName,
   tableCellKey,
   type DeckSnapshot,
   type LayoutPlaceholder,
+  type RichParagraph,
   type SlideElement,
   type SlideLayout,
   type SlideSnapshot,
@@ -161,16 +160,12 @@ export function parseOutline(text: string): OutlineSlide[] {
 
 const SIZES: Partial<Record<LayoutPlaceholder['kind'], number>> = { title: 64, subtitle: 36, body: 32 };
 
-function paragraph(text: string, size?: number, item?: OutlineItem): Y.XmlElement {
-  const p = new Y.XmlElement('paragraph');
-  if (item?.bullet) {
-    p.setAttribute('bullet', 'bullet');
-    if (item.level > 0) p.setAttribute('level', String(item.level));
-  }
-  const run = new Y.XmlText();
-  p.insert(0, [run]);
-  run.insert(0, text, size ? { fontSize: size } : undefined);
-  return p;
+/** An outline line as a rich text paragraph: a bullet with its depth, text at the placeholder's size. */
+function paragraph(text: string, size?: number, item?: OutlineItem): RichParagraph {
+  return {
+    ...(item?.bullet ? { bullet: 'bullet' as const, ...(item.level > 0 ? { level: item.level } : {}) } : {}),
+    runs: [size ? { text, marks: { fontSize: size } } : { text }],
+  };
 }
 
 function layoutFor(layouts: SlideLayout[], id: string): SlideLayout {
@@ -200,9 +195,8 @@ export function addOutlineSlides(doc: Y.Doc, slides: OutlineSlide[], index?: num
       const place = (kind: LayoutPlaceholder['kind'], items: OutlineItem[], z: number) => {
         const slot = layout.placeholders.find((p) => p.kind === kind);
         if (!slot || items.length === 0) return;
-        const elementId = crypto.randomUUID();
         setSlideElement(doc, id, {
-          id: elementId,
+          id: crypto.randomUUID(),
           type: 'richText',
           placeholder: slot.id,
           x: slot.x,
@@ -210,15 +204,13 @@ export function addOutlineSlides(doc: Y.Doc, slides: OutlineSlide[], index?: num
           width: slot.width,
           height: slot.height,
           z,
+          paragraphs: items.map((item) => paragraph(item.text, SIZES[kind], item)),
         });
-        const elements = doc.getMap<unknown>(slideMapName(id)).get(SLIDE_ELEMENTS_KEY) as Y.Map<Y.Map<unknown>>;
-        const body = elements.get(elementId)!.get(ELEMENT_BODY_KEY) as Y.XmlFragment;
-        body.insert(0, items.map((item) => paragraph(item.text, SIZES[kind], item)));
       };
       place('title', outline.title ? [{ text: outline.title, bullet: false, level: 0 }] : [], 1);
       place(subtitleOnly ? 'subtitle' : 'body', outline.items, 2);
 
-      if (outline.notes.length) doc.getXmlFragment(notesFragmentName(id)).insert(0, outline.notes.map((line) => paragraph(line)));
+      if (outline.notes.length) doc.getXmlFragment(notesFragmentName(id)).insert(0, paragraphNodes(outline.notes.map((line) => paragraph(line))));
     });
   });
   return ids;

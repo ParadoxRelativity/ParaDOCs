@@ -12,6 +12,7 @@ import {
 import { assetUrl } from '../../lib/server';
 import { slideElementRenderer } from './slideExtensions';
 import { BuildBox } from './SlideBuild';
+import './slideContent';
 
 const NO_MEMBERS: WorkspaceMember[] = [];
 const noop = () => {};

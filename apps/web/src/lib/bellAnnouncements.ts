@@ -46,7 +46,7 @@ function announcements(notifications: Notifications): BellAnnouncement[] {
       key: `mention:${mention.documentId}:${mention.createdAt}`,
       title: `${mention.taggedBy?.name ?? 'Someone'} tagged you`,
       body: `${mention.title} · ${mention.workspace.name}`,
-      path: `/w/${mention.workspace.id}/d/${mention.documentId}`,
+      path: mention.path ?? `/w/${mention.workspace.id}/d/${mention.documentId}`,
     })),
     ...(notifications.workItems ?? []).map((item) => ({
       key: `item:${item.workItemId}:${item.reason}:${item.createdAt}`,

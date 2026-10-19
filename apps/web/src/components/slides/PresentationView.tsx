@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { slidesCollabName } from '@paradocs/shared';
-import { usePresentation } from '../../api/hooks';
+import { useMarkMentionsRead, useNotifications, usePresentation } from '../../api/hooks';
 import { useCollaboration } from '../../lib/collaboration';
 import { EmptyState, Spinner } from '../ui';
 import LiveShowBanner from './LiveShowBanner';
@@ -25,6 +26,16 @@ export default function PresentationView({
 }) {
   const record = usePresentation(presentationId);
   const { session, peers, status } = useCollaboration(slidesCollabName(presentationId), self);
+
+  // Opening a deck you were tagged in answers the tag, however you got here.
+  const notifications = useNotifications();
+  const markMentionsRead = useMarkMentionsRead();
+  const taggedHere = notifications.data?.mentions?.some((m) => m.documentId === presentationId) ?? false;
+  useEffect(() => {
+    if (taggedHere) markMentionsRead.mutate([presentationId]);
+    // The mutation object is stable; including it would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentationId, taggedHere]);
 
   if (record.isLoading) return <Spinner />;
   if (record.error || !record.data) {

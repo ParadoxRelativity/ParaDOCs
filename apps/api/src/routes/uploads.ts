@@ -6,7 +6,8 @@ import { query, transaction } from '../db/pool.js';
 import { badRequest, notFound, parse } from '../lib/http.js';
 import { blocksToMarkdown } from '../lib/blocksToMarkdown.js';
 import { removeStoredFile, storeUpload, uploadLimits } from '../lib/storage.js';
-import { assertWorkspaceAccess } from '../plugins/session.js';
+import { assertMeets, assertWorkspaceAccess } from '../plugins/session.js';
+import { assertPresentationAccess } from '../lib/access.js';
 import { treeChanged } from '../lib/treeEvents.js';
 import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 
@@ -58,25 +59,32 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.get('/uploads/config', async (): Promise<UploadConfig> => ({ maxBytes: config.maxUploadBytes }));
 
   app.post<{ Params: { id: string } }>('/workspaces/:id/uploads', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'docs.edit');
+    const member = await assertWorkspaceAccess(req, req.params.id);
     const file = await req.file(uploadLimits());
     if (!file) throw badRequest('No file was uploaded');
 
     // Recording the owning document is what keeps the unattached list honest.
     const fields = file.fields as Record<string, { value?: unknown } | undefined>;
-    const rawDocumentId = fields?.documentId?.value;
-    const documentId =
-      typeof rawDocumentId === 'string' && z.string().uuid().safeParse(rawDocumentId).success
-        ? rawDocumentId
-        : null;
+    const uuid = (raw: unknown) => (typeof raw === 'string' && z.string().uuid().safeParse(raw).success ? raw : null);
+    const documentId = uuid(fields?.documentId?.value);
+    // A picture put on a slide belongs to the presentation and is served to
+    // whoever may open it. Putting it there takes the right to edit it, not
+    // the right to edit documents.
+    const presentationId = uuid(fields?.presentationId?.value);
+    if (presentationId) {
+      const access = await assertPresentationAccess(req, presentationId, 'edit');
+      if (access.workspaceId !== req.params.id) throw notFound('Presentation not found');
+    } else {
+      assertMeets(member, 'docs.edit');
+    }
 
     const { storageKey, byteSize } = await storeUpload(file, req.params.id);
 
     const { rows } = await query(
-      `INSERT INTO attachments (workspace_id, document_id, filename, mime_type, byte_size, storage_key)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO attachments (workspace_id, document_id, presentation_id, filename, mime_type, byte_size, storage_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, filename, mime_type AS "mimeType", byte_size::float8 AS "byteSize"`,
-      [req.params.id, documentId, file.filename, file.mimetype, byteSize, storageKey],
+      [req.params.id, presentationId ? null : documentId, presentationId, file.filename, file.mimetype, byteSize, storageKey],
     );
 
     reply.status(201);
@@ -112,7 +120,7 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
            FROM attachments a
            LEFT JOIN documents d ON d.id = a.document_id
           WHERE a.workspace_id = $1
-            AND ($2::boolean IS NOT TRUE OR a.document_id IS NULL)
+            AND ($2::boolean IS NOT TRUE OR (a.document_id IS NULL AND a.presentation_id IS NULL))
             AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::uuid))
           ORDER BY a.created_at DESC, a.id DESC
           LIMIT $5`,
@@ -131,11 +139,11 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
         unattached_bytes: number;
       }>(
         `SELECT count(*)::int AS total,
-                count(*) FILTER (WHERE document_id IS NULL)::int AS unattached,
+                count(*) FILTER (WHERE document_id IS NULL AND presentation_id IS NULL)::int AS unattached,
                 -- sum() over bigint yields numeric, which arrives as a string;
                 -- cast back so the client gets numbers.
                 COALESCE(sum(byte_size), 0)::bigint AS bytes,
-                COALESCE(sum(byte_size) FILTER (WHERE document_id IS NULL), 0)::bigint AS unattached_bytes
+                COALESCE(sum(byte_size) FILTER (WHERE document_id IS NULL AND presentation_id IS NULL), 0)::bigint AS unattached_bytes
            FROM attachments WHERE workspace_id = $1`,
         [req.params.id],
       );
