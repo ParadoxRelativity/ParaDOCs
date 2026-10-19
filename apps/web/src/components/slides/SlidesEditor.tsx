@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_THEME,
   slideElementText,
+  startSlideId,
   type PresentationSummary,
   type SlideElement,
   type SlideElementType,
@@ -21,6 +22,7 @@ import { Button, IconButton } from '../ui';
 import Icon from '../Icon';
 import SlideInspector from './SlideInspector';
 import SlideRail from './SlideRail';
+import SlideShow from './SlideShow';
 import SlideStage, { type Zoom } from './SlideStage';
 import {
   slideInsertTools,
@@ -29,6 +31,7 @@ import {
   type SlideEditorContext,
 } from './slideExtensions';
 import './slideBuiltins';
+import './slideShowBuiltins';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -104,6 +107,8 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
   const [scale, setScale] = useState(1);
   const [grid, setGrid] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  // The slideshow is local to this person: it reads the deck and writes nothing to it.
+  const [show, setShow] = useState<{ startId: string | null } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const lastIndex = useRef(0);
   const slideParam = useSearchParams()[0].get('slide');
@@ -174,6 +179,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     select: (ids) => setSelectedIds(new Set(ids)),
     edit: setEditingId,
     center: { x: settings.size.width / 2, y: settings.size.height / 2 },
+    present: (from) => setShow({ startId: startSlideId(slides, from === 'current' ? currentId : null) }),
   };
 
   // ---- slide operations (rail) --------------------------------------------
@@ -533,6 +539,18 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
           </div>
         )}
       </div>
+
+      {show && (
+        <SlideShow
+          slides={slides}
+          size={settings.size}
+          theme={theme}
+          presentationId={presentation.id}
+          workspaceId={workspaceId}
+          startId={show.startId}
+          onExit={() => setShow(null)}
+        />
+      )}
 
       {mobile && sheetOpen && (
         <div className="fixed inset-x-0 bottom-0 z-40 max-h-[60%] overflow-hidden rounded-t-xl border-t border-[var(--color-line)] bg-[var(--color-canvas)] shadow-2xl">

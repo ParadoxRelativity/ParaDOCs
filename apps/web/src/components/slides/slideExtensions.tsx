@@ -122,6 +122,8 @@ export interface SlideEditorContext {
   edit: (id: string | null) => void;
   /** The centre of the slide, where new things are inserted. */
   center: { x: number; y: number };
+  /** Starts the slideshow, from the first slide or from the current one. */
+  present: (from: 'start' | 'current') => void;
 }
 
 export interface SlideInsertTool {

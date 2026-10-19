@@ -19,6 +19,7 @@ import {
   type SlideBackground,
   type SlideElement,
   type SlideSnapshot,
+  type SlideTransition,
   type ZOrder,
 } from '@paradocs/shared';
 import { randomId } from './util';
@@ -143,6 +144,10 @@ export function useSlidesDeck(ydoc: Y.Doc) {
         }),
       moveSlides: (ids: string[], toIndex: number) => transact(() => moveSlides(ydoc, ids, toIndex)),
       setHidden: (ids: string[], hidden: boolean) => transact(() => setSlidesHidden(ydoc, ids, hidden)),
+      setTransition: (ids: string[], transition: SlideTransition) =>
+        transact(() => {
+          for (const id of ids) ydoc.getMap<unknown>(slideMapName(id)).set('transition', transition);
+        }),
       setBackground: (slideId: string, background: SlideBackground | null) =>
         transact(() => {
           const map = ydoc.getMap<unknown>(slideMapName(slideId));

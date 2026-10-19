@@ -200,7 +200,7 @@ export const DEFAULT_LAYOUTS: SlideLayout[] = [
 
 export type SlideBackground = { kind: 'color'; color: string } | { kind: 'image'; url: string };
 
-export const SLIDE_TRANSITION_KINDS = ['none', 'fade', 'push', 'zoom'] as const;
+export const SLIDE_TRANSITION_KINDS = ['none', 'fade', 'push', 'wipe', 'zoom'] as const;
 export type SlideTransitionKind = (typeof SLIDE_TRANSITION_KINDS)[number];
 
 export interface SlideTransition {
