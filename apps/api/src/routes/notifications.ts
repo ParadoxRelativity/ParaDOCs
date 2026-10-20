@@ -251,6 +251,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       { rows: ownRequestRows },
       { rows: suspensionRows },
       { rows: reportRows },
+      { rows: deckMentionRows },
+      slideMentions,
     ] = await Promise.all([
       query<InviteRow>(
         `SELECT i.id, i.token, r.name AS role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
@@ -426,30 +428,30 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
          LIMIT ${MAX_MESSAGE_REPORTS}`,
         [user.id],
       ),
+      // Decks someone tagged this person in, checked as documents' tags are: the
+      // workspace's Slides app and the person's access are asked now.
+      query<DeckMentionRow>(
+        `SELECT pm.presentation_id, pm.slide_id, pm.created_at, p.title,
+                ${WORKSPACE_SELECT},
+                author.id AS author_id, author.name AS author_name,
+                ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+           FROM presentation_mentions pm
+           JOIN presentations p ON p.id = pm.presentation_id
+           JOIN workspaces w ON w.id = p.workspace_id
+           JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
+           LEFT JOIN users author ON author.id = pm.created_by
+          WHERE pm.user_id = $1
+            AND pm.read_at IS NULL
+            AND ${notBlockedAuthorSql('$1', 'pm.created_by')}
+            AND p.archived_at IS NULL
+            AND ${appEnabledSql('p.workspace_id', 'slides')}
+            AND ${presentationLevelSql('$1', 'wm.role_id')} > 0
+          ORDER BY pm.created_at DESC
+          LIMIT ${MAX_MENTIONS}`,
+        [user.id],
+      ),
+      slideMentionsFor(user.id),
     ]);
-
-    // Decks someone tagged this person in, checked as documents' tags are: the
-    // workspace's Slides app and the person's access are asked now.
-    const { rows: deckMentionRows } = await query<DeckMentionRow>(
-      `SELECT pm.presentation_id, pm.slide_id, pm.created_at, p.title,
-              ${WORKSPACE_SELECT},
-              author.id AS author_id, author.name AS author_name,
-              ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
-         FROM presentation_mentions pm
-         JOIN presentations p ON p.id = pm.presentation_id
-         JOIN workspaces w ON w.id = p.workspace_id
-         JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
-         LEFT JOIN users author ON author.id = pm.created_by
-        WHERE pm.user_id = $1
-          AND pm.read_at IS NULL
-          AND ${notBlockedAuthorSql('$1', 'pm.created_by')}
-          AND p.archived_at IS NULL
-          AND ${appEnabledSql('p.workspace_id', 'slides')}
-          AND ${presentationLevelSql('$1', 'wm.role_id')} > 0
-        ORDER BY pm.created_at DESC
-        LIMIT ${MAX_MENTIONS}`,
-      [user.id],
-    );
 
     // Only administrators hear about releases, and only while there is one, so
     // the usual request costs no extra query.
@@ -594,8 +596,11 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
             createdAt: row.created_at,
           }),
         ),
-      ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
-      slideMentions: await slideMentionsFor(user.id),
+      ]
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        // Each source is capped on its own; together they keep the same cap.
+        .slice(0, MAX_MENTIONS),
+      slideMentions,
       workItems: workItemRows.map(
         (row): WorkItemNotification => ({
           workItemId: row.work_item_id,

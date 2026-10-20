@@ -146,7 +146,8 @@ export function useLivePresenter(presentationId: string, state: ShowState): Live
     [presentationId],
   );
 
-  // The server drops a session with its socket, so a reconnect starts it again.
+  // The server holds the session for a while after the socket drops; starting
+  // again on reconnect takes it back, with its followers, and sends where we are.
   useEffect(() => {
     if (connected && latest.current.status === 'live') begin(latest.current.channelId);
   }, [connected, begin]);

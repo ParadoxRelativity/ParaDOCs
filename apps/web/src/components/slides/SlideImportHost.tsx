@@ -1,36 +1,25 @@
 import { useEffect, useState } from 'react';
-import type * as Y from 'yjs';
-import { claimImport, applyImport } from '../../lib/slideImport';
+import { claimImport } from '../../lib/slideImport';
 import { describeReportItem, type ImportReportItem } from '../../lib/slideImportTypes';
 import { useIsMobile } from '../../lib/mobile';
 import { cx } from '../../lib/util';
 import { Modal } from '../Modal';
-import { useToast } from '../Toast';
 import { Button } from '../ui';
 import Icon from '../Icon';
 
 /**
- * The other half of importing a presentation: a deck made from a file arrives
- * empty, with the file's contents waiting in lib/slideImport. The first time the
- * editor opens it, they are written in (one transaction, so one undo step), and
- * the import report is shown: everything that was approximated or left out, so
+ * The other half of importing a presentation: its slides were stored when it
+ * was made (see lib/slideImport), and the first time the editor opens it the
+ * import report is shown: everything that was approximated or left out, so
  * nothing disappears unannounced.
  */
-export default function SlideImportHost({ presentationId, ydoc, canEdit }: { presentationId: string; ydoc: Y.Doc; canEdit: boolean }) {
-  const toast = useToast();
+export default function SlideImportHost({ presentationId }: { presentationId: string }) {
   const [report, setReport] = useState<{ fileName: string; slides: number; items: ImportReportItem[] } | null>(null);
 
   useEffect(() => {
     // Claiming consumes it, so this runs once per imported presentation.
     const deck = claimImport(presentationId);
-    if (!deck || !canEdit) return;
-    try {
-      const { slideIds } = applyImport(ydoc, deck);
-      setReport({ fileName: deck.fileName, slides: slideIds.length, items: deck.report.items });
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not add the imported slides', 'error');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (deck) setReport({ fileName: deck.fileName, slides: deck.slides.length, items: deck.report.items });
   }, [presentationId]);
 
   if (!report) return null;

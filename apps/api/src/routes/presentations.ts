@@ -21,7 +21,7 @@ import {
 } from '@paradocs/shared';
 import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
 import { query } from '../db/pool.js';
-import { badRequest, notFound, parse } from '../lib/http.js';
+import { HttpError, badRequest, notFound, parse } from '../lib/http.js';
 import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
 import { assertFolderAccess, assertMoveKeepsAccess, assertPresentationAccess, presentationLevelSql, roleIdSql } from '../lib/access.js';
 import { presentationSummaryColumns } from '../lib/documentColumns.js';
@@ -35,8 +35,12 @@ import { activeShows } from '../lib/liveShows.js';
  *
  * As spreadsheets are: a name, filed in the Slides app's own folders and
  * locked the way a document is. The slides live in the Y.Doc the collaboration
- * server owns, so nothing here writes slide content over REST.
+ * server owns, so nothing here writes slide content over REST, except an
+ * imported deck into a presentation that has none yet.
  */
+
+/** The largest imported deck, its pictures and media aside (they are uploaded on their own). */
+const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
 
 /** A presentation as `user` sees it. */
 async function fetchPresentation(id: string, userId: string) {
@@ -266,6 +270,8 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
     // The open deck is newer than the saved copy by up to the save debounce.
     const live = liveDocument(slidesCollabName(req.params.id));
     const ydoc = live ? Buffer.from(Y.encodeStateAsUpdate(live)) : source[0].ydoc;
+    // The saved search text trails the live copy the same way, so derive it from what is copied.
+    const searchText = live ? deckSearchText(readDeck(live).slides) : source[0].search_text;
     const { rows } = await query<{ id: string }>(
       `INSERT INTO presentations (workspace_id, folder_id, title, icon, ydoc, search_text, created_by, last_edited_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
@@ -276,13 +282,62 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
         input.title ?? `Copy of ${source[0].title}`.slice(0, 200),
         source[0].icon,
         ydoc,
-        source[0].search_text,
+        searchText,
         req.user!.id,
       ],
+    );
+    // The copy shows the original's pictures, so its readers may read them too.
+    await query(
+      `INSERT INTO presentation_attachments (presentation_id, attachment_id)
+       SELECT $1::uuid, a.id FROM attachments a WHERE a.presentation_id = $2::uuid
+       UNION
+       SELECT $1::uuid, pa.attachment_id FROM presentation_attachments pa WHERE pa.presentation_id = $2::uuid
+       ON CONFLICT DO NOTHING`,
+      [rows[0].id, req.params.id],
     );
     treeChanged(workspaceId, 'slides');
     reply.status(201);
     return fetchPresentation(rows[0].id, req.user!.id);
+  });
+
+  /**
+   * The slides of an imported file, written into the presentation made for it.
+   * The browser reads the file and builds the deck itself; this stores it at
+   * once, so a deck imported with others, and never opened, is not left empty.
+   * Only a presentation with nothing in it yet takes one.
+   */
+  app.put<{ Params: { id: string } }>('/presentations/:id/import', async (req, reply) => {
+    await assertPresentationAccess(req, req.params.id, 'edit');
+    if (liveDocument(slidesCollabName(req.params.id))) throw new HttpError(409, 'This presentation is open; import into a new one', 'presentation_open');
+    const file = await req.file({ limits: { fileSize: IMPORT_MAX_BYTES, files: 1 } });
+    if (!file) throw badRequest('No deck was uploaded');
+    let data: Buffer;
+    try {
+      data = await file.toBuffer();
+    } catch (err) {
+      if ((err as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE') throw badRequest('That deck is too large to import');
+      throw err;
+    }
+    if (file.file.truncated) throw badRequest('That deck is too large to import');
+
+    const doc = new Y.Doc();
+    try {
+      try {
+        Y.applyUpdate(doc, new Uint8Array(data));
+      } catch {
+        throw badRequest('That is not a deck');
+      }
+      const { rowCount } = await query(
+        `UPDATE presentations
+            SET ydoc = $2, search_text = $3, last_edited_by = $4, updated_at = now()
+          WHERE id = $1 AND ydoc IS NULL`,
+        [req.params.id, Buffer.from(Y.encodeStateAsUpdate(doc)), deckSearchText(readDeck(doc).slides), req.user!.id],
+      );
+      if (!rowCount) throw new HttpError(409, 'This presentation already has slides; import into a new one', 'presentation_not_empty');
+    } finally {
+      doc.destroy();
+    }
+    reply.status(204);
   });
 
   app.delete<{ Params: { id: string } }>('/presentations/:id', async (req, reply) => {

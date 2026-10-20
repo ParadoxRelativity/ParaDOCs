@@ -99,7 +99,9 @@ export const slideConvertRoutes: FastifyPluginAsync = async (app) => {
         method: 'POST',
         headers: { 'content-type': 'application/octet-stream' },
         body: new Uint8Array(data),
-        signal: AbortSignal.timeout(settings.timeoutMs),
+        // The converter runs one file at a time, so a request may first wait for
+        // those ahead of it: allow a conversion's time for each that can be.
+        signal: AbortSignal.timeout(settings.timeoutMs * settings.concurrency),
       });
       if (!res.ok) {
         await res.body?.cancel().catch(() => undefined);

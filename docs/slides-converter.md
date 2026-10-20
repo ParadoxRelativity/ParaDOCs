@@ -51,7 +51,7 @@ meant to talk to it.
 | `CONVERTER_URL` | unset (converter off) | Where the app reaches the converter |
 | `CONVERTER_MAX_MB` | `50` | Largest file it will convert, in megabytes |
 | `CONVERTER_TIMEOUT_SECONDS` | `60` | How long one conversion may take before it is stopped |
-| `CONVERTER_CONCURRENCY` | `2` | Conversions the app lets run at once; others are told to try again |
+| `CONVERTER_CONCURRENCY` | `2` | Conversions the app accepts at once; others are told to try again. The converter works through them one at a time, so the app waits up to this many times `CONVERTER_TIMEOUT_SECONDS` for each |
 | `CONVERTER_MEMORY` | `2g` | Memory limit of the converter container |
 | `CONVERTER_CPUS` | `2` | CPU limit of the converter container |
 

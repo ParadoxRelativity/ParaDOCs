@@ -23,7 +23,10 @@ import { presentationAccessForUser } from './presentationAccess.js';
  *
  * Callers are identified by an `owner` token, one per socket, so a person with
  * two windows open is two parties and only the window that started the show
- * drives it.
+ * drives it. When the presenter starts again from another window, or after
+ * their socket reconnects, that socket takes the show over: its followers and
+ * position carry on. A presenter whose socket drops has a short grace period
+ * to come back before the show ends.
  */
 
 export type Owner = symbol;
@@ -33,10 +36,16 @@ type Reply = (event: ChatEvent) => void;
 export const MAX_FOLLOWERS = 500;
 /** Position updates closer together than this are held back and merged, so a held-down key cannot flood the audience. */
 export const MIN_PUBLISH_GAP_MS = 40;
+/** How long a show waits for a presenter whose socket dropped to reconnect before it ends. */
+let presenterGraceMs = 30_000;
 
 interface Session {
   info: Omit<LiveShowInfo, 'viewers'>;
-  owner: Owner;
+  /** The presenter's socket, or null while waiting for them to reconnect. */
+  owner: Owner | null;
+  ownerReply: Reply | null;
+  /** Ends the show if the presenter has not come back in time. */
+  grace: ReturnType<typeof setTimeout> | null;
   state: ShowState;
   seq: number;
   lastPublishedAt: number;
@@ -100,13 +109,22 @@ function publishViewers(session: Session) {
   });
 }
 
+/** Lets go of the presenter's socket, leaving the show itself running. */
+function detachOwner(session: Session) {
+  session.stopOwner();
+  session.stopOwner = () => undefined;
+  if (session.owner) forget(session.owner, session.info.presentationId);
+  session.owner = null;
+  session.ownerReply = null;
+}
+
 function close(session: Session) {
   if (sessions.get(session.info.presentationId) !== session) return;
   if (session.pending) clearTimeout(session.pending);
+  if (session.grace) clearTimeout(session.grace);
   publishToShow(session.info.presentationId, { type: 'show.ended', presentationId: session.info.presentationId });
   sessions.delete(session.info.presentationId);
-  session.stopOwner();
-  forget(session.owner, session.info.presentationId);
+  detachOwner(session);
   for (const [viewer, stop] of session.viewers) {
     stop();
     forget(viewer, session.info.presentationId);
@@ -151,8 +169,22 @@ export async function startShow(
     if (existing.info.presenter.id !== user.id) {
       return reply(refuse(presentationId, 'busy', `${existing.info.presenter.name} is already presenting this`));
     }
-    // The same person starting again, from another window, takes over.
-    close(existing);
+    // The same person starting again, from another window or after a reconnect,
+    // takes the show over: its followers stay and it carries on where it was.
+    if (existing.owner === owner) return reply({ type: 'show.started', presentationId, show: infoOf(existing) });
+    if (existing.grace) clearTimeout(existing.grace);
+    existing.grace = null;
+    // The window it is taken from is told, and only that window.
+    existing.ownerReply?.({ type: 'show.ended', presentationId });
+    detachOwner(existing);
+    existing.owner = owner;
+    existing.ownerReply = reply;
+    existing.stopOwner = subscribeToShow(presentationId, reply);
+    if (channelId) existing.info.channelId = channelId;
+    remember(owner, presentationId);
+    reply({ type: 'show.started', presentationId, show: infoOf(existing) });
+    changed(existing);
+    return;
   }
 
   const session: Session = {
@@ -165,6 +197,8 @@ export async function startShow(
       startedAt: new Date().toISOString(),
     },
     owner,
+    ownerReply: reply,
+    grace: null,
     state: EMPTY_STATE,
     seq: 0,
     lastPublishedAt: 0,
@@ -231,13 +265,19 @@ export function leaveShow(owner: Owner, presentationId: string): void {
   publishViewers(session);
 }
 
-/** A socket has gone: its show ends, and it stops following any other. */
+/**
+ * A socket has gone: it stops following any show, and a show it presents waits
+ * a while for the presenter to come back (see startShow) before ending.
+ */
 export function releaseOwner(owner: Owner): void {
   for (const presentationId of [...(memberships.get(owner) ?? [])]) {
     const session = sessions.get(presentationId);
     if (!session) continue;
-    if (session.owner === owner) close(session);
-    else leaveShow(owner, presentationId);
+    if (session.owner === owner) {
+      detachOwner(session);
+      session.grace = setTimeout(() => close(session), presenterGraceMs);
+      session.grace.unref?.();
+    } else leaveShow(owner, presentationId);
   }
   memberships.delete(owner);
 }
@@ -268,6 +308,11 @@ export async function activeShows(userId: string, workspaceId: string): Promise<
     if (await presentationAccessForUser(userId, session.info.presentationId)) visible.push(infoOf(session));
   }
   return visible.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+}
+
+/** Test helper: how long a show waits for its presenter to reconnect. */
+export function setPresenterGrace(ms: number): void {
+  presenterGraceMs = ms;
 }
 
 /** Test helper: the position the server holds for a show. */

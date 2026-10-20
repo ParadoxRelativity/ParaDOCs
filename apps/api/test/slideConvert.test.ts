@@ -132,6 +132,20 @@ describe('presentation converter route', () => {
     expect((await api.call(editor, 'GET', '/health')).status).toBeLessThan(500);
   });
 
+  it('waits for a conversion queued behind another instead of giving up on it', async () => {
+    enable({ timeoutMs: 250, concurrency: 2 });
+    // Like the sidecar: one file at a time, each taking most of the time limit.
+    let free = Promise.resolve();
+    behaviour = (_req, res) => {
+      free = free.then(
+        () => new Promise<void>((resolve) => setTimeout(() => (res.writeHead(200).end(PPTX), resolve()), 200)),
+      );
+    };
+    const [first, second] = await Promise.all([convert(editor, 'a.ppt', Buffer.from('x')), convert(editor, 'b.ppt', Buffer.from('y'))]);
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+  });
+
   it('rejects a file the converter cannot read, or answers with something that is not a presentation', async () => {
     enable();
     behaviour = (_req, res) => res.writeHead(500).end('boom');

@@ -37,14 +37,23 @@ export async function mayReadUpload(userId: string | null, storageKey: string): 
 
   const [workspaceId] = parts;
   if (parts.length !== 2 || !UUID.test(workspaceId)) return false;
-  const { rows } = await query<{ document_id: string | null; presentation_id: string | null }>(
-    'SELECT document_id, presentation_id FROM attachments WHERE storage_key = $1 AND workspace_id = $2',
+  const { rows } = await query<{ document_id: string | null; presentation_ids: string[] }>(
+    `SELECT a.document_id,
+            -- The owning deck first, then any copies that show the same picture.
+            array_remove(a.presentation_id || ARRAY(SELECT pa.presentation_id FROM presentation_attachments pa
+                                                    WHERE pa.attachment_id = a.id), NULL) AS presentation_ids
+       FROM attachments a WHERE a.storage_key = $1 AND a.workspace_id = $2`,
     [storageKey, workspaceId],
   );
   const documentId = rows[0]?.document_id;
   if (documentId) return (await documentAccess(userId, documentId)) !== null;
-  const presentationId = rows[0]?.presentation_id;
-  if (presentationId) return (await presentationAccess(userId, presentationId)) !== null;
+  const presentationIds = rows[0]?.presentation_ids ?? [];
+  if (presentationIds.length > 0) {
+    for (const presentationId of presentationIds) {
+      if ((await presentationAccess(userId, presentationId)) !== null) return true;
+    }
+    return false;
+  }
   const { rows: member } = await query('SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
     workspaceId,
     userId,

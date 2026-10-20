@@ -25,7 +25,8 @@ import {
   isKeynoteFile,
   useSlideConverter,
 } from '../../lib/slideConvert';
-import { rememberImport, resolveMedia, uploadImportMedia } from '../../lib/slideImport';
+import { encodeImport, rememberImport, resolveMedia, uploadImportMedia } from '../../lib/slideImport';
+import { api } from '../../api/client';
 import type { Can } from '../../lib/permissions';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { cx, formatRelative, useLocalStorage } from '../../lib/util';
@@ -179,7 +180,18 @@ export function PresentationList({
         (picture) => upload.mutateAsync({ file: picture, presentationId: created.id }),
         progress,
       );
-      rememberImport(created.id, resolveMedia(deck, urls, failed));
+      const resolved = resolveMedia(deck, urls, failed);
+      setImportStatus('Saving the slides…');
+      try {
+        // Stored now, not when it is first opened: of several files imported at once, only one opens.
+        const { update } = encodeImport(resolved);
+        await api.upload('PUT', `/presentations/${created.id}/import`, new Blob([update as BlobPart]));
+      } catch (err) {
+        await api.delete(`/presentations/${created.id}`).catch(() => undefined);
+        throw err;
+      }
+      // Only the report is left for the editor, to show when the deck opens.
+      rememberImport(created.id, resolved);
       return created.id;
     } catch (err) {
       if (err instanceof ConverterUnavailableError) setNeedsConverter((names) => [...names, file.name]);

@@ -10,7 +10,7 @@ describe('live shows', () => {
   let shows: typeof Shows;
   let startShow: typeof Shows.startShow, updateShow: typeof Shows.updateShow, endShow: typeof Shows.endShow;
   let joinShow: typeof Shows.joinShow, leaveShow: typeof Shows.leaveShow, releaseOwner: typeof Shows.releaseOwner;
-  let recheckOwner: typeof Shows.recheckOwner, showState: typeof Shows.showState;
+  let recheckOwner: typeof Shows.recheckOwner, showState: typeof Shows.showState, setPresenterGrace: typeof Shows.setPresenterGrace;
   let MIN_PUBLISH_GAP_MS: number, MAX_FOLLOWERS: number;
   let api: Api;
   let owner: TestUser;
@@ -19,6 +19,9 @@ describe('live shows', () => {
   let outsider: TestUser;
   let ws: string;
   let deck: string;
+
+  /** How long these tests let a dropped presenter come back; one test raises it. */
+  const GRACE_MS = 20;
 
   /** A socket's worth of state: a token, and everything it has been sent. */
   const socket = () => {
@@ -34,7 +37,8 @@ describe('live shows', () => {
   beforeAll(async () => {
     api = await startApi();
     shows = await import('../src/lib/liveShows.js');
-    ({ startShow, updateShow, endShow, joinShow, leaveShow, releaseOwner, recheckOwner, showState, MIN_PUBLISH_GAP_MS, MAX_FOLLOWERS } = shows);
+    ({ startShow, updateShow, endShow, joinShow, leaveShow, releaseOwner, recheckOwner, showState, setPresenterGrace, MIN_PUBLISH_GAP_MS, MAX_FOLLOWERS } = shows);
+    setPresenterGrace(GRACE_MS);
     owner = await api.register('Owner');
     editor = await api.register('Editor');
     viewer = await api.register('Viewer');
@@ -59,6 +63,7 @@ describe('live shows', () => {
     expect(last(presenter, 'show.started').show).toMatchObject({ title: 'Town hall', presenter: { id: editor.id }, viewers: 0 });
     expect((await api.call(viewer, 'GET', `/workspaces/${ws}/live-shows`)).body).toHaveLength(1);
     releaseOwner(presenter.token);
+    await wait(GRACE_MS + 10);
     expect((await api.call(viewer, 'GET', `/workspaces/${ws}/live-shows`)).body).toHaveLength(0);
   });
 
@@ -93,6 +98,7 @@ describe('live shows', () => {
     updateShow(presenter.token, deck, state('s2'));
     expect(last(follower, 'show.state').state.slideId).toBe('s2');
     releaseOwner(presenter.token);
+    await wait(GRACE_MS + 10);
     expect(last(follower, 'show.ended')).toBeTruthy();
     releaseOwner(follower.token);
   });
@@ -155,9 +161,16 @@ describe('live shows', () => {
     await startShow(owner, other.token, deck, null, other.reply);
     expect(last(other, 'show.refused')).toMatchObject({ reason: 'busy' });
 
+    const follower = socket();
+    await joinShow(viewer, follower.token, deck, follower.reply);
     await startShow(editor, second.token, deck, null, second.reply);
     expect(last(first, 'show.ended')).toBeTruthy();
-    expect(last(second, 'show.started')).toBeTruthy();
+    expect(last(second, 'show.started').show.viewers).toBe(1);
+    // Taking over is not ending: the audience stays.
+    expect(last(follower, 'show.ended')).toBeUndefined();
+    updateShow(first.token, deck, state('stale window'));
+    expect(showState(deck)?.slideId).not.toBe('stale window');
+    releaseOwner(follower.token);
 
     await wait(MIN_PUBLISH_GAP_MS + 10);
     updateShow(second.token, deck, state('keep'));
@@ -166,6 +179,38 @@ describe('live shows', () => {
     }
     expect(showState(deck)?.slideId).toBe('keep');
     releaseOwner(second.token);
+  });
+
+  it('keeps the show, its followers and its position while a dropped presenter reconnects', async () => {
+    setPresenterGrace(500);
+    const before = socket();
+    const after = socket();
+    const follower = socket();
+    await startShow(editor, before.token, deck, null, before.reply);
+    await joinShow(viewer, follower.token, deck, follower.reply);
+    await wait(MIN_PUBLISH_GAP_MS + 10);
+    updateShow(before.token, deck, state('s4', 1));
+
+    releaseOwner(before.token); // the presenter's Wi-Fi drops
+    await wait(50);
+    expect(last(follower, 'show.ended')).toBeUndefined();
+    expect(showState(deck)).toMatchObject({ slideId: 's4', step: 1 });
+
+    await startShow(editor, after.token, deck, null, after.reply); // and comes back
+    expect(last(after, 'show.started').show.viewers).toBe(1);
+    await wait(MIN_PUBLISH_GAP_MS + 10);
+    updateShow(after.token, deck, state('s5'));
+    expect(last(follower, 'show.state').state.slideId).toBe('s5');
+    await wait(500);
+    expect(last(follower, 'show.ended')).toBeUndefined();
+
+    // One that does not come back ends the show once the grace is up.
+    setPresenterGrace(GRACE_MS);
+    releaseOwner(after.token);
+    await wait(GRACE_MS + 10);
+    expect(last(follower, 'show.ended')).toBeTruthy();
+    expect(showState(deck)).toBeNull();
+    releaseOwner(follower.token);
   });
 
   it('only announces in a channel the presenter can post in, in the same workspace', async () => {

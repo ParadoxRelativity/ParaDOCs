@@ -9,7 +9,9 @@
 // directory and LibreOffice profile, deleted when the request ends however it
 // ends; nothing is kept between requests. LibreOffice is killed (with whatever
 // it started) if it runs past the time limit. Only one conversion runs at a
-// time and only a short queue waits, so a flood of requests cannot pile up.
+// time and only a short queue waits, so a flood of requests cannot pile up. A
+// request whose client has gone (the app gave up on it) is dropped from the
+// queue, or its LibreOffice killed, so abandoned work never delays the next.
 //
 // No dependencies: Node's standard library only.
 import { spawn } from 'node:child_process';
@@ -29,10 +31,16 @@ let busy = false;
 const waiting = [];
 
 /** Runs `task` when no other conversion is running; null if too many are already waiting. */
-function exclusive(task) {
+function exclusive(task, signal) {
   if (busy && waiting.length >= MAX_QUEUE) return null;
   return new Promise((resolve, reject) => {
     const run = () => {
+      // Its client left while it waited: skip it and let the next one go.
+      if (signal.aborted) {
+        reject(Object.assign(new Error('client gone'), { status: 499 }));
+        waiting.shift()?.();
+        return;
+      }
       busy = true;
       task()
         .then(resolve, reject)
@@ -64,31 +72,38 @@ function readBody(req) {
   });
 }
 
-/** Runs LibreOffice and kills its whole process group once the time is up. */
-function runSoffice(args) {
+/** Runs LibreOffice and kills its whole process group once the time is up or the client has gone. */
+function runSoffice(args, signal) {
   return new Promise((resolve, reject) => {
     const child = spawn(SOFFICE, args, { stdio: 'ignore', detached: true });
-    const timer = setTimeout(() => {
+    const stop = (error) => {
       try {
         process.kill(-child.pid, 'SIGKILL');
       } catch {
         child.kill('SIGKILL');
       }
-      reject(Object.assign(new Error('timed out'), { status: 504 }));
-    }, TIMEOUT_MS);
-    child.on('error', (err) => {
+      reject(error);
+    };
+    const timer = setTimeout(() => stop(Object.assign(new Error('timed out'), { status: 504 })), TIMEOUT_MS);
+    const onAbort = () => stop(Object.assign(new Error('client gone'), { status: 499 }));
+    signal.addEventListener('abort', onAbort, { once: true });
+    const done = () => {
       clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    };
+    child.on('error', (err) => {
+      done();
       reject(err);
     });
     child.on('exit', (code) => {
-      clearTimeout(timer);
+      done();
       if (code === 0) resolve();
       else reject(Object.assign(new Error(`soffice exited with ${code}`), { status: 422 }));
     });
   });
 }
 
-async function convert(data, extension) {
+async function convert(data, extension, signal) {
   const dir = await mkdtemp(join(tmpdir(), 'convert-'));
   try {
     const input = join(dir, `input${extension}`);
@@ -105,7 +120,7 @@ async function convert(data, extension) {
       '--outdir',
       dir,
       input,
-    ]);
+    ], signal);
     return await readFile(join(dir, 'input.pptx'));
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -125,7 +140,12 @@ const server = createServer(async (req, res) => {
   try {
     const data = await readBody(req);
     if (data.length === 0) return fail(400, 'empty body');
-    const queued = exclusive(() => convert(data, extension));
+    // The app stops waiting after its own time limit; when it does, so does this.
+    const gone = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) gone.abort();
+    });
+    const queued = exclusive(() => convert(data, extension, gone.signal), gone.signal);
     if (!queued) return fail(503, 'busy');
     const pptx = await queued;
     res.writeHead(200, {

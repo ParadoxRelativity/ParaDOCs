@@ -29,14 +29,14 @@ import {
 } from './slideImportTypes';
 
 /**
- * Getting an imported presentation into a Slides deck: the same handoff the
- * spreadsheet import (sheetImport.ts) uses.
+ * Getting an imported presentation into a Slides deck.
  *
- * The file is read, and its pictures are uploaded, before the presentation's
- * Y.Doc is open, so the finished {@link ImportedDeck} waits here in between.
- * The editor claims it once, as it opens, and {@link applyImport} writes the
- * whole deck in a single transaction: one undo step, one update for
- * collaborators, and no half-imported deck for anyone to see.
+ * The file is read, and its pictures are uploaded, before the presentation
+ * is opened. {@link encodeImport} then writes the whole deck into a fresh
+ * Y.Doc in a single transaction ({@link applyImport}), and that is stored as
+ * the new presentation's content at once, so a deck imported alongside others
+ * and never opened is not left empty. Only the import report waits here, for
+ * the editor to show the first time it opens the deck.
  *
  * Every source of slides enters here. `.pptx` and `.odp` come from the
  * parsers (slideImportClient.ts); PARA-96 adds converter output and PDF pages,
@@ -46,6 +46,17 @@ const pending = new Map<string, ImportedDeck>();
 
 export function rememberImport(presentationId: string, deck: ImportedDeck): void {
   pending.set(presentationId, deck);
+}
+
+/** A new presentation's content, from an imported deck whose media has been resolved. */
+export function encodeImport(deck: ImportedDeck): { update: Uint8Array; slides: number } {
+  const doc = new Y.Doc();
+  try {
+    const { slideIds } = applyImport(doc, deck);
+    return { update: Y.encodeStateAsUpdate(doc), slides: slideIds.length };
+  } finally {
+    doc.destroy();
+  }
 }
 
 /** The deck waiting for this presentation, once; null when there is none. */

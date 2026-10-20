@@ -132,14 +132,17 @@ function locateInDeck(
   return null;
 }
 
+/** How many of a search's decks are opened to say which slide matched. */
+const LOCATE_LIMIT = 5;
+
 /**
  * Presentations that match, by title and by the text and speaker notes on
  * their slides, naming the slide the match is on. As with spreadsheets, a
  * search narrowed by tag or folder has asked for documents, and nothing locked
  * away from the reader turns up.
  *
- * The database finds and ranks the decks; the slide is found by reading each
- * hit's deck, so a phrase only in the speaker notes finds the deck and says
+ * The database finds and ranks the decks; the slide is found by reading the
+ * best few hits' decks, so a phrase only in the speaker notes finds the deck and says
  * where. A match the typed words do not locate (stemming: "running" finds
  * "run") falls back to the database's own excerpt and no slide.
  */
@@ -191,8 +194,9 @@ async function searchPresentations(
   );
   const patterns = input.q ? termPatterns(input.q) : [];
   return Promise.all(
-    rows.map(async (row) => {
-      const deck = patterns.length ? await loadDeck(row.id) : null;
+    rows.map(async (row, index) => {
+      // Naming the slide means reading the whole deck, so only the best few hits get one.
+      const deck = patterns.length && index < LOCATE_LIMIT ? await loadDeck(row.id) : null;
       const found = deck ? locateInDeck(deck.slides, patterns) : null;
       return found ? { ...row, ...found } : { ...row, slide: null, slideId: null, inNotes: false };
     }),

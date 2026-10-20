@@ -12,6 +12,7 @@ import type {
   MessageReportNotification,
   Notifications,
   ScheduleNotification,
+  SlideMentionNotification,
   WorkItemNotification,
 } from '@paradocs/shared';
 import { SCHEDULE_NOTIFICATION_REASONS } from '@paradocs/shared';
@@ -302,6 +303,26 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
       }),
     );
 
+    const slideMentions: SlideMentionNotification[] = await Promise.all(
+      records(body.slideMentions, 100).map(async (mention) => {
+        const author = mention.taggedBy ? record(mention.taggedBy) : null;
+        return {
+          presentationId: text(mention.presentationId),
+          slideId: text(mention.slideId),
+          title: text(mention.title, 'Untitled').slice(0, 200),
+          workspace: await workspace(mention.workspace),
+          taggedBy: author
+            ? {
+                id: text(author.id),
+                name: text(author.name, 'Someone'),
+                avatarUrl: await picture(fetcher, author.avatarUrl),
+              }
+            : null,
+          createdAt: text(mention.createdAt),
+        };
+      }),
+    );
+
     const workItems: WorkItemNotification[] = await Promise.all(
       records(body.workItems, 100).map(async (item) => {
         const by = item.by ? record(item.by) : null;
@@ -426,6 +447,7 @@ export async function notificationsFor(connection: Connection): Promise<Notifica
         invites,
         messages,
         mentions,
+        slideMentions,
         workItems,
         serverUpdate,
         accountRequests,
