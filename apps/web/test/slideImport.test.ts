@@ -102,6 +102,24 @@ describe('PowerPoint (python-pptx on the stock template)', () => {
     expect(hexagon.slides).toEqual([3]);
     expect(describeReportItem(hexagon)).toContain('slide 3');
   });
+
+  it('follows the slide list, not the order of the relationships, in a reordered deck', async () => {
+    // PowerPoint keeps a slide's relationship when it is moved; only p:sldIdLst says where it now sits.
+    const { readFileSync } = await import('node:fs');
+    const { fixturePath } = await import('./helpers');
+    const zip = await JSZip.loadAsync(readFileSync(fixturePath('powerpoint-quarterly.pptx')));
+    const presentation = await zip.file('ppt/presentation.xml')!.async('string');
+    const ids = ['rId11', 'rId7', 'rId12', 'rId9', 'rId10'].map((rid, i) => `<p:sldId id="${256 + i}" r:id="${rid}"/>`).join('');
+    zip.file('ppt/presentation.xml', presentation.replace(/<p:sldIdLst>[\s\S]*?<\/p:sldIdLst>/, `<p:sldIdLst>${ids}</p:sldIdLst>`));
+    const deck = await parseSlideFile(await zip.generateAsync({ type: 'uint8array' }), 'reordered.pptx', {
+      parseXml: (t) => new DOMParser().parseFromString(t, 'text/xml') as unknown as Document,
+    });
+    expect(deck.slides).toHaveLength(5);
+    expect(deck.slides.map((s) => s.hidden)).toEqual([true, false, false, false, false]);
+    expect(textOf(deck.slides[1].elements)).toEqual(['Quarterly Review', 'Finance and Operations']);
+    expect(textOf(deck.slides[3].elements)).toContain('Revenue up 12%');
+    expect(deck.slides[2].transition).toEqual({ kind: 'fade', durationMs: 700 });
+  });
 });
 
 describe('Google Slides export', () => {
