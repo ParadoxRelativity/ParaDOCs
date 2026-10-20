@@ -43,6 +43,7 @@ import './slideContent';
 import { CANVAS_CLIP_MIME, SlideInsertDialogs, parseCanvasClip, pasteCanvasSelection } from './SlideLiveElements';
 import { SlideDesignHost } from './slideDesign';
 import { SlideExportHost } from './slideExport';
+import SlideImportHost from './SlideImportHost';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -606,6 +607,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
       )}
 
       <SlideInsertDialogs />
+      <SlideImportHost presentationId={presentation.id} ydoc={session.ydoc} canEdit={canEdit} />
 
       {mobile && sheetOpen && (
         <div className="fixed inset-x-0 bottom-0 z-40 max-h-[60%] overflow-hidden rounded-t-xl border-t border-[var(--color-line)] bg-[var(--color-canvas)] shadow-2xl">

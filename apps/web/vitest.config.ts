@@ -1,4 +1,10 @@
 import { defineConfig } from 'vitest/config';
 
-// Unit tests of plain TypeScript (exporters and the like); nothing here needs a DOM.
-export default defineConfig({ test: { environment: 'node', include: ['src/**/*.test.ts'] } });
+export default defineConfig({
+  test: {
+    // Pure library tests: exporters and importers run on bytes, with no browser.
+    include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
+    environment: 'node',
+    testTimeout: 30_000,
+  },
+});

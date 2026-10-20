@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { PresentationSummary, SlideFolderNode } from '@paradocs/shared';
 import {
   useArchivedPresentations,
@@ -12,7 +12,11 @@ import {
   useUnfiledPresentations,
   useUpdateFolder,
   useUpdatePresentation,
+  useUploadFile,
 } from '../../api/hooks';
+import { importSlideFile } from '../../lib/slideImportClient';
+import { SLIDE_IMPORT_ACCEPT, isSlideImportFile } from '../../lib/slideImportTypes';
+import { rememberImport, resolveMedia, uploadImportMedia } from '../../lib/slideImport';
 import type { Can } from '../../lib/permissions';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
 import { cx, formatRelative, useLocalStorage } from '../../lib/util';
@@ -97,7 +101,12 @@ export function PresentationList({
   const create = useCreatePresentation(workspaceId);
   const createFolder = useCreateFolder(workspaceId, 'slides');
   const move = useUpdatePresentation(workspaceId);
+  const upload = useUploadFile(workspaceId);
   const toast = useToast();
+  /** What an import in progress is doing, for the status line; null when none is. */
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [fileDrag, setFileDrag] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   /**
    * Where a new folder is being named: `null` for the top level, a folder id for
    * a subfolder, `undefined` when nothing is being created.
@@ -114,6 +123,41 @@ export function PresentationList({
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not create the presentation', 'error');
     }
+  }
+
+  /**
+   * Makes a presentation from a .pptx or .odp. The file is read first (in a
+   * worker), so one that will not open never leaves an empty presentation
+   * behind; its pictures are uploaded to the new presentation, and the rest
+   * waits for the editor to open and write it in.
+   */
+  async function importFile(file: File, folderId: string | null = null): Promise<string | null> {
+    if (!isSlideImportFile(file.name)) {
+      toast(`${file.name} is not a PowerPoint (.pptx) or OpenDocument (.odp) presentation`, 'error');
+      return null;
+    }
+    try {
+      const deck = await importSlideFile(file, (progress) => setImportStatus(progress.message));
+      setImportStatus('Creating the presentation…');
+      const created = await create.mutateAsync({ title: deck.title.slice(0, 200), folderId });
+      const { urls, failed } = await uploadImportMedia(
+        deck,
+        (picture) => upload.mutateAsync({ file: picture, presentationId: created.id }),
+        (progress) => setImportStatus(progress.message),
+      );
+      rememberImport(created.id, resolveMedia(deck, urls, failed));
+      return created.id;
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not import that file', 'error');
+      return null;
+    }
+  }
+
+  async function importFiles(files: File[]) {
+    let last: string | null = null;
+    for (const file of files) last = (await importFile(file)) ?? last;
+    setImportStatus(null);
+    if (last) onSelect(last);
   }
 
   function commitFolder(name: string, icon: string | null, parentId: string | null) {
@@ -164,13 +208,37 @@ export function PresentationList({
   const loadMoreArchived = useCallback(() => void fetchMoreArchived(), [fetchMoreArchived]);
 
   return (
-    <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+    <div
+      className={cx('scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2', fileDrag && 'outline outline-2 -outline-offset-2 outline-[var(--color-accent)]')}
+      onDragOver={(e) => {
+        // A file dragged in from the desktop, not a presentation being filed.
+        if (!can('slides.create') || !e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setFileDrag(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileDrag(false);
+      }}
+      onDrop={(e) => {
+        setFileDrag(false);
+        if (!can('slides.create') || e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        void importFiles([...e.dataTransfer.files]);
+      }}
+    >
       <div className="mb-1 flex items-center justify-between px-2 pt-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
           Presentations
         </span>
         {can('slides.create') && (
           <span className="flex items-center">
+            <IconButton
+              label={importStatus ? 'Importing…' : 'Import PowerPoint or OpenDocument (.pptx, .odp)'}
+              onClick={() => fileInput.current?.click()}
+              disabled={importStatus !== null}
+            >
+              <Icon name="box-arrow-in-down" />
+            </IconButton>
             <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
               <Icon name="folder-plus" />
             </IconButton>
@@ -178,6 +246,24 @@ export function PresentationList({
           </span>
         )}
       </div>
+
+      <input
+        ref={fileInput}
+        type="file"
+        multiple
+        accept={SLIDE_IMPORT_ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (files.length > 0) void importFiles(files);
+        }}
+      />
+      {importStatus && (
+        <p role="status" aria-live="polite" className="mb-1 flex items-center gap-2 px-2 text-xs text-[var(--color-muted)]">
+          <span aria-hidden className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-[var(--color-line)] border-t-[var(--color-accent)]" /> {importStatus}
+        </p>
+      )}
 
       {creatingIn === null && (
         <div className="mb-1 pl-2 pr-1">
