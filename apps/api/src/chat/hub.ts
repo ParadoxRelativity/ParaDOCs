@@ -65,6 +65,17 @@ const workspaces = audience();
  */
 const users = audience();
 
+/** A live slideshow: its presenter and everyone following it. */
+const shows = audience();
+
+export function subscribeToShow(presentationId: string, listener: Listener): () => void {
+  return shows.subscribe(presentationId, listener);
+}
+
+export function publishToShow(presentationId: string, event: ChatEvent): void {
+  shows.publish(presentationId, event);
+}
+
 export function subscribeToChannel(channelId: string, listener: Listener): () => void {
   return channels.subscribe(channelId, listener);
 }

@@ -34,6 +34,7 @@ const TARGETS = {
   folders: { table: 'folders', column: 'folder_id', parent: 'parent_id', label: 'Folder' },
   documents: { table: 'documents', column: 'document_id', parent: 'folder_id', label: 'Document' },
   spreadsheets: { table: 'spreadsheets', column: 'spreadsheet_id', parent: 'folder_id', label: 'Spreadsheet' },
+  presentations: { table: 'presentations', column: 'presentation_id', parent: 'folder_id', label: 'Presentation' },
   // A channel has no folder, so nothing for it to inherit from.
   channels: { table: 'channels', column: 'channel_id', parent: null, label: 'Channel' },
   // Nor does a project.

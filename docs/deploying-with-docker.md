@@ -7,13 +7,15 @@ A deployment is two files, `docker-compose.yml` and `.env`. There is no
 repository to clone and nothing to build: the app runs as a prebuilt image from
 Docker Hub, and the compose file carries the configuration for everything else.
 
-It runs up to four containers:
+It runs up to five containers:
 
 - **app** runs the API, the web client, collaborative editing and chat, all on
   one port.
 - **db** is Postgres. It is never published outside Docker.
 - **caddy** (optional) serves HTTPS and renews certificates automatically.
 - **livekit** carries voice, video and screen sharing.
+- **converter** (optional) imports older presentation formats such as .ppt and
+  Keynote into Slides; see [slides-converter.md](slides-converter.md).
 
 Placeholders used below: `docs.example.com` for your domain and `203.0.113.10`
 for your server's public IP address.
@@ -97,6 +99,7 @@ Settings Compose reads from `.env`:
 | `VOICE_ENABLED` | `true` | Set `false` to turn voice and video off (section 6) |
 | `LIVEKIT_NODE_IP` | found automatically | Voice: the public address browsers send media to (section 6) |
 | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | generated | Voice: fixed keys instead of generated ones. Set both or neither. |
+| `CONVERTER_URL` | — | Slides: where the optional converter is (`http://converter:3000`). See [slides-converter.md](slides-converter.md). |
 
 ## 4. Start the server
 

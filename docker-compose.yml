@@ -19,6 +19,15 @@
 #
 #   COMPOSE_PROFILES=https         Caddy in front, with automatic certificates
 #
+# Importing older presentations (.ppt, Keynote) is optional too, as a second
+# profile that adds a converter container (LibreOffice) beside the app:
+#
+#   COMPOSE_PROFILES=https,converter
+#   CONVERTER_URL=http://converter:3000
+#
+# See docs/slides-converter.md. It is off by default so a server that does not
+# need it does not pay for it.
+#
 # Caddy's settings are deliberately not marked required below. Compose checks
 # required variables in every service, including ones whose profile is off, so
 # a required DOMAIN would stop a deployment without HTTPS. Instead, a missing
@@ -116,6 +125,11 @@ services:
       # Optional: a LiveKit server browsers reach directly, instead of through
       # the app.
       LIVEKIT_URL: ${LIVEKIT_URL:-}
+      # Where the optional converter (the `converter` profile) is. Leave unset
+      # and Slides says that .ppt and Keynote files need a converter.
+      CONVERTER_URL: ${CONVERTER_URL:-}
+      CONVERTER_MAX_MB: ${CONVERTER_MAX_MB:-50}
+      CONVERTER_TIMEOUT_SECONDS: ${CONVERTER_TIMEOUT_SECONDS:-60}
     volumes:
       - uploads:/data/uploads
       - voice-keys:/data/voice
@@ -128,8 +142,13 @@ services:
     ports:
       - '${BIND_ADDR:-0.0.0.0}:${PORT:-4000}:4000'
       - '${ADMIN_BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-4001}:4001'
-    # Reap orphaned processes; tini in the image handles signals.
+    # Reap orphaned processes; tini in the image handles signals. The converter
+    # network is shared with nothing but the converter, which is how the app
+    # reaches it.
     init: true
+    networks:
+      - default
+      - converter
 
   # HTTPS, with the `https` profile. Caddy terminates TLS and obtains and renews
   # certificates by itself. Point DOMAIN's A/AAAA record at this host before
@@ -152,6 +171,36 @@ services:
     ports:
       - '80:80'
       - '443:443'
+
+  # Importing .ppt, Keynote and other older presentation formats, with the
+  # `converter` profile. LibreOffice reads files that came from anywhere, so it
+  # is boxed in: it is on a network with no way out (only the app can reach
+  # it), its filesystem is read-only apart from a scratch directory that is
+  # emptied after every file, it has no privileges, and it is capped on
+  # memory, processes and time. Files are never kept. See
+  # docs/slides-converter.md.
+  converter:
+    image: paradoxrelativity/paradocs-converter:latest
+    profiles: ['converter']
+    restart: unless-stopped
+    networks:
+      - converter
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${CONVERTER_MEMORY:-2g}
+    cpus: ${CONVERTER_CPUS:-2}
+    pids_limit: 256
+    environment:
+      # The same limits as the app's, so a conversion the app has given up on
+      # is stopped and cleaned up rather than left running.
+      MAX_MB: ${CONVERTER_MAX_MB:-50}
+      TIMEOUT_SECONDS: ${CONVERTER_TIMEOUT_SECONDS:-60}
+    init: true
 
   # Voice, video and screen sharing.
   #
@@ -194,6 +243,11 @@ services:
       # out over the authenticated signalling connection, and the media on it is
       # encrypted.
       - '7881:7881'
+
+networks:
+  # Only the app and the converter are on it, and it has no route out.
+  converter:
+    internal: true
 
 # Configuration files, written into the containers that use them. Compose
 # substitutes ${...} variables in this text, so a literal $ is written $$.

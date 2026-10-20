@@ -169,6 +169,7 @@ export const memberRoutes: FastifyPluginAsync = async (app) => {
               AND (e.folder_id IN (SELECT id FROM folders WHERE workspace_id = $1)
                 OR e.document_id IN (SELECT id FROM documents WHERE workspace_id = $1)
                 OR e.spreadsheet_id IN (SELECT id FROM spreadsheets WHERE workspace_id = $1)
+                OR e.presentation_id IN (SELECT id FROM presentations WHERE workspace_id = $1)
                 OR e.channel_id IN (SELECT id FROM channels WHERE workspace_id = $1)
                 OR e.project_id IN (SELECT id FROM projects WHERE workspace_id = $1)
                 OR e.schedule_id IN (SELECT id FROM schedules WHERE workspace_id = $1))`,

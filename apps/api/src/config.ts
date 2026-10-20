@@ -86,6 +86,44 @@ function megabytes(name: string, fallback: number): number {
 }
 
 /**
+ * The optional converter sidecar that turns legacy presentations (.ppt,
+ * Keynote and the like) into .pptx. Off unless CONVERTER_URL names it: the
+ * Docker deployment sets that when its `converter` profile is on.
+ *
+ * LibreOffice reads these files, which are untrusted, so the limits are
+ * deliberately tight: a file larger than CONVERTER_MAX_MB is refused before it
+ * is sent, and a conversion that takes longer than CONVERTER_TIMEOUT_SECONDS is
+ * abandoned. At most CONVERTER_CONCURRENCY run at once.
+ */
+function converterSettings() {
+  const raw = process.env.CONVERTER_URL?.trim() ?? '';
+  let url = '';
+  if (raw) {
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error();
+      url = parsed.origin;
+    } catch {
+      throw new Error('CONVERTER_URL must be an http or https address, such as http://converter:3000.');
+    }
+  }
+  const positive = (name: string, fallback: number) => {
+    const value = process.env[name]?.trim();
+    if (!value) return fallback;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a number greater than zero.`);
+    return n;
+  };
+  return {
+    enabled: url !== '',
+    url,
+    maxBytes: Math.floor(positive('CONVERTER_MAX_MB', 50) * 1024 * 1024),
+    timeoutMs: Math.floor(positive('CONVERTER_TIMEOUT_SECONDS', 60) * 1000),
+    concurrency: Math.floor(positive('CONVERTER_CONCURRENCY', 2)),
+  };
+}
+
+/**
  * Whether to believe X-Forwarded-For about who a request came from. Behind
  * Caddy or another reverse proxy every request arrives from the proxy, so
  * per-address limits would count the whole server as one address. Only set it
@@ -194,6 +232,7 @@ export const config = {
   allowRegistration: process.env.ALLOW_REGISTRATION !== 'false',
   sessionTtlDays: 30,
   livekit: livekitSettings(),
+  converter: converterSettings(),
   admin: adminSettings(),
 
   publicUrl: publicUrlSetting(),

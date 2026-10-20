@@ -16,6 +16,11 @@ const APPS: Record<WorkspaceApp, { label: string; icon: IconName; hint: string }
     icon: 'table',
     hint: 'Spreadsheets, and the cells and charts documents show from them.',
   },
+  slides: {
+    label: 'Slides',
+    icon: 'easel2',
+    hint: 'Presentations you build together and present full screen.',
+  },
   chat: {
     label: 'Chat',
     icon: 'chat-dots',

@@ -14,15 +14,21 @@ import {
   blockWorkItems,
   canvasSearchText,
   canvasWorkItems,
+  deckMentions,
+  deckSearchText,
   normalizeBlocks,
+  presentationIdFromCollabName,
+  readDeck,
   sheetCollabName,
   sheetIdFromCollabName,
   sheetMapName,
+  slidesCollabName,
   workbookSearchText,
   type CanvasElement,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions } from '../lib/documentMentions.js';
+import { mentionsInBlocks, mentionsInCanvas, namesFor, recordMentions, recordPresentationMentions } from '../lib/documentMentions.js';
+import { presentationAccessForUser } from '../lib/presentationAccess.js';
 import { spreadsheetAccessForUser } from '../lib/spreadsheetAccess.js';
 import { setLiveDocumentEditor, setLiveDocumentLookup } from '../lib/liveDocuments.js';
 import { syncWorkItemMentions } from '../lib/workItems.js';
@@ -49,6 +55,7 @@ interface CollabContext {
  * different table, and the only thing shared is this machinery, so they are
  * told apart by a "sheet:" prefix on the document name and handled in their own
  * branch of each hook. Neither app has to know how the other stores anything.
+ * Presentations are the third, under a "slides:" prefix.
  */
 export function createCollabServer(log: FastifyBaseLogger) {
   const hocuspocus = new Hocuspocus({
@@ -61,9 +68,12 @@ export function createCollabServer(log: FastifyBaseLogger) {
     async onConnect({ documentName, context, connection }) {
       const { user } = context as CollabContext;
       const sheetId = sheetIdFromCollabName(documentName);
+      const presentationId = presentationIdFromCollabName(documentName);
       const access = sheetId
         ? await spreadsheetAccessForUser(user.id, sheetId)
-        : await documentAccessForUser(user.id, documentName);
+        : presentationId
+          ? await presentationAccessForUser(user.id, presentationId)
+          : await documentAccessForUser(user.id, documentName);
       if (!access) {
         // Rejects the connection rather than silently serving an empty document.
         throw new Error('No access to this document');
@@ -91,6 +101,17 @@ export function createCollabServer(log: FastifyBaseLogger) {
         const { rows } = await query<{ ydoc: Buffer | null }>(
           'SELECT ydoc FROM spreadsheets WHERE id = $1',
           [sheetId],
+        );
+        if (rows[0]?.ydoc) Y.applyUpdate(document, new Uint8Array(rows[0].ydoc));
+        return;
+      }
+
+      const presentationId = presentationIdFromCollabName(documentName);
+      if (presentationId) {
+        // A new deck starts empty: nothing is stored until it is first edited.
+        const { rows } = await query<{ ydoc: Buffer | null }>(
+          'SELECT ydoc FROM presentations WHERE id = $1',
+          [presentationId],
         );
         if (rows[0]?.ydoc) Y.applyUpdate(document, new Uint8Array(rows[0].ydoc));
         return;
@@ -163,6 +184,24 @@ export function createCollabServer(log: FastifyBaseLogger) {
             WHERE id = $1`,
           [sheetId, state, searchText, user?.id ?? null],
         );
+        return;
+      }
+
+      const presentationId = presentationIdFromCollabName(documentName);
+      if (presentationId) {
+        // Slide text and speaker notes are what a deck contributes to search.
+        const searchText = deckSearchText(readDeck(document).slides);
+        await query(
+          `UPDATE presentations
+              SET ydoc = $2,
+                  search_text = $3,
+                  last_edited_by = COALESCE($4, last_edited_by),
+                  updated_at = now()
+            WHERE id = $1`,
+          [presentationId, state, searchText, user?.id ?? null],
+        );
+        // Tagging someone on a slide tells them, and the tell opens that slide.
+        await recordPresentationMentions(presentationId, deckMentions(document), user?.id ?? null);
         return;
       }
 
@@ -266,17 +305,22 @@ export function createCollabServer(log: FastifyBaseLogger) {
   // their connections. Every client reconnects straight away, and reconnecting
   // goes through onConnect again: someone locked out is refused, and someone
   // cut down to viewing comes back read-only.
-  // Spreadsheets are locked the same way, so theirs drop too.
+  // Spreadsheets and presentations are locked the same way, so theirs drop too.
   const stopAccess = onAccessChanged((workspaceId) => {
     const names = [...hocuspocus.documents.keys()];
     const documents = names.filter((name) => UUID.test(name));
     const sheets = names.map((name) => sheetIdFromCollabName(name)).filter((id): id is string => Boolean(id && UUID.test(id)));
-    if (documents.length === 0 && sheets.length === 0) return;
+    const decks = names
+      .map((name) => presentationIdFromCollabName(name))
+      .filter((id): id is string => Boolean(id && UUID.test(id)));
+    if (documents.length === 0 && sheets.length === 0 && decks.length === 0) return;
     query<{ name: string }>(
       `SELECT id::text AS name FROM documents WHERE workspace_id = $1 AND id = ANY($2::uuid[])
        UNION ALL
-       SELECT $4 || id::text FROM spreadsheets WHERE workspace_id = $1 AND id = ANY($3::uuid[])`,
-      [workspaceId, documents, sheets, sheetCollabName('')],
+       SELECT $4 || id::text FROM spreadsheets WHERE workspace_id = $1 AND id = ANY($3::uuid[])
+       UNION ALL
+       SELECT $5 || id::text FROM presentations WHERE workspace_id = $1 AND id = ANY($6::uuid[])`,
+      [workspaceId, documents, sheets, sheetCollabName(''), slidesCollabName(''), decks],
     )
       .then(({ rows }) => {
         for (const row of rows) hocuspocus.closeConnections(row.name);

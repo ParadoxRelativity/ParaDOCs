@@ -3,15 +3,24 @@ import * as Y from 'yjs';
 import {
   COLLAB_FRAGMENT,
   MAX_ARCHIVE_PAGE_SIZE,
+  MAX_OUTLINE_SLIDES,
   WORK_ITEM_PRIORITIES,
+  addOutlineSlides,
+  deckMarkdown,
+  deleteSlide,
   formatMinutes,
   isEpicType,
   parseMessage,
+  parseOutline,
+  readSlideOrder,
   type ArchivePage,
   type Channel,
+  type ContentsPage,
+  type DeckSnapshot,
   type Message,
   type MessageReferences,
   type MyShift,
+  type PresentationSummary,
   type Project,
   type ProjectSummary,
   type ResponseTime,
@@ -29,6 +38,7 @@ import { DateTime } from 'luxon';
 import { query } from '../db/pool.js';
 import { UUID } from '../lib/access.js';
 import { INTERNAL_CALL_HEADER, internalCallSecret, type AiCaller } from '../lib/aiTokens.js';
+import { editDeck } from '../lib/deckWrite.js';
 import { editLiveDocument, liveDocument } from '../lib/liveDocuments.js';
 import { serverEditor } from '../collab/serverEditor.js';
 import { documentAccessForUser } from '../plugins/session.js';
@@ -152,7 +162,7 @@ function inScope(ctx: ToolContext, workspaceId: string): boolean {
   return !ctx.ai.workspaceId || ctx.ai.workspaceId === workspaceId;
 }
 
-type Owned = 'documents' | 'spreadsheets' | 'projects' | 'work_items' | 'channels';
+type Owned = 'documents' | 'spreadsheets' | 'presentations' | 'projects' | 'work_items' | 'channels';
 
 /**
  * The workspace something is in, refused as not found when it is outside the
@@ -282,25 +292,32 @@ async function epicKeys(ids: (string | null)[]): Promise<Map<string, string>> {
 interface LinkTargets {
   documents: { id: string; title: string }[];
   spreadsheets: { id: string; title: string }[];
+  presentations?: { id: string; title: string }[];
 }
 
-/** A document or spreadsheet by id, or by its title. */
+const TITLED = {
+  documents: { what: 'Document', app: 'docs' },
+  spreadsheets: { what: 'Spreadsheet', app: 'sheets' },
+  presentations: { what: 'Presentation', app: 'slides' },
+} as const;
+
+/** A document, spreadsheet or presentation by id, or by its title. */
 async function titledArg(
   ctx: ToolContext,
-  kind: 'documents' | 'spreadsheets',
+  kind: keyof typeof TITLED,
   arg: string,
   workspace?: string,
 ): Promise<string> {
-  const what = kind === 'documents' ? 'Document' : 'Spreadsheet';
+  const { what, app } = TITLED[kind];
   const text = arg.trim();
   if (UUID.test(text)) {
     await workspaceOf(ctx, kind, text, what);
     return text;
   }
   const matches: { id: string; title: string }[] = [];
-  for (const w of await workspacesFor(ctx, workspace, kind === 'documents' ? 'docs' : 'sheets')) {
+  for (const w of await workspacesFor(ctx, workspace, app)) {
     const found = await call<LinkTargets>(ctx, 'GET', `/workspaces/${w.id}/link-targets${qs({ q: text, kinds: kind, limit: 20 })}`);
-    matches.push(...found[kind]);
+    matches.push(...(found[kind] ?? []));
   }
   const exact = matches.filter((m) => m.title.toLowerCase() === text.toLowerCase());
   const pick = exact.length > 0 ? exact : matches;
@@ -629,6 +646,14 @@ async function writeDocument(
   await call(ctx, 'PATCH', `/documents/${documentId}`, patch);
 }
 
+/** An outline's slides, or a refusal that says what an outline looks like. */
+function outlineArg(text: string) {
+  const slides = parseOutline(text);
+  if (slides.length === 0) throw new ToolError('The outline has no slides. Start each slide with a heading, such as "# Title".');
+  if (slides.length > MAX_OUTLINE_SLIDES) throw new ToolError(`An outline can have up to ${MAX_OUTLINE_SLIDES} slides`);
+  return slides;
+}
+
 function stripMarks(text: string | null | undefined): string {
   return (text ?? '').replace(/<\/?mark>/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -712,7 +737,7 @@ export const TOOLS: Tool[] = [
     name: 'search',
     title: 'Search',
     description:
-      'Full-text search across documents, spreadsheets, work items and schedules. Returns titles, ids and snippets; read one with read_document, read_spreadsheet, get_work_item or who_is_on.',
+      'Full-text search across documents, spreadsheets, presentations (slide text and speaker notes), work items and schedules. Returns titles, ids and snippets; read one with read_document, read_spreadsheet, read_presentation, get_work_item or who_is_on.',
     params: {
       query: { type: 'string', description: 'What to look for', required: true },
       workspace: { ...WORKSPACE, description: 'Workspace name or id. Left out, every workspace is searched.' },
@@ -725,12 +750,17 @@ export const TOOLS: Tool[] = [
         const found = await call<{
           hits: { id: string; title: string; snippet: string | null }[];
           sheets: { id: string; title: string; snippet: string | null }[];
+          presentations?: { id: string; title: string; snippet: string | null; slide: number | null; inNotes: boolean }[];
           workItems: { key: string; title: string; statusName: string; projectName: string }[];
           schedules?: { id: string; name: string; description: string }[];
         }>(ctx, 'GET', `/workspaces/${w.id}/search${qs({ q: str(args, 'query'), limit: 20 })}`);
         const lines = [
           ...found.hits.map((d) => `- document "${d.title}" (id ${d.id}): ${stripMarks(d.snippet)}`),
           ...found.sheets.map((s) => `- spreadsheet "${s.title}" (id ${s.id}): ${stripMarks(s.snippet)}`),
+          ...(found.presentations ?? []).map(
+            (p) =>
+              `- presentation "${p.title}" (id ${p.id})${p.slide ? `, slide ${p.slide}${p.inNotes ? ' notes' : ''}` : ''}: ${stripMarks(p.snippet)}`,
+          ),
           ...found.workItems.map((i) => `- work item ${i.key}: ${i.title} [${i.statusName}] in ${i.projectName}`),
           ...(found.schedules ?? []).map((s) => `- schedule "${s.name}" (id ${s.id})${s.description ? `: ${s.description.slice(0, 160)}` : ''}`),
         ];
@@ -841,6 +871,128 @@ export const TOOLS: Tool[] = [
       const id = await titledArg(ctx, 'spreadsheets', str(args, 'spreadsheet')!, str(args, 'workspace'));
       const text = await call<string>(ctx, 'GET', `/spreadsheets/${id}/text`);
       return text.trim() || '(empty)';
+    },
+  },
+
+  // --- presentations -----------------------------------------------------------
+  {
+    name: 'list_presentations',
+    title: 'List presentations',
+    description: 'Presentations (slide decks) in a workspace, most recently updated first.',
+    params: {
+      workspace: WORKSPACE,
+      limit: { type: 'integer', description: 'How many, up to 100. Default 50.' },
+      cursor: { type: 'string', description: 'The cursor a previous page gave, for the next page' },
+    },
+    writes: false,
+    async run(ctx, args) {
+      const w = await workspaceArg(ctx, str(args, 'workspace'));
+      const limit = Math.min(Math.max(num(args, 'limit') ?? 50, 1), 100);
+      const page = await call<ContentsPage<PresentationSummary>>(
+        ctx,
+        'GET',
+        `/workspaces/${w.id}/presentations${qs({ limit, cursor: str(args, 'cursor') })}`,
+      );
+      if (page.items.length === 0) return 'No presentations.';
+      const lines = page.items.map((p) => `- "${p.title || 'Untitled'}" (id ${p.id}; updated ${p.updatedAt.slice(0, 10)})`);
+      if (page.nextCursor) lines.push(`More: pass cursor ${page.nextCursor}.`);
+      return lines.join('\n');
+    },
+  },
+  {
+    name: 'read_presentation',
+    title: 'Read a presentation',
+    description:
+      'A presentation as markdown: a heading per slide with its text, then its speaker notes after "Notes:". Text in a body placeholder is listed as bullets.',
+    params: {
+      presentation: { type: 'string', description: 'Presentation id, or its exact title', required: true },
+      workspace: WORKSPACE,
+    },
+    writes: false,
+    async run(ctx, args) {
+      const id = await titledArg(ctx, 'presentations', str(args, 'presentation')!, str(args, 'workspace'));
+      const deck = await call<DeckSnapshot & { title: string; workspaceId: string }>(ctx, 'GET', `/presentations/${id}/deck`);
+      return `Link: ${ctx.origin}/w/${deck.workspaceId}/sl/${id}\n\n${deckMarkdown(deck.title, deck)}`;
+    },
+  },
+  {
+    name: 'create_presentation',
+    title: 'Create a presentation',
+    description:
+      "Makes a new presentation from an outline in markdown. Each heading (#) is a slide title; lines under it are its bullets (- item, indented two spaces per level) or plain text; a \"Notes:\" line starts that slide's speaker notes. Slides use the deck's own layouts: a title-only slide is a Title slide, the rest Title and content. It starts unfiled unless a folder id is given.",
+    params: {
+      title: { type: 'string', description: "The presentation's title", required: true },
+      outline: { type: 'string', description: 'The slides, as a markdown outline', required: true },
+      workspace: WORKSPACE,
+      folderId: { type: 'string', description: 'The Slides folder to file it in' },
+    },
+    writes: true,
+    async run(ctx, args) {
+      const slides = outlineArg(str(args, 'outline')!);
+      const w = await workspaceArg(ctx, str(args, 'workspace'));
+      const deck = await call<PresentationSummary>(ctx, 'POST', `/workspaces/${w.id}/presentations`, {
+        title: str(args, 'title'),
+        folderId: str(args, 'folderId') ?? null,
+      });
+      await editDeck(ctx.userId, deck.id, (doc) => void addOutlineSlides(doc, slides));
+      return `Created "${deck.title}" (id ${deck.id}) with ${slides.length} slide${slides.length === 1 ? '' : 's'}.\nLink: ${ctx.origin}/w/${w.id}/sl/${deck.id}`;
+    },
+  },
+  {
+    name: 'update_presentation',
+    title: 'Update a presentation',
+    description:
+      "Changes a presentation's title, or adds or replaces slides from a markdown outline (see create_presentation for the format). mode \"append\" (the default) adds them at the end; \"insert\" puts them before slide number `slide`; \"replace_slide\" replaces slide number `slide` with them; \"replace_all\" replaces every slide. Someone editing it at the time sees the change live.",
+    params: {
+      presentation: { type: 'string', description: 'Presentation id, or its exact title', required: true },
+      title: { type: 'string', description: 'A new title' },
+      outline: { type: 'string', description: 'Slides to write, as a markdown outline' },
+      mode: {
+        type: 'string',
+        description: 'How the outline is applied. Default append.',
+        enum: ['append', 'insert', 'replace_slide', 'replace_all'],
+      },
+      slide: { type: 'integer', description: 'Slide number, counted from 1, for insert and replace_slide' },
+      workspace: WORKSPACE,
+    },
+    writes: true,
+    async run(ctx, args) {
+      const id = await titledArg(ctx, 'presentations', str(args, 'presentation')!, str(args, 'workspace'));
+      const outline = str(args, 'outline');
+      const title = str(args, 'title');
+      if (outline === undefined && title === undefined) throw new ToolError('Give a title or an outline to write');
+      const mode = str(args, 'mode') ?? 'append';
+      const at = num(args, 'slide');
+      if ((mode === 'insert' || mode === 'replace_slide') && (at === undefined || at < 1)) {
+        throw new ToolError(`${mode} needs slide, the number of a slide counted from 1`);
+      }
+      const slides = outline === undefined ? [] : outlineArg(outline);
+
+      // Checked as the person, so a deck they may only view is refused before anything changes.
+      const current = await call<PresentationSummary>(ctx, 'GET', `/presentations/${id}`);
+      if (current.permission !== 'edit') throw new ToolError('You can view this presentation but not change it');
+      if (title !== undefined) await call(ctx, 'PATCH', `/presentations/${id}`, { title });
+      if (outline === undefined) return `Retitled presentation ${id}.`;
+
+      let replaced = 0;
+      await editDeck(ctx.userId, id, (doc) => {
+        const order = readSlideOrder(doc);
+        if ((mode === 'insert' || mode === 'replace_slide') && at! > order.length + (mode === 'insert' ? 1 : 0)) {
+          throw new ToolError(`The deck has ${order.length} slide${order.length === 1 ? '' : 's'}`);
+        }
+        if (mode === 'replace_all') {
+          for (const slideId of order) deleteSlide(doc, slideId);
+          replaced = order.length;
+          addOutlineSlides(doc, slides);
+        } else if (mode === 'replace_slide') {
+          deleteSlide(doc, order[at! - 1]);
+          replaced = 1;
+          addOutlineSlides(doc, slides, at! - 1);
+        } else {
+          addOutlineSlides(doc, slides, mode === 'insert' ? at! - 1 : undefined);
+        }
+      });
+      return `Updated presentation ${id}: wrote ${slides.length} slide${slides.length === 1 ? '' : 's'}${replaced ? `, replacing ${replaced}` : ''}.`;
     },
   },
 

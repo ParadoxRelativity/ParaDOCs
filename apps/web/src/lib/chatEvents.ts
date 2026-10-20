@@ -24,6 +24,7 @@ import { desktop } from './desktop';
 import { notify } from './browserNotifications';
 import { playSound } from './sounds';
 import { setTyping } from './typing';
+import { liveShowBus, liveShowKeys } from './liveShow';
 
 export type NotificationPermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
 
@@ -53,6 +54,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
   const workItems = new Map((a.workItems ?? []).map((i) => [i.id, i]));
   const projects = new Map((a.projects ?? []).map((p) => [p.id, p]));
   const schedules = new Map((a.schedules ?? []).map((s) => [s.id, s]));
+  const presentations = new Map((a.presentations ?? []).map((p) => [p.id, p]));
   for (const d of b.documents) documents.set(d.id, d);
   for (const s of b.spreadsheets) spreadsheets.set(s.id, s);
   for (const c of b.channels) channels.set(c.id, c);
@@ -60,6 +62,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
   for (const i of b.workItems ?? []) workItems.set(i.id, i);
   for (const p of b.projects ?? []) projects.set(p.id, p);
   for (const s of b.schedules ?? []) schedules.set(s.id, s);
+  for (const p of b.presentations ?? []) presentations.set(p.id, p);
   return {
     documents: [...documents.values()],
     spreadsheets: [...spreadsheets.values()],
@@ -68,6 +71,7 @@ export function mergeReferences(a: MessageReferences, b: MessageReferences): Mes
     workItems: [...workItems.values()],
     projects: [...projects.values()],
     schedules: [...schedules.values()],
+    presentations: [...presentations.values()],
   };
 }
 
@@ -318,12 +322,26 @@ export function useChatEvents({
           // Ids only, as with projects: the sidebar and listings ask again.
           if (event.app === 'sheets') {
             void qc.invalidateQueries({ queryKey: keys.sheetTree(event.workspaceId) });
+          } else if (event.app === 'slides') {
+            void qc.invalidateQueries({ queryKey: keys.slideTree(event.workspaceId) });
           } else {
             void qc.invalidateQueries({ queryKey: keys.tree(event.workspaceId) });
             void qc.invalidateQueries({ queryKey: ['allDocuments', event.workspaceId] });
             // Tags renamed, recoloured or deleted arrive this way too.
             void qc.invalidateQueries({ queryKey: keys.tags(event.workspaceId) });
           }
+          return;
+        case 'shows.changed':
+          // Ids only: the list of live shows is asked for again.
+          void qc.invalidateQueries({ queryKey: liveShowKeys.list(event.workspaceId) });
+          return;
+        case 'show.started':
+        case 'show.joined':
+        case 'show.state':
+        case 'show.viewers':
+        case 'show.ended':
+        case 'show.refused':
+          liveShowBus.emit(event);
           return;
         case 'voice.changed':
           qc.setQueryData<Record<string, VoiceOccupant[]>>(keys.voiceParticipants(event.workspaceId), (current) => {
@@ -367,6 +385,12 @@ export function useChatEvents({
     onEvent: apply,
   });
 
+  // Presenting and following a slideshow ride this socket from wherever they are.
+  useEffect(() => {
+    liveShowBus.attach(status === 'connected' ? send : null);
+    return () => liveShowBus.attach(null);
+  }, [status, send]);
+
   const sendTyping = useCallback(
     (channelId: string, typing: boolean) => send({ type: 'typing', channelId, typing }),
     [send],
@@ -385,6 +409,8 @@ export function useChatEvents({
     void qc.invalidateQueries({ queryKey: keys.directs(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.tree(workspaceId) });
     void qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
+    void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+    void qc.invalidateQueries({ queryKey: liveShowKeys.list(workspaceId) });
   }, [status, workspaceId, qc]);
 
   // Another tab may have been the one to ask.

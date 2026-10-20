@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   CONNECTOR_COLORS,
   DEFAULT_SIZE,
@@ -9,6 +10,7 @@ import {
   SHAPE_FILLS,
   SHAPE_KINDS,
   canvasSearchText,
+  presentationPath,
   type AnchorSide,
   type CanvasElement,
   type ConnectorDash,
@@ -29,7 +31,7 @@ import { alignBoxes, colorName, distributeBoxes, type Alignment } from '../../li
 import { peerPointer, usePublishPointer } from '../../lib/canvasPresence';
 import { cx, randomId, useAutosave, useDebounced } from '../../lib/util';
 import { claimNewDocument } from '../../lib/newDocuments';
-import { useAppEnabled, useCreateDocument, useLinkTargets, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
+import { useAppEnabled, useCanvasToPresentation, useCreateDocument, useLinkTargets, useMembers, useUploadFile, type DocumentPatch } from '../../api/hooks';
 import { useToast } from '../Toast';
 import CanvasSurface, { MAX_SCALE, MIN_SCALE, zoomAround, type PendingBox, type Viewport } from './CanvasSurface';
 import PresentMode from './PresentMode';
@@ -157,6 +159,9 @@ export default function CanvasEditor({
   const [sheetInserting, setSheetInserting] = useState<'cell' | 'chart' | null>(null);
   const sheetsOn = useAppEnabled(workspaceId, 'sheets');
   const projectsOn = useAppEnabled(workspaceId, 'projects');
+  const slidesOn = useAppEnabled(workspaceId, 'slides');
+  const toDeck = useCanvasToPresentation(workspaceId);
+  const navigate = useNavigate();
   const [itemInserting, setItemInserting] = useState(false);
   const [pendingBoxes, setPendingBoxes] = useState<PendingBox[]>([]);
   const [presenting, setPresenting] = useState<number | null>(null);
@@ -773,6 +778,30 @@ export default function CanvasEditor({
               <Icon name="play-fill" /> Present
             </Button>
           </Tooltip>
+          {slidesOn && (
+            <Tooltip label={frames.length ? 'Make a presentation with one slide per frame' : 'Add a frame to make a presentation from it'}>
+              <Button
+                variant="subtle"
+                className={cx('text-sm', (frames.length === 0 || toDeck.isPending) && 'opacity-50')}
+                aria-disabled={frames.length === 0 || toDeck.isPending}
+                onClick={() => {
+                  if (frames.length === 0 || toDeck.isPending) return;
+                  toDeck.mutate(
+                    { documentId: doc.id, title: doc.title },
+                    {
+                      onSuccess: (deck) => {
+                        toast(`Made a ${frames.length}-slide presentation`);
+                        navigate(presentationPath(workspaceId, deck.id));
+                      },
+                      onError: (err) => toast(err instanceof Error ? err.message : 'Could not make the presentation', 'error'),
+                    },
+                  );
+                }}
+              >
+                <Icon name="easel" /> To slides
+              </Button>
+            </Tooltip>
+          )}
         </div>
       </div>
 

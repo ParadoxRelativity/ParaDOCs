@@ -1,5 +1,5 @@
 import { Notification, nativeImage } from 'electron';
-import { scheduleNotificationText, type Notifications } from '@paradocs/shared';
+import { scheduleNotificationText, slideMentionPath, type Notifications } from '@paradocs/shared';
 import { getConnection, listConnections, type Connection } from './connections.js';
 import { notificationsFor, postTo } from './connectionApi.js';
 import { getPreferences } from './preferences.js';
@@ -228,8 +228,21 @@ function announcements(notifications: Notifications): Announcement[] {
       title: `${mention.taggedBy?.name ?? 'Someone'} tagged you`,
       body: `${mention.title} · ${mention.workspace.name}`,
       picture: mention.taggedBy?.avatarUrl ?? null,
-      path: `/w/${mention.workspace.id}/d/${mention.documentId}`,
+      path: mention.path ?? `/w/${mention.workspace.id}/d/${mention.documentId}`,
       documentId: mention.documentId,
+      sound: 'notification_generic',
+      heardBy: () => true,
+    });
+  }
+
+  // Opening the deck marks these read, so there is nothing to post here.
+  for (const mention of notifications.slideMentions ?? []) {
+    found.push({
+      key: `slide-tag:${mention.presentationId}:${mention.slideId}:${mention.createdAt}`,
+      title: `${mention.taggedBy?.name ?? 'Someone'} mentioned you in a comment`,
+      body: `${mention.title} · ${mention.workspace.name}`,
+      picture: mention.taggedBy?.avatarUrl ?? null,
+      path: slideMentionPath(mention.workspace.id, mention.presentationId, mention.slideId),
       sound: 'notification_generic',
       heardBy: () => true,
     });

@@ -1,16 +1,17 @@
 import {
   parseMessage,
   type MessageReferences,
+  type PresentationReference,
   type ProjectReference,
   type ScheduleReference,
   type WorkItemReference,
 } from '@paradocs/shared';
 import { emojiOnly } from '../../lib/emoji';
 import { cx } from '../../lib/util';
-import Icon, { DocumentIcon, SpreadsheetIcon } from '../Icon';
+import Icon, { DocumentIcon, PresentationIcon, SpreadsheetIcon } from '../Icon';
 
 /**
- * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>`, `<sched:…>` and `<#…>`
+ * Renders a message body, turning `<doc:…>`, `<sheet:…>`, `<item:…>`, `<proj:…>`, `<sched:…>`, `<deck:…>` and `<#…>`
  * tokens into links, and `<@…>` and `<!here>` into mentions. Work item
  * descriptions and comments are written the same way and drawn with this too.
  *
@@ -31,6 +32,7 @@ export function MessageBody({
   onOpenWorkItem,
   onOpenProject,
   onOpenSchedule,
+  onOpenPresentation,
 }: {
   body: string;
   references: MessageReferences;
@@ -45,6 +47,8 @@ export function MessageBody({
   onOpenProject?: (project: ProjectReference) => void;
   /** Where a schedule opens. Without it, one is shown but not clickable. */
   onOpenSchedule?: (schedule: ScheduleReference) => void;
+  /** Where a presentation, or one of its slides, opens. Without it, one is shown but not clickable. */
+  onOpenPresentation?: (presentation: PresentationReference, slideId?: string) => void;
 }) {
   const documents = new Map(references.documents.map((d) => [d.id, d]));
   const spreadsheets = new Map(references.spreadsheets.map((s) => [s.id, s]));
@@ -53,6 +57,7 @@ export function MessageBody({
   const workItems = new Map((references.workItems ?? []).map((i) => [i.id, i]));
   const projects = new Map((references.projects ?? []).map((p) => [p.id, p]));
   const schedules = new Map((references.schedules ?? []).map((s) => [s.id, s]));
+  const presentations = new Map((references.presentations ?? []).map((p) => [p.id, p]));
   // A message that is just a few emoji is shown large.
   const emojiCount = emojiOnly(body);
   const jumbo = emojiCount > 0 && emojiCount <= 6;
@@ -111,6 +116,20 @@ export function MessageBody({
           // Unresolved once access or the app is gone.
           if (!schedule) return <UnknownRef key={index} label="unknown schedule" />;
           return <ScheduleChip key={index} schedule={schedule} onClick={onOpenSchedule && (() => onOpenSchedule(schedule))} />;
+        }
+
+        if (segment.type === 'presentation') {
+          const deck = presentations.get(segment.id);
+          // Unresolved once access or the app is gone.
+          if (!deck) return <UnknownRef key={index} label="unknown presentation" />;
+          return (
+            <PresentationChip
+              key={index}
+              presentation={deck}
+              slide={Boolean(segment.slideId)}
+              onClick={onOpenPresentation && (() => onOpenPresentation(deck, segment.slideId))}
+            />
+          );
         }
 
         if (segment.type === 'channel') {
@@ -220,6 +239,34 @@ export function ScheduleChip({ schedule, onClick }: { schedule: ScheduleReferenc
     >
       <span className="h-2 w-2 shrink-0 self-center rounded-full" style={{ background: schedule.color }} />
       <span className="truncate">{schedule.name}</span>
+    </button>
+  );
+}
+
+/** A presentation, or a link to one of its slides. */
+export function PresentationChip({
+  presentation,
+  slide,
+  onClick,
+}: {
+  presentation: PresentationReference;
+  slide?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title={slide ? 'Slide in a presentation' : 'Presentation'}
+      className={cx(
+        'mx-0.5 inline-flex max-w-full items-baseline gap-1 rounded px-1.5 py-0.5 align-baseline text-[13px] font-medium',
+        'bg-[var(--color-accent)]/15 text-[var(--color-accent)] enabled:hover:bg-[var(--color-accent)]/25',
+      )}
+    >
+      <PresentationIcon presentation={presentation} />
+      <span className="truncate">{presentation.title || 'Untitled'}</span>
+      {slide && <span className="shrink-0 text-[11px] opacity-70">slide</span>}
     </button>
   );
 }

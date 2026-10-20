@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { scheduleNotificationText, type Notifications, type WorkItemNotification } from '@paradocs/shared';
+import { scheduleNotificationText, slideMentionPath, type Notifications, type WorkItemNotification } from '@paradocs/shared';
 import { useNotifications } from '../api/hooks';
 import { notify } from './browserNotifications';
 import { playSound } from './sounds';
@@ -46,7 +46,13 @@ function announcements(notifications: Notifications): BellAnnouncement[] {
       key: `mention:${mention.documentId}:${mention.createdAt}`,
       title: `${mention.taggedBy?.name ?? 'Someone'} tagged you`,
       body: `${mention.title} · ${mention.workspace.name}`,
-      path: `/w/${mention.workspace.id}/d/${mention.documentId}`,
+      path: mention.path ?? `/w/${mention.workspace.id}/d/${mention.documentId}`,
+    })),
+    ...(notifications.slideMentions ?? []).map((mention) => ({
+      key: `slide-mention:${mention.presentationId}:${mention.slideId}:${mention.createdAt}`,
+      title: `${mention.taggedBy?.name ?? 'Someone'} mentioned you in a comment`,
+      body: `${mention.title} · ${mention.workspace.name}`,
+      path: slideMentionPath(mention.workspace.id, mention.presentationId, mention.slideId),
     })),
     ...(notifications.workItems ?? []).map((item) => ({
       key: `item:${item.workItemId}:${item.reason}:${item.createdAt}`,

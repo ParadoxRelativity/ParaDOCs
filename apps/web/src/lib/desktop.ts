@@ -144,6 +144,13 @@ export interface DesktopBridge {
     showInMain(path: string): Promise<Outcome>;
     onChanged(handler: () => void): () => void;
   };
+  presenter: {
+    /**
+     * Puts the slideshow on the external display and the presenter view on this
+     * one, or the other way round with `swap`. `displays` says how many there are.
+     */
+    arrange(swap: boolean): Promise<{ ok: true; displays: number } | { ok: false; error: string }>;
+  };
   notifications: {
     /** Every connection except this page's own. */
     list(): Promise<NotificationsListing[]>;

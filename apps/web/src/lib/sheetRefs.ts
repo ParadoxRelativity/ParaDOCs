@@ -84,6 +84,29 @@ export function useSheetRef(ref: SheetRef | null): ResolvedSheetRef | undefined 
   return ref ? cache.get(key) : undefined;
 }
 
+/** How often a reference that is being watched asks again, so a number changed in the sheet shows within seconds. */
+export const LIVE_REFRESH_MS = 4000;
+
+/**
+ * `useSheetRef` that keeps asking while `live` (a slide on the stage or in the
+ * slideshow), pausing while the page is hidden. Each ask is answered for the
+ * viewer asking, so what a reference shows follows their access to the sheet.
+ */
+export function useLiveSheetRef(ref: SheetRef | null, live: boolean): ResolvedSheetRef | undefined {
+  const result = useSheetRef(ref);
+  const key = ref ? sheetRefKey(ref) : '';
+  useEffect(() => {
+    if (!ref || !live) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshSheetRefs([ref]);
+    }, LIVE_REFRESH_MS);
+    return () => clearInterval(timer);
+    // The key captures everything the reference is.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, live]);
+  return result;
+}
+
 /**
  * Markdown carrying reference placeholders, with each replaced by its last
  * known value — for copying from a board, which has to answer synchronously.

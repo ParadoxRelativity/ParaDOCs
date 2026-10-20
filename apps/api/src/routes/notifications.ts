@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   attachmentSummary,
   messagePreview,
+  presentationPath,
   type DocumentMode,
   type MentionNotification,
   type AccountRequestNotification,
@@ -14,13 +15,14 @@ import {
   type WorkspaceSuspensionNotification,
   type Role,
   type ScheduleNotification,
+  type SlideMentionNotification,
   type WorkItemNotification,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { publishToUser } from '../chat/hub.js';
 import { notFound, parse } from '../lib/http.js';
 import { resolveReferences } from '../lib/chatReferences.js';
-import { channelLevelSql, documentLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
+import { channelLevelSql, documentLevelSql, presentationLevelSql, projectLevelSql, scheduleLevelSql } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { mentionsUserSql } from '../lib/channels.js';
 import { uploadUrlSql } from '../lib/storage.js';
@@ -39,6 +41,11 @@ const markReadSchema = z.object({
 const readMentionsSchema = z.object({
   /** Omit to clear every tag addressed to you. */
   documentIds: z.array(z.string().uuid()).max(500).optional(),
+});
+
+const readSlideMentionsSchema = z.object({
+  /** Omit to clear every slide mention addressed to you. */
+  presentationIds: z.array(z.string().uuid()).max(500).optional(),
 });
 
 const MAX_MENTIONS = 50;
@@ -108,6 +115,16 @@ interface MentionRow extends WorkspaceColumns {
   author_avatar_url: string | null;
 }
 
+interface DeckMentionRow extends WorkspaceColumns {
+  presentation_id: string;
+  slide_id: string | null;
+  title: string;
+  created_at: string;
+  author_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
+}
+
 interface ChannelRow extends WorkspaceColumns {
   channel_id: string;
   channel_name: string;
@@ -146,6 +163,58 @@ function workspaceOf(row: WorkspaceColumns): NotificationWorkspace {
   };
 }
 
+interface SlideMentionRow extends WorkspaceColumns {
+  presentation_id: string;
+  slide_id: string;
+  title: string;
+  created_at: string;
+  author_id: string | null;
+  author_name: string | null;
+  author_avatar_url: string | null;
+}
+
+/**
+ * Comments on slides that name this person and have not been opened: the
+ * newest per slide, so a thread of replies is one thing to go and read. As for
+ * document tags, access is asked now, not when the comment was written.
+ */
+async function slideMentionsFor(userId: string): Promise<SlideMentionNotification[]> {
+  const { rows } = await query<SlideMentionRow>(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (sm.presentation_id, sm.slide_id)
+              sm.presentation_id, sm.slide_id, sm.created_at, p.title,
+              ${WORKSPACE_SELECT},
+              author.id AS author_id, author.name AS author_name,
+              ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+         FROM slide_comment_mentions sm
+         JOIN presentations p ON p.id = sm.presentation_id
+         JOIN workspaces w ON w.id = p.workspace_id
+         JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
+         LEFT JOIN users author ON author.id = sm.created_by
+        WHERE sm.user_id = $1
+          AND sm.read_at IS NULL
+          AND ${notBlockedAuthorSql('$1', 'sm.created_by')}
+          AND p.archived_at IS NULL
+          AND ${appEnabledSql('p.workspace_id', 'slides')}
+          AND ${presentationLevelSql('$1', 'wm.role_id')} > 0
+        ORDER BY sm.presentation_id, sm.slide_id, sm.created_at DESC
+     ) latest
+     ORDER BY created_at DESC
+     LIMIT ${MAX_MENTIONS}`,
+    [userId],
+  );
+  return rows.map((row) => ({
+    presentationId: row.presentation_id,
+    slideId: row.slide_id,
+    title: row.title,
+    workspace: workspaceOf(row),
+    taggedBy: row.author_id
+      ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+      : null,
+    createdAt: row.created_at,
+  }));
+}
+
 function truncate(text: string, length = PREVIEW_LENGTH): string {
   return text.length > length ? `${text.slice(0, length - 1).trimEnd()}…` : text;
 }
@@ -182,6 +251,8 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       { rows: ownRequestRows },
       { rows: suspensionRows },
       { rows: reportRows },
+      { rows: deckMentionRows },
+      slideMentions,
     ] = await Promise.all([
       query<InviteRow>(
         `SELECT i.id, i.token, r.name AS role, i.created_at, i.expires_at, u.name AS invited_by, ${WORKSPACE_SELECT}
@@ -357,6 +428,29 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
          LIMIT ${MAX_MESSAGE_REPORTS}`,
         [user.id],
       ),
+      // Decks someone tagged this person in, checked as documents' tags are: the
+      // workspace's Slides app and the person's access are asked now.
+      query<DeckMentionRow>(
+        `SELECT pm.presentation_id, pm.slide_id, pm.created_at, p.title,
+                ${WORKSPACE_SELECT},
+                author.id AS author_id, author.name AS author_name,
+                ${uploadUrlSql('author.avatar_key')} AS author_avatar_url
+           FROM presentation_mentions pm
+           JOIN presentations p ON p.id = pm.presentation_id
+           JOIN workspaces w ON w.id = p.workspace_id
+           JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $1
+           LEFT JOIN users author ON author.id = pm.created_by
+          WHERE pm.user_id = $1
+            AND pm.read_at IS NULL
+            AND ${notBlockedAuthorSql('$1', 'pm.created_by')}
+            AND p.archived_at IS NULL
+            AND ${appEnabledSql('p.workspace_id', 'slides')}
+            AND ${presentationLevelSql('$1', 'wm.role_id')} > 0
+          ORDER BY pm.created_at DESC
+          LIMIT ${MAX_MENTIONS}`,
+        [user.id],
+      ),
+      slideMentionsFor(user.id),
     ]);
 
     // Only administrators hear about releases, and only while there is one, so
@@ -474,18 +568,39 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         workspace: workspaceOf(row),
       })),
       messages,
-      mentions: mentionRows.map(
-        (row): MentionNotification => ({
-          documentId: row.document_id,
-          title: row.title,
-          mode: row.mode,
-          workspace: workspaceOf(row),
-          taggedBy: row.author_id
-            ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
-            : null,
-          createdAt: row.created_at,
-        }),
-      ),
+      mentions: [
+        ...mentionRows.map(
+          (row): MentionNotification => ({
+            documentId: row.document_id,
+            title: row.title,
+            mode: row.mode,
+            workspace: workspaceOf(row),
+            taggedBy: row.author_id
+              ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+              : null,
+            createdAt: row.created_at,
+          }),
+        ),
+        // A deck reads as a document here, with where it opens: `documentId` is the presentation's id.
+        ...deckMentionRows.map(
+          (row): MentionNotification => ({
+            documentId: row.presentation_id,
+            title: row.title,
+            mode: 'page',
+            app: 'slides',
+            path: presentationPath(row.workspace_id, row.presentation_id, row.slide_id ?? undefined),
+            workspace: workspaceOf(row),
+            taggedBy: row.author_id
+              ? { id: row.author_id, name: row.author_name ?? 'Someone', avatarUrl: row.author_avatar_url }
+              : null,
+            createdAt: row.created_at,
+          }),
+        ),
+      ]
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        // Each source is capped on its own; together they keep the same cap.
+        .slice(0, MAX_MENTIONS),
+      slideMentions,
       workItems: workItemRows.map(
         (row): WorkItemNotification => ({
           workItemId: row.work_item_id,
@@ -570,6 +685,32 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
           AND read_at IS NULL
           AND ($2::uuid[] IS NULL OR document_id = ANY($2::uuid[]))`,
       [req.user!.id, input.documentIds ?? null],
+    );
+    const { rowCount: decks } = await query(
+      `UPDATE presentation_mentions
+          SET read_at = now()
+        WHERE user_id = $1
+          AND read_at IS NULL
+          AND ($2::uuid[] IS NULL OR presentation_id = ANY($2::uuid[]))`,
+      [req.user!.id, input.documentIds ?? null],
+    );
+    if (rowCount || decks) publishToUser(req.user!.id, { type: 'notifications.changed' });
+    reply.status(204);
+  });
+
+  /**
+   * Clears the slide mentions addressed to you in the presentations given, or
+   * in all of them. Opening a presentation is what normally calls this.
+   */
+  app.post('/notifications/slide-mentions/read', async (req, reply) => {
+    const input = parse(readSlideMentionsSchema, req.body ?? {});
+    const { rowCount } = await query(
+      `UPDATE slide_comment_mentions
+          SET read_at = now()
+        WHERE user_id = $1
+          AND read_at IS NULL
+          AND ($2::uuid[] IS NULL OR presentation_id = ANY($2::uuid[]))`,
+      [req.user!.id, input.presentationIds ?? null],
     );
     if (rowCount) publishToUser(req.user!.id, { type: 'notifications.changed' });
     reply.status(204);
