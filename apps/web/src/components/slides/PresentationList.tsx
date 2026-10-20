@@ -12,10 +12,19 @@ import {
   useUnfiledPresentations,
   useUpdateFolder,
   useUpdatePresentation,
+  useUploadConfig,
   useUploadFile,
 } from '../../api/hooks';
 import { importSlideFile } from '../../lib/slideImportClient';
-import { SLIDE_IMPORT_ACCEPT, isSlideImportFile } from '../../lib/slideImportTypes';
+import {
+  ALL_IMPORT_ACCEPT,
+  KEYNOTE_ADVICE,
+  ConverterUnavailableError,
+  classifyImportFile,
+  convertLegacyFile,
+  isKeynoteFile,
+  useSlideConverter,
+} from '../../lib/slideConvert';
 import { rememberImport, resolveMedia, uploadImportMedia } from '../../lib/slideImport';
 import type { Can } from '../../lib/permissions';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
@@ -28,6 +37,7 @@ import { useToast } from '../Toast';
 import { Button, IconButton, InlineIconNameForm, LoadMore, Spinner } from '../ui';
 import Icon from '../Icon';
 import NewPresentationMenu from './NewPresentationMenu';
+import ConverterNeededDialog from './ConverterNeededDialog';
 import SlideExportDialog from './SlideExportDialog';
 import SheetContextMenu, { type SheetMenuItem } from '../sheet/SheetContextMenu';
 
@@ -102,11 +112,16 @@ export function PresentationList({
   const createFolder = useCreateFolder(workspaceId, 'slides');
   const move = useUpdatePresentation(workspaceId);
   const upload = useUploadFile(workspaceId);
+  const uploadConfig = useUploadConfig();
+  const converter = useSlideConverter(workspaceId);
   const toast = useToast();
   /** What an import in progress is doing, for the status line; null when none is. */
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [fileDrag, setFileDrag] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const pdfInput = useRef<HTMLInputElement>(null);
+  /** Files that need a converter this server does not have, while the dialog explaining it is open. */
+  const [needsConverter, setNeedsConverter] = useState<string[]>([]);
   /**
    * Where a new folder is being named: `null` for the top level, a folder id for
    * a subfolder, `undefined` when nothing is being created.
@@ -126,29 +141,49 @@ export function PresentationList({
   }
 
   /**
-   * Makes a presentation from a .pptx or .odp. The file is read first (in a
-   * worker), so one that will not open never leaves an empty presentation
-   * behind; its pictures are uploaded to the new presentation, and the rest
-   * waits for the editor to open and write it in.
+   * Makes a presentation from a .pptx, .odp, .ppt, Keynote or PDF file. The
+   * file is read first (in a worker), so one that will not open never leaves
+   * an empty presentation behind; its pictures are uploaded to the new
+   * presentation, and the rest waits for the editor to open and write it in.
+   * Older formats go through the server's converter, which hands back a .pptx;
+   * a PDF is drawn page by page in the browser.
    */
   async function importFile(file: File, folderId: string | null = null): Promise<string | null> {
-    if (!isSlideImportFile(file.name)) {
-      toast(`${file.name} is not a PowerPoint (.pptx) or OpenDocument (.odp) presentation`, 'error');
+    const kind = classifyImportFile(file.name);
+    if (!kind) {
+      toast(`${file.name} is not a presentation Slides can import (.pptx, .odp, .ppt, Keynote or PDF)`, 'error');
       return null;
     }
     try {
-      const deck = await importSlideFile(file, (progress) => setImportStatus(progress.message));
+      const progress = (p: { message: string }) => setImportStatus(p.message);
+      let deck;
+      if (kind === 'pdf') {
+        const { importPdfFile } = await import('../../lib/pdfImport');
+        deck = await importPdfFile(file, { onProgress: progress, maxBytes: uploadConfig.data?.maxBytes });
+      } else if (kind === 'legacy') {
+        const status = converter.data ?? (await converter.refetch()).data;
+        if (!status?.enabled) {
+          setNeedsConverter((names) => [...names, file.name]);
+          return null;
+        }
+        if (file.size > status.maxBytes) throw new Error(`${file.name} is larger than the converter accepts (${Math.floor(status.maxBytes / 1024 / 1024)} MB)`);
+        setImportStatus(isKeynoteFile(file.name) ? `Converting ${file.name}. ${KEYNOTE_ADVICE}` : `Converting ${file.name}…`);
+        deck = await importSlideFile(await convertLegacyFile(workspaceId, file), progress);
+      } else {
+        deck = await importSlideFile(file, progress);
+      }
       setImportStatus('Creating the presentation…');
       const created = await create.mutateAsync({ title: deck.title.slice(0, 200), folderId });
       const { urls, failed } = await uploadImportMedia(
         deck,
         (picture) => upload.mutateAsync({ file: picture, presentationId: created.id }),
-        (progress) => setImportStatus(progress.message),
+        progress,
       );
       rememberImport(created.id, resolveMedia(deck, urls, failed));
       return created.id;
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not import that file', 'error');
+      if (err instanceof ConverterUnavailableError) setNeedsConverter((names) => [...names, file.name]);
+      else toast(err instanceof Error ? err.message : 'Could not import that file', 'error');
       return null;
     }
   }
@@ -233,7 +268,7 @@ export function PresentationList({
         {can('slides.create') && (
           <span className="flex items-center">
             <IconButton
-              label={importStatus ? 'Importing…' : 'Import PowerPoint or OpenDocument (.pptx, .odp)'}
+              label={importStatus ? 'Importing…' : 'Import a presentation (.pptx, .odp, .ppt, Keynote or PDF)'}
               onClick={() => fileInput.current?.click()}
               disabled={importStatus !== null}
             >
@@ -251,7 +286,7 @@ export function PresentationList({
         ref={fileInput}
         type="file"
         multiple
-        accept={SLIDE_IMPORT_ACCEPT}
+        accept={ALL_IMPORT_ACCEPT}
         className="hidden"
         onChange={(e) => {
           const files = [...(e.target.files ?? [])];
@@ -259,6 +294,21 @@ export function PresentationList({
           if (files.length > 0) void importFiles(files);
         }}
       />
+      <input
+        ref={pdfInput}
+        type="file"
+        multiple
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (files.length > 0) void importFiles(files);
+        }}
+      />
+      {needsConverter.length > 0 && (
+        <ConverterNeededDialog fileNames={needsConverter} onPickPdf={() => pdfInput.current?.click()} onClose={() => setNeedsConverter([])} />
+      )}
       {importStatus && (
         <p role="status" aria-live="polite" className="mb-1 flex items-center gap-2 px-2 text-xs text-[var(--color-muted)]">
           <span aria-hidden className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-[var(--color-line)] border-t-[var(--color-accent)]" /> {importStatus}
