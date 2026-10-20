@@ -1189,8 +1189,11 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
   const sldSz = child(presentation.root, 'sldSz');
   const { size, k } = chooseSlideSize(numAttr(sldSz, 'cx') ?? 9144000, numAttr(sldSz, 'cy') ?? 6858000);
 
-  // The first master styles the deck; layouts of any master are kept, since slides may sit on them.
-  const masterRels = relsOfType(presentation, 'slideMaster');
+  // The first master in the deck's list styles the deck; layouts of any master are kept, since slides may sit on them.
+  const masterRels = kids(child(presentation.root, 'sldMasterIdLst'), 'sldMasterId')
+    .map((entry) => presentation.rels.get(relId(entry) ?? ''))
+    .filter((rel): rel is Rel => rel?.type === 'slideMaster');
+  if (masterRels.length === 0) masterRels.push(...relsOfType(presentation, 'slideMaster'));
   const masterPart = masterRels[0] ? await loadPart(loader, masterRels[0].target) : null;
   if (masterRels.length > 1) report.approximated('Several slide masters', null, 'the first master is used for the deck; the other masters\' layouts are kept');
   const clrMap = readColorMap(masterPart?.root ?? null);
@@ -1219,10 +1222,11 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
   shared.master = master.info;
 
   // --- layouts ---
+  // All of the main master's layouts, in its order, so the layout picker matches PowerPoint's; other masters' only where slides use them.
   const layoutPaths: string[] = [];
   const layoutIdList = child(masterPart?.root, 'sldLayoutIdLst');
   for (const entry of kids(layoutIdList, 'sldLayoutId')) {
-    const rel = masterPart?.rels.get(attr(entry, 'id') ?? '');
+    const rel = masterPart?.rels.get(relId(entry) ?? '');
     if (rel && !layoutPaths.includes(rel.target)) layoutPaths.push(rel.target);
   }
   const slideRels = relsOfType(presentation, 'slide');

@@ -42,7 +42,12 @@ describe('PowerPoint (python-pptx on the stock template)', () => {
     expect(deck.theme?.colorMap).toEqual({ background1: 'light1', text1: 'dark1', background2: 'light2', text2: 'dark2' });
     expect(deck.theme?.fonts).toEqual({ heading: 'Carlito', body: 'Carlito' });
     expect(deck.master?.placeholders?.map((p) => p.kind)).toEqual(['title', 'body', 'date', 'footer', 'slideNumber']);
-    expect(deck.layouts?.map((l) => l.name)).toEqual(['Title Slide', 'Title and Content', 'Title Only', 'Section Header']);
+    // Every layout of the master, in its order, whether or not a slide uses it; slides still point at theirs.
+    expect(deck.layouts?.map((l) => l.name)).toEqual([
+      'Title Slide', 'Title and Content', 'Section Header', 'Two Content', 'Comparison', 'Title Only', 'Blank',
+      'Content with Caption', 'Picture with Caption', 'Title and Vertical Text', 'Vertical Title and Text',
+    ]);
+    expect(deck.slides.map((s) => deck.layouts?.[s.layout ?? -1]?.name)).toEqual(['Title Slide', 'Title and Content', 'Title Only', 'Title and Content', 'Section Header']);
     expect(deck.layouts?.[0].type).toBe('title');
     // The title slide's subtitle is a layout placeholder, and a slide that does not move it writes no geometry.
     const [title, subtitle] = deck.slides[0].elements as RichTextElement[];
@@ -120,6 +125,26 @@ describe('PowerPoint (python-pptx on the stock template)', () => {
     expect(textOf(deck.slides[3].elements)).toContain('Revenue up 12%');
     expect(deck.slides[2].transition).toEqual({ kind: 'fade', durationMs: 700 });
   });
+
+  it('styles the deck with the first master in the master list, and keeps only the used layouts of the others', async () => {
+    // A second master, listed first but related last; it offers only the first two layouts.
+    const { readFileSync } = await import('node:fs');
+    const { fixturePath } = await import('./helpers');
+    const zip = await JSZip.loadAsync(readFileSync(fixturePath('powerpoint-quarterly.pptx')));
+    const master = await zip.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
+    zip.file('ppt/slideMasters/slideMaster2.xml', master.replace('<p:cSld>', '<p:cSld name="Second">').replace(/(<p:sldLayoutId [^>]*r:id="rId2"\/>)[\s\S]*?<\/p:sldLayoutIdLst>/, '$1</p:sldLayoutIdLst>'));
+    zip.file('ppt/slideMasters/_rels/slideMaster2.xml.rels', await zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')!.async('string'));
+    const rels = await zip.file('ppt/_rels/presentation.xml.rels')!.async('string');
+    zip.file('ppt/_rels/presentation.xml.rels', rels.replace('</Relationships>', '<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster2.xml"/></Relationships>'));
+    const presentation = await zip.file('ppt/presentation.xml')!.async('string');
+    zip.file('ppt/presentation.xml', presentation.replace('<p:sldMasterIdLst>', '<p:sldMasterIdLst><p:sldMasterId id="2147483700" r:id="rId99"/>'));
+    const deck = await parseSlideFile(await zip.generateAsync({ type: 'uint8array' }), 'two-masters.pptx', {
+      parseXml: (t) => new DOMParser().parseFromString(t, 'text/xml') as unknown as Document,
+    });
+    expect(deck.master?.name).toBe('Second');
+    expect(deck.layouts?.map((l) => l.name)).toEqual(['Title Slide', 'Title and Content', 'Title Only', 'Section Header']);
+    expect(reportFeatures(deck)).toContain('Several slide masters');
+  });
 });
 
 describe('Google Slides export', () => {
@@ -128,7 +153,7 @@ describe('Google Slides export', () => {
     expect(deck.size).toEqual({ width: 1920, height: 1080 });
     expect(deck.title).toBe('Team offsite');
     expect(deck.slides).toHaveLength(3);
-    expect(deck.layouts?.map((l) => l.name)).toEqual(['TITLE', 'TITLE_AND_BODY']);
+    expect(deck.layouts?.map((l) => l.name)).toEqual(['TITLE', 'TITLE_AND_BODY', 'BLANK']);
     expect(textOf(deck.slides[0].elements)).toEqual(['Team offsite', 'Planning for next year']);
     expect(textOf(deck.slides[1].elements)).toEqual(['Agenda', 'Agenda', 'Welcome', 'Goals', 'Budget', 'Book the venue']);
     expect(deck.slides[1].notes).toEqual(['Walk through each agenda item.', 'Leave time for questions.']);
