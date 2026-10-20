@@ -10,6 +10,7 @@
  */
 
 import type * as Y from 'yjs';
+import { randomUuid } from './uuid.js';
 import {
   NODE_COLORS,
   NOTE_COLORS,
@@ -72,7 +73,7 @@ export function canvasElementsToSlide(
   size: SlideSize,
   options: { limitScale?: boolean; makeId?: () => string } = {},
 ): SlideElement[] {
-  const makeId = options.makeId ?? (() => crypto.randomUUID());
+  const makeId = options.makeId ?? (() => randomUuid());
   const fit = Math.min(size.width / Math.max(region.width, 1), size.height / Math.max(region.height, 1));
   const scale = options.limitScale ? Math.min(fit, MAX_PASTE_SCALE) : fit;
   const offsetX = (size.width - region.width * scale) / 2 - region.x * scale;

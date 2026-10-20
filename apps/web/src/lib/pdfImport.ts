@@ -1,5 +1,6 @@
 import { normalizeSlideSize, type SlideElement, type SlideSize } from '@paradocs/shared';
 import { ReportBuilder, mediaUrl, type ImportProgress, type ImportedDeck, type ImportedMedia, type ImportedSlide } from './slideImportTypes';
+import { randomId } from './util';
 
 /**
  * Importing a PDF as a deck: one slide per page, each a full-slide picture of
@@ -70,7 +71,7 @@ export function buildPdfDeck(fileName: string, pages: PdfPageImage[], omitted = 
     const height = Math.round(page.height * fit);
     if (Math.abs(width - size.width) > 2 || Math.abs(height - size.height) > 2) report.approximated('Pages of a different shape', index + 1, 'shown whole on a white slide');
     const element = {
-      id: crypto.randomUUID(),
+      id: randomId(),
       type: 'image',
       url: mediaUrl(key),
       x: Math.round((size.width - width) / 2),

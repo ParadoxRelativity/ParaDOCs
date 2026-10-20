@@ -27,6 +27,7 @@ import {
   type ImportedLayout,
   type ImportedSlide,
 } from './slideImportTypes';
+import { randomId } from './util';
 
 /**
  * Getting an imported presentation into a Slides deck.
@@ -179,7 +180,7 @@ function writeNotes(ydoc: Y.Doc, slideId: string, lines: string[]): void {
     0,
     lines.map((line) => {
       const container = new Y.XmlElement('blockContainer');
-      container.setAttribute('id', crypto.randomUUID());
+      container.setAttribute('id', randomId());
       const paragraph = new Y.XmlElement('paragraph');
       if (line) {
         const text = new Y.XmlText();

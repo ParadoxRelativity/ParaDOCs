@@ -24,6 +24,7 @@
  */
 
 import * as Y from 'yjs';
+import { randomUuid } from './uuid.js';
 import { z } from 'zod';
 import type {
   AudioElement,
@@ -388,7 +389,7 @@ export interface NewSlide {
 
 /** Adds a slide, creating its elements map in the same transaction so nobody else ever has to. */
 export function createSlide(doc: Y.Doc, slide: NewSlide = {}): string {
-  const id = slide.id ?? crypto.randomUUID();
+  const id = slide.id ?? randomUuid();
   doc.transact(() => {
     const map = doc.getMap<unknown>(slideMapName(id));
     map.set('layoutId', slide.layoutId ?? BLANK_LAYOUT_ID);
