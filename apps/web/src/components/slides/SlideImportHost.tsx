@@ -67,6 +67,11 @@ export function ImportReportDialog({
         <div className="scroll-thin max-h-[60vh] space-y-4 overflow-y-auto text-sm">
           <ReportSection title="Left out" icon="x-circle" items={dropped} tone="text-red-500" />
           <ReportSection title="Approximated" icon="exclamation-triangle" items={approximated} tone="text-amber-500" />
+          {!report.fileName.toLowerCase().endsWith('.pdf') && (
+            <p className="text-xs text-[var(--color-muted)]">
+              If this came across poorly, export the original to PDF and import that: every page looks exactly as it did, as a picture.
+            </p>
+          )}
         </div>
       )}
     </Modal>

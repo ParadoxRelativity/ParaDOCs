@@ -21,6 +21,7 @@ import { moderationRoutes } from './routes/moderation.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { documentRoutes } from './routes/documents.js';
 import { presentationRoutes } from './routes/presentations.js';
+import { slideConvertRoutes } from './routes/slideConvert.js';
 import { spreadsheetRoutes } from './routes/spreadsheets.js';
 import { searchRoutes } from './routes/search.js';
 import { tagRoutes } from './routes/tags.js';
@@ -141,6 +142,7 @@ export async function buildApp() {
     documentRoutes,
     spreadsheetRoutes,
     presentationRoutes,
+    slideConvertRoutes,
     projectRoutes,
     scheduleRoutes,
     scheduleRequestRoutes,
