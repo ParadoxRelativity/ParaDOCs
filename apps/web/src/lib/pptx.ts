@@ -35,6 +35,7 @@ import {
   mimeOf,
   numAttr,
   parseRels,
+  relId,
   relsPathOf,
   resolveColor,
   type Rel,
@@ -1227,7 +1228,7 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
   const slideRels = relsOfType(presentation, 'slide');
   const slideOrder: Rel[] = [];
   for (const entry of kids(child(presentation.root, 'sldIdLst'), 'sldId')) {
-    const rel = presentation.rels.get(attr(entry, 'id') ?? '');
+    const rel = presentation.rels.get(relId(entry) ?? '');
     if (rel) slideOrder.push(rel);
   }
   if (slideOrder.length === 0) slideOrder.push(...slideRels);
