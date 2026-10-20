@@ -339,11 +339,58 @@ describe('a large deck', () => {
     const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
     expect(bytes.length).toBeGreaterThan(45_000_000);
 
+    // Even on one thread the parse yields between slides; measure the longest stretch it holds the event loop.
+    let last = Date.now();
+    let worstGap = 0;
+    const timer = setInterval(() => {
+      worstGap = Math.max(worstGap, Date.now() - last);
+      last = Date.now();
+    }, 10);
+    const heapBefore = process.memoryUsage().heapUsed;
     const started = Date.now();
     const deck = await parseSlideFile(bytes, 'big.pptx', { parseXml: (t) => new DOMParser().parseFromString(t, 'text/xml') as unknown as Document });
-    expect(Date.now() - started).toBeLessThan(20_000);
+    const elapsed = Date.now() - started;
+    clearInterval(timer);
+    const rssMb = Math.round(process.memoryUsage().rss / 1e6);
+    console.log(`large deck: ${Math.round(bytes.length / 1e6)} MB, ${count} slides, parsed in ${elapsed} ms, longest event-loop stall ${worstGap} ms, heap +${Math.round((process.memoryUsage().heapUsed - heapBefore) / 1e6)} MB, rss ${rssMb} MB`);
+    expect(elapsed).toBeLessThan(20_000);
+    expect(worstGap).toBeLessThan(1500);
     expect(deck.slides).toHaveLength(count);
     expect(deck.media).toHaveLength(30);
     expect(deck.media.reduce((n, m) => n + m.data.length, 0)).toBeGreaterThan(45_000_000);
   }, 60_000);
+});
+
+describe('the import runs in a worker', () => {
+  it('hands the file to a module Web Worker and parses nothing on the page thread', async () => {
+    const created: { url: URL; options: WorkerOptions | undefined; transferred: boolean }[] = [];
+    class FakeWorker {
+      onmessage: ((e: MessageEvent) => void) | null = null;
+      onerror: ((e: ErrorEvent) => void) | null = null;
+      constructor(url: URL, options?: WorkerOptions) {
+        created.push({ url, options, transferred: false });
+      }
+      postMessage(message: { data: ArrayBuffer }, transfer?: Transferable[]) {
+        created[created.length - 1].transferred = transfer?.[0] === message.data;
+        const deck = { fileName: 'a.pptx', title: 'A', format: 'pptx', size: { width: 1920, height: 1080 }, settings: {}, slides: [], media: [], report: { items: [] } };
+        queueMicrotask(() => this.onmessage?.({ data: { type: 'progress', progress: { stage: 'parsing', done: 1, total: 2, message: 'Converting slide 1 of 2' } } } as MessageEvent));
+        queueMicrotask(() => this.onmessage?.({ data: { type: 'done', deck } } as MessageEvent));
+      }
+      terminate() {}
+    }
+    (globalThis as unknown as { Worker: unknown }).Worker = FakeWorker;
+    try {
+      const { importSlideFile } = await import('../src/lib/slideImportClient');
+      const messages: string[] = [];
+      const deck = await importSlideFile(new File([new Uint8Array([1, 2, 3])], 'a.pptx'), (p) => messages.push(p.message));
+      expect(deck.title).toBe('A');
+      expect(created).toHaveLength(1);
+      expect(String(created[0].url)).toContain('slideImportWorker');
+      expect(created[0].options).toEqual({ type: 'module' });
+      expect(created[0].transferred).toBe(true);
+      expect(messages).toContain('Converting slide 1 of 2');
+    } finally {
+      delete (globalThis as unknown as { Worker?: unknown }).Worker;
+    }
+  });
 });
