@@ -26,6 +26,9 @@ RUN npm ci --workspace=@paradocs/api --workspace=@paradocs/web --include-workspa
 # and those COPY lines failed. Source comes in over the top; .dockerignore keeps
 # any node_modules on the host out of it.
 FROM deps AS build
+# A test build's version, which the web client reports in place of the one in
+# apps/desktop/package.json. Releases leave it empty.
+ARG PARADOCS_VERSION=
 COPY . .
 RUN npm run build --workspace=@paradocs/web
 
@@ -45,6 +48,9 @@ RUN npm ci --omit=dev --workspace=@paradocs/api --include-workspace-root
 # --- runtime ---------------------------------------------------------------
 FROM node:22-alpine AS runtime
 WORKDIR /app
+# The server reads the same version, and falls back to the manifest when empty.
+ARG PARADOCS_VERSION=
+ENV PARADOCS_VERSION=$PARADOCS_VERSION
 ENV NODE_ENV=production \
     API_PORT=4000 \
     UPLOAD_DIR=/data/uploads \

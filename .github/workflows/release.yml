@@ -18,17 +18,33 @@
 # latest to the GitHub Container Registry (ghcr.io/<owner>/<repo>) and, when
 # Docker Hub credentials are configured, to Docker Hub
 # (paradoxrelativity/paradocs).
+#
+# Pushing to the dev branch runs the same builds as a test build instead.
+# Nothing is released: the installers and APK are kept as workflow artifacts
+# on the run, and the server image is pushed as `dev` and as its own version,
+# never as latest. The version is the next one up with a -dev.<run> suffix, so
+# a test build never looks older than the release it was built after. The
+# desktop app installs as "ParaDOCs Dev", beside the real one, with updates
+# turned off. Once dev has been tried, it is merged into main and tagged as
+# above.
 name: Release
 
 on:
   push:
     tags: ['v*']
+    branches: [dev]
   # Lets a build be exercised without tagging. Artifacts are still uploaded to a
   # draft, so this is safe to run against main.
   workflow_dispatch:
 
 permissions:
   contents: write # required to create the release
+
+# A newer push to dev replaces a test build still running. Releases always
+# finish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
 
 env:
   NODE_VERSION: '20'
@@ -45,6 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
       ios: ${{ steps.ios.outputs.build }}
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +86,6 @@ jobs:
         shell: bash
         run: |
           PKG="$(node -p "require('./apps/desktop/package.json').version")"
-          echo "version=$PKG" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF_NAME#v}"
             if [ "$TAG" != "$PKG" ]; then
@@ -83,7 +99,25 @@ jobs:
             echo "::error::apps/mobile/package.json ($MOBILE) does not match apps/desktop/package.json ($PKG)."
             exit 1
           fi
-          echo "Releasing $PKG"
+
+          # A test build is numbered after the version in package.json, or after
+          # the next patch once that one has been tagged, so a server running it
+          # is not told the release it was built after is an update.
+          if [ "$GITHUB_REF" = refs/heads/dev ]; then
+            BASE="$PKG"
+            if [ -n "$(git ls-remote --tags origin "refs/tags/v$PKG")" ]; then
+              IFS=. read -r major minor patch <<< "${PKG%%-*}"
+              BASE="$major.$minor.$((patch + 1))"
+            fi
+            VERSION="$BASE-dev.$GITHUB_RUN_NUMBER"
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+            echo "Test build $VERSION"
+          else
+            VERSION="$PKG"
+            echo "channel=release" >> "$GITHUB_OUTPUT"
+            echo "Releasing $PKG"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # Resolved here because a job's `if:` cannot read `env`, only the outputs
       # of a job it waits for.
@@ -130,6 +164,11 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      # After the install, so the lockfile is never asked about it. The web
+      # client reads the same manifest, so it reports the test version too.
+      - name: Number the test build
+        if: needs.verify.outputs.channel == 'dev'
+        run: npm pkg set version=${{ needs.verify.outputs.version }} --workspace=@paradocs/desktop
       - name: Build web client
         run: npm run build --workspace=@paradocs/web
       - name: Bundle desktop main process
@@ -190,14 +229,20 @@ jobs:
       # own draft — splitting macOS and Windows across two releases.
       # electron-builder still writes latest*.yml without publishing, because
       # the publish block in electron-builder.yml is what produces them.
+      #
+      # A test build uses electron-builder.dev.yml, which installs it as its own
+      # app and leaves it without an update channel.
       - name: Build installers
         working-directory: apps/desktop
-        run: npx electron-builder ${{ matrix.flag }} --publish never
+        run: >-
+          npx electron-builder ${{ matrix.flag }} --publish never
+          ${{ needs.verify.outputs.channel == 'dev' && '--config electron-builder.dev.yml' || '' }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.platform }}
           if-no-files-found: error
+          retention-days: ${{ needs.verify.outputs.channel == 'dev' && 14 || 90 }}
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
@@ -232,6 +277,10 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      # Gradle takes the version name from the mobile manifest.
+      - name: Number the test build
+        if: needs.verify.outputs.channel == 'dev'
+        run: npm pkg set "version=$VERSION" --workspace=@paradocs/desktop --workspace=@paradocs/mobile
       - name: Build web client
         run: npm run build --workspace=@paradocs/web
       - name: Copy it into the Android project
@@ -281,6 +330,7 @@ jobs:
         with:
           name: installers-Android
           if-no-files-found: error
+          retention-days: ${{ needs.verify.outputs.channel == 'dev' && 14 || 90 }}
           path: mobile-release/*.apk
       - uses: actions/upload-artifact@v4
         with:
@@ -443,6 +493,8 @@ jobs:
     # The APK is part of the release, so Android is waited for too. iOS is not:
     # nothing from it goes on a release page.
     needs: [verify, build, android]
+    # A test build is never released; its installers stay on the run.
+    if: needs.verify.outputs.channel == 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -543,8 +595,9 @@ jobs:
 
       # A tag produces 1.2.3, 1.2 and latest. A manual run produces only
       # sha-<commit>, so a build can be tried on a test server without moving
-      # anything people deploy from. Every tag is applied in each registry, so
-      # one build is pushed to both.
+      # anything people deploy from. A push to dev produces dev, its own
+      # version (1.2.4-dev.17) and sha-<commit>, and never latest. Every tag is
+      # applied in each registry, so one build is pushed to both.
       - name: Tags
         id: meta
         uses: docker/metadata-action@v5
@@ -553,9 +606,11 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=dev,enable=${{ needs.verify.outputs.channel == 'dev' }}
+            type=raw,value=${{ needs.verify.outputs.version }},enable=${{ needs.verify.outputs.channel == 'dev' }}
             type=sha,prefix=sha-,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
           flavor: |
-            latest=auto
+            latest=${{ needs.verify.outputs.channel == 'dev' && 'false' || 'auto' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -565,5 +620,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Empty for a release, which reads its version from package.json.
+          build-args: |
+            PARADOCS_VERSION=${{ needs.verify.outputs.channel == 'dev' && needs.verify.outputs.version || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -47,8 +47,9 @@ services:
       - '5432'
 
   app:
-    # Published for amd64 and arm64 by each release.
-    image: paradoxrelativity/paradocs:latest
+    # Published for amd64 and arm64 by each release. A test server sets
+    # PARADOCS_TAG=dev in .env to run the newest build of the dev branch.
+    image: paradoxrelativity/paradocs:${PARADOCS_TAG:-latest}
     restart: unless-stopped
     # Waiting for a healthy database means the migrations on boot cannot race
     # Postgres still starting up.
