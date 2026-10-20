@@ -44,6 +44,7 @@ import {
 import { levelStyle, paragraphsHaveText, plainParagraphs, readParagraphs, type TextOptions, type TextScope, concreteColor } from './pptxText';
 import { parseTiming } from './pptxTiming';
 import { ReportBuilder, mediaUrl, type ImportProgress, type ImportedDeck, type ImportedLayout, type ImportedMedia, type ImportedSlide } from './slideImportTypes';
+import { randomId } from './util';
 
 /**
  * PowerPoint (.pptx, PresentationML) into an {@link ImportedDeck}.
@@ -560,7 +561,7 @@ interface Emit {
   tf: Affine;
 }
 
-const newId = () => crypto.randomUUID();
+const newId = () => randomId();
 
 function register(scope: Scope, spid: string | undefined, ids: string[]) {
   if (spid && ids.length) scope.spids.set(spid, [...(scope.spids.get(spid) ?? []), ...ids]);

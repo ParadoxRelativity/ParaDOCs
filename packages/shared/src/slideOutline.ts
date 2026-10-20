@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { randomUuid } from './uuid.js';
 import {
   BLANK_LAYOUT_ID,
   DEFAULT_LAYOUTS,
@@ -194,7 +195,7 @@ export function addOutlineSlides(doc: Y.Doc, slides: OutlineSlide[], index?: num
         const slot = layout.placeholders.find((p) => p.kind === kind);
         if (!slot || items.length === 0) return;
         setSlideElement(doc, id, {
-          id: crypto.randomUUID(),
+          id: randomUuid(),
           type: 'richText',
           // No position or size: the box inherits both from the layout's placeholder, so editing the layout moves it.
           placeholder: slot.id,

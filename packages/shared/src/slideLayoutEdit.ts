@@ -8,6 +8,7 @@
  */
 
 import * as Y from 'yjs';
+import { randomUuid } from './uuid.js';
 import {
   DEFAULT_SLIDE_SIZE,
   ELEMENT_BODY_KEY,
@@ -157,7 +158,7 @@ export function updateLayout(doc: Y.Doc, layoutId: string, patch: LayoutPatch): 
 }
 
 /** Adds a layout, a copy of `copyOf` when given, and returns its id. */
-export function addLayout(doc: Y.Doc, name: string, copyOf?: string, makeId: () => string = () => crypto.randomUUID()): string {
+export function addLayout(doc: Y.Doc, name: string, copyOf?: string, makeId: () => string = () => randomUuid()): string {
   const id = `layout-${makeId().slice(0, 8)}`;
   doc.transact(() => {
     ensureDeckStyle(doc);
@@ -291,7 +292,7 @@ export function setSlideLayout(doc: Y.Doc, slideId: string, layoutId: string): v
     for (const slot of slots) {
       if (taken.has(slot.id)) continue;
       top += 1;
-      const base = { id: crypto.randomUUID(), placeholder: slot.id, z: top };
+      const base = { id: randomUuid(), placeholder: slot.id, z: top };
       setSlideElement(doc, slideId, (slot.kind === 'image' ? { ...base, type: 'image', url: '' } : { ...base, type: 'richText' }) as unknown as SlideElement);
     }
   });

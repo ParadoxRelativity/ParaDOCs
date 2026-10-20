@@ -14,6 +14,7 @@ import {
 } from '@paradocs/shared';
 import { PackageError, attr, child, descendants, extensionOf, kids, localName, mimeOf, numAttr, type XmlParser, type ZipFiles } from './ooxml';
 import { ReportBuilder, mediaUrl, type ImportProgress, type ImportedDeck, type ImportedMedia, type ImportedSlide } from './slideImportTypes';
+import { randomId } from './util';
 
 /**
  * OpenDocument Presentation (.odp, as written by LibreOffice and others) into
@@ -85,7 +86,7 @@ interface Ctx {
 }
 
 const units = (ctx: Ctx, cm: number | null) => Math.round((cm ?? 0) * ctx.k);
-const newId = () => crypto.randomUUID();
+const newId = () => randomId();
 
 // --- styles -----------------------------------------------------------------
 
