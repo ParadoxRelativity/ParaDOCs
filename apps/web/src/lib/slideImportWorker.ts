@@ -1,4 +1,5 @@
 import { DOMParser } from '@xmldom/xmldom';
+import type { SlideSize } from '@paradocs/shared';
 import { parseSlideFile } from './slideImportParse';
 import type { ShapeRasterizer } from './pptx';
 import type { ImportProgress, ImportedDeck } from './slideImportTypes';
@@ -8,12 +9,12 @@ import type { ImportProgress, ImportedDeck } from './slideImportTypes';
  * freeze the UI. A worker has no DOMParser, so the XML is parsed with xmldom
  * (the same DOM interface, in plain JavaScript).
  *
- * Messages in:  { data: ArrayBuffer, fileName }
+ * Messages in:  { data: ArrayBuffer, fileName, fitTo? }
  * Messages out: { type: 'progress', progress } ... then { type: 'done', deck }
  *               or { type: 'error', message }
  */
 
-export type SlideImportRequest = { data: ArrayBuffer; fileName: string };
+export type SlideImportRequest = { data: ArrayBuffer; fileName: string; fitTo?: SlideSize };
 export type SlideImportResponse =
   | { type: 'progress'; progress: ImportProgress }
   | { type: 'done'; deck: ImportedDeck }
@@ -63,6 +64,7 @@ if (typeof window === 'undefined') {
       const deck = await parseSlideFile(event.data.data, event.data.fileName, {
         parseXml: workerParseXml,
         rasterize,
+        fitTo: event.data.fitTo,
         onProgress: (progress) => scope.postMessage({ type: 'progress', progress }),
       });
       // Hand the pictures over rather than copying them.
