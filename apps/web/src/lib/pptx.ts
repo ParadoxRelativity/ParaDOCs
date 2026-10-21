@@ -909,12 +909,10 @@ async function convertPic(scope: Scope, pic: Element, emit: Emit): Promise<void>
 
   const def = ph ? findLayoutPh(scope.layout, ph) : undefined;
   if (!placed && !def) return;
-  const src = child(pic, 'blipFill', 'srcRect');
-  const pct = (name: string) => Math.max(0, (numAttr(src, name) ?? 0) / 100000);
-  const [l, t, r, b] = [pct('l'), pct('t'), pct('r'), pct('b')];
   const element: Record<string, unknown> = { id: newId(), type: 'image', url, fit: 'cover', z: emit.out.length + 1 };
   if (alt) element.alt = alt;
-  if (src && (l || t || r || b) && l + r < 1 && t + b < 1) element.crop = { x: l, y: t, width: 1 - l - r, height: 1 - t - b };
+  const crop = stretchCrop(child(pic, 'blipFill'));
+  if (crop) element.crop = crop;
   const alphaFix = numAttr(child(blip, 'alphaModFix'), 'amt');
   if (alphaFix !== undefined && alphaFix < 100000) element.opacity = alphaFix / 100000;
   if (placed) {
@@ -930,6 +928,32 @@ async function convertPic(scope: Scope, pic: Element, emit: Emit): Promise<void>
   }
   emit.out.push(element as unknown as SlideElement);
   register(scope, spid, [element.id as string]);
+}
+
+/**
+ * The part of a picture its frame shows, as a crop. PowerPoint stretches the
+ * picture's source rectangle over the frame's fill rectangle whatever their
+ * shapes, so the picture always gets a crop, which draws stretched; negative
+ * insets on either rectangle leave a margin around the picture. A tiled
+ * picture has no crop and is drawn to cover its frame.
+ */
+function stretchCrop(blipFill: Element | null): { x: number; y: number; width: number; height: number } | undefined {
+  const stretch = child(blipFill, 'stretch');
+  if (!stretch && child(blipFill, 'tile')) return undefined;
+  const src = child(blipFill, 'srcRect');
+  const fill = child(stretch, 'fillRect');
+  const inset = (el: Element | null, name: string) => (numAttr(el, name) ?? 0) / 100000;
+  const axis = (from: number, to: number, fillFrom: number, fillTo: number) => {
+    const shown = 1 - from - to;
+    const filled = 1 - fillFrom - fillTo;
+    if (shown <= 0 || filled <= 0) return null;
+    const size = shown / filled;
+    return { start: from - fillFrom * size, size };
+  };
+  const h = axis(inset(src, 'l'), inset(src, 'r'), inset(fill, 'l'), inset(fill, 'r'));
+  const v = axis(inset(src, 't'), inset(src, 'b'), inset(fill, 't'), inset(fill, 'b'));
+  if (!h || !v) return undefined;
+  return { x: h.start, y: v.start, width: h.size, height: v.size };
 }
 
 function readCellText(scope: Scope, tc: Element): Partial<TableCell> {
