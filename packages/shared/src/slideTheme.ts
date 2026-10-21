@@ -208,6 +208,13 @@ export interface PlaceholderStyle {
   verticalAlign?: 'top' | 'middle' | 'bottom';
   lineSpacing?: number;
   autofit?: boolean;
+  wrap?: boolean;
+  columns?: number;
+  columnGap?: number;
+  insetLeft?: number;
+  insetTop?: number;
+  insetRight?: number;
+  insetBottom?: number;
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
@@ -223,6 +230,13 @@ export const PLACEHOLDER_STYLE_KEYS = [
   'verticalAlign',
   'lineSpacing',
   'autofit',
+  'wrap',
+  'columns',
+  'columnGap',
+  'insetLeft',
+  'insetTop',
+  'insetRight',
+  'insetBottom',
   'fill',
   'stroke',
   'strokeWidth',

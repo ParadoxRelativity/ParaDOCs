@@ -1,6 +1,7 @@
 import {
   DEFAULT_COLOR_MAP,
   MASTER_ID,
+  MAX_TEXT_COLUMNS,
   mapOfficeFont,
   normalizeTheme,
   themeColor,
@@ -573,6 +574,31 @@ function anchorOf(bodyPr: Element | null): 'top' | 'middle' | 'bottom' | undefin
   return a === 't' ? 'top' : a === 'ctr' ? 'middle' : a === 'b' ? 'bottom' : undefined;
 }
 
+/** PowerPoint's margins for a text body that sets none: 0.1" at the sides, 0.05" above and below. */
+const DEFAULT_INSETS = { lIns: 91440, tIns: 45720, rIns: 91440, bIns: 45720 } as const;
+const INSET_KEYS = { lIns: 'insetLeft', tIns: 'insetTop', rIns: 'insetRight', bIns: 'insetBottom' } as const;
+
+/**
+ * What a text body's `a:bodyPr` sets of its margins, wrapping and columns.
+ * With `defaults`, margins it leaves out are PowerPoint's, for a box with
+ * nothing to inherit them from; otherwise they are left out, to be inherited.
+ */
+function bodyLayoutOf(shared: Shared, bodyPr: Element | null, defaults: boolean): PlaceholderStyle {
+  const out: PlaceholderStyle = {};
+  for (const [name, key] of Object.entries(INSET_KEYS) as [keyof typeof INSET_KEYS, (typeof INSET_KEYS)[keyof typeof INSET_KEYS]][]) {
+    const value = numAttr(bodyPr, name) ?? (defaults ? DEFAULT_INSETS[name] : undefined);
+    if (value !== undefined) out[key] = emu(shared, Math.max(value, 0));
+  }
+  const wrap = attr(bodyPr, 'wrap');
+  if (wrap === 'none') out.wrap = false;
+  else if (wrap === 'square') out.wrap = true;
+  const columns = numAttr(bodyPr, 'numCol');
+  if (columns !== undefined) out.columns = Math.min(Math.max(Math.round(columns), 1), MAX_TEXT_COLUMNS);
+  const gap = numAttr(bodyPr, 'spcCol');
+  if (gap !== undefined) out.columnGap = emu(shared, Math.max(gap, 0));
+  return out;
+}
+
 function formatChainOf(scope: Scope, txBody: Element | null, ph: PhDef | undefined): TextOptions {
   const own = child(txBody, 'lstStyle');
   const { master } = scope.shared;
@@ -632,6 +658,7 @@ async function convertSp(scope: Scope, sp: Element, emit: Emit): Promise<void> {
       fontSize: shared.defaultFontSize,
       autofit: child(bodyPr, 'normAutofit') ? true : false,
       verticalAlign: anchorOf(bodyPr) ?? 'top',
+      ...bodyLayoutOf(shared, bodyPr, true),
       ...(paint.textColor ? { color: paint.textColor } : {}),
       ...extra,
     }) as unknown as SlideElement;
@@ -745,6 +772,7 @@ async function convertSlidePlaceholder(scope: Scope, sp: Element, ph: { type: st
   const box = placed ?? (free ? fallbackBox(shared, kind) : null);
   if (free && box) Object.assign(patch, { x: box.x, y: box.y, width: box.width, height: box.height });
   if (free) Object.assign(patch, { fontSize: shared.defaultFontSize });
+  Object.assign(patch, bodyLayoutOf(shared, bodyPr, free));
   if (placed?.rotation) patch.rotation = placed.rotation;
 
   const element = {
@@ -1147,9 +1175,11 @@ async function walkTree(scope: Scope, tree: Element, emit: Emit): Promise<void> 
 // Master and layouts
 // ---------------------------------------------------------------------------
 
-function styleOfPlaceholder(scope: Scope, lvl1: (Element | null)[], bodyPr: Element | null, spPr: Element | null): PlaceholderStyle {
+/** A master or layout placeholder's style. `defaults` fills in PowerPoint's margins where it has none to inherit. */
+function styleOfPlaceholder(scope: Scope, lvl1: (Element | null)[], bodyPr: Element | null, spPr: Element | null, defaults: boolean): PlaceholderStyle {
   const style: PlaceholderStyle = {};
   for (const lvl of [...lvl1].reverse()) Object.assign(style, levelStyle(scope.text, lvl));
+  Object.assign(style, bodyLayoutOf(scope.shared, bodyPr, defaults));
   const anchor = anchorOf(bodyPr);
   if (anchor) style.verticalAlign = anchor;
   if (child(bodyPr, 'normAutofit')) style.autofit = true;
@@ -1352,7 +1382,7 @@ async function buildMaster(shared: Shared, part: Part | null, clrMap: ColorMap):
     const own = child(txBody, 'lstStyle');
     lst.set(kind, own);
     const tx = kind === 'title' ? info.titleStyle : kind === 'body' ? info.bodyStyle : info.otherStyle;
-    const style = styleOfPlaceholder(scope, [own ? child(own, 'lvl1pPr') : null, child(tx, 'lvl1pPr')], child(txBody, 'bodyPr'), spPr);
+    const style = styleOfPlaceholder(scope, [own ? child(own, 'lvl1pPr') : null, child(tx, 'lvl1pPr')], child(txBody, 'bodyPr'), spPr, true);
     if (placed) {
       placeholders.push({
         id: MASTER_PH_ID[kind] ?? kind,
@@ -1408,7 +1438,7 @@ async function buildLayout(shared: Shared, part: Part): Promise<LayoutInfo> {
     const placeholder: LayoutPlaceholder = { id, kind };
     const base = shared.master.placeholders.find((m) => m.kind === (kind === 'subtitle' || kind === 'image' ? 'body' : kind));
     if (placed && (!base || !sameBox(base, placed))) Object.assign(placeholder, { x: placed.x, y: placed.y, width: placed.width, height: placed.height });
-    const style = diffStyle(styleOfPlaceholder(scope, [own ? child(own, 'lvl1pPr') : null], child(txBody, 'bodyPr'), name === 'sp' ? spPr : null), base?.style);
+    const style = diffStyle(styleOfPlaceholder(scope, [own ? child(own, 'lvl1pPr') : null], child(txBody, 'bodyPr'), name === 'sp' ? spPr : null, !base), base?.style);
     if (style) placeholder.style = style;
     const prompt = CHROME.includes(kind) ? '' : plainParagraphs(readParagraphs(scope.text, txBody, { formatChain: [], bulletChain: [] })).join(' ').trim();
     if (prompt && !/^click to edit master/i.test(prompt) && prompt.length < 120) placeholder.prompt = prompt;

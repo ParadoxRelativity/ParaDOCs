@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import JSZip from 'jszip';
 import * as Y from 'yjs';
 import { DOMParser } from '@xmldom/xmldom';
 import {
@@ -116,5 +117,32 @@ describe('export, then import', () => {
     const [a1, a2] = ['Para one\nPara two', 'Later'].map((text) => back.slides[2].elements.find((e) => e.type === 'richText' && (e as RichTextElement).text === text)!);
     expect(a1.animation).toMatchObject({ effect: 'fly', direction: 'left', trigger: 'onClick', order: 0 });
     expect(a2.animation).toMatchObject({ effect: 'fade', trigger: 'afterPrevious', order: 1 });
+  });
+
+  it('keeps text margins, wrapping and columns', async () => {
+    const doc = new Y.Doc();
+    const id = createSlide(doc, { id: 's1' });
+    setSlideElement(doc, id, rich('cols', { columns: 2, columnGap: 36, insetLeft: 20, insetTop: 4, insetRight: 30, insetBottom: 0, paragraphs: [{ runs: [{ text: 'Two columns' }] }] }));
+    setSlideElement(doc, id, rich('line', { y: 400, wrap: false, paragraphs: [{ runs: [{ text: 'One long line' }] }] }));
+    const exported = await buildPptx(readDeck(doc), {
+      title: 'Columns',
+      assets: { image: async () => null, media: async () => null, live: async () => null },
+    });
+    doc.destroy();
+    const imported = await parseSlideFile(exported.data, 'columns.pptx', { parseXml });
+    const boxes = imported.slides[0].elements as RichTextElement[];
+    const cols = boxes.find((e) => e.paragraphs?.[0]?.runs[0]?.text === 'Two columns')!;
+    expect(cols).toMatchObject({ columns: 2, columnGap: 36, insetLeft: 20, insetTop: 4, insetRight: 30, insetBottom: 0 });
+    expect(cols.wrap).not.toBe(false);
+    const line = boxes.find((e) => e.paragraphs?.[0]?.runs[0]?.text === 'One long line')!;
+    expect(line).toMatchObject({ wrap: false, insetLeft: 12, insetTop: 12, insetRight: 12, insetBottom: 12 });
+    expect(line.columns ?? 1).toBe(1);
+
+    // A body that sets no margins gets PowerPoint's: 0.1" at the sides, 0.05" above and below.
+    const zip = await JSZip.loadAsync(exported.data);
+    const slide = await zip.file('ppt/slides/slide1.xml')!.async('string');
+    zip.file('ppt/slides/slide1.xml', slide.replace(/ [lrtb]Ins="\d+"/g, ''));
+    const bare = await parseSlideFile(await zip.generateAsync({ type: 'uint8array' }), 'bare.pptx', { parseXml });
+    for (const box of bare.slides[0].elements as RichTextElement[]) expect(box).toMatchObject({ insetLeft: 14, insetTop: 7, insetRight: 14, insetBottom: 7 });
   });
 });

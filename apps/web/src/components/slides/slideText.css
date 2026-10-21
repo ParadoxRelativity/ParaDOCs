@@ -14,6 +14,10 @@
   left: calc(var(--level, 0) * 1.1em);
   width: 1.1em;
 }
+/* PowerPoint draws no bullet on an empty list item: imported lists often end with one. */
+.slide-text .slide-p[data-bullet][data-empty]::before {
+  content: none;
+}
 .slide-text .slide-p[data-bullet='bullet']::before {
   content: '\2022';
 }

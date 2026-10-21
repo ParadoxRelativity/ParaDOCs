@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { Schema, type DOMOutputSpec, type MarkSpec, type NodeSpec } from 'prosemirror-model';
-import { MAX_LIST_LEVEL, RICH_ALIGNMENTS, fontStack, type RichMarks, type RichParagraph } from '@paradocs/shared';
+import { MAX_LIST_LEVEL, RICH_ALIGNMENTS, fontStack, textInsets, type RichMarks, type RichParagraph } from '@paradocs/shared';
 
 /**
  * How rich text looks, written once for the editor (ProseMirror) and the
@@ -13,6 +13,12 @@ import { MAX_LIST_LEVEL, RICH_ALIGNMENTS, fontStack, type RichMarks, type RichPa
  */
 
 export const px = (size: number) => `calc(${size}px * var(--fit, 1))`;
+
+/** A text box's margins as CSS padding. They hold their size when autofit shrinks the text, as in PowerPoint. */
+export function insetPadding(box: Parameters<typeof textInsets>[0]): string {
+  const inset = textInsets(box);
+  return `${inset.top}px ${inset.right}px ${inset.bottom}px ${inset.left}px`;
+}
 
 export function markStyle(marks: RichMarks | undefined): CSSProperties {
   if (!marks) return {};

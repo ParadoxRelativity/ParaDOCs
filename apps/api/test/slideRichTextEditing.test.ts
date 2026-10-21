@@ -92,6 +92,27 @@ describe('rich text editing', () => {
     view.destroy();
   });
 
+  it('marks empty list items, which show no bullet, except the one the caret is in', () => {
+    const doc = new Y.Doc();
+    const body = doc.getXmlFragment('body');
+    writeParagraphs(body, [
+      { bullet: 'bullet', runs: [{ text: 'one' }] },
+      { bullet: 'bullet', runs: [] },
+      { bullet: 'bullet', runs: [] },
+    ]);
+    const view = open(body);
+    const empties = () => [...view.dom.querySelectorAll('p')].map((p) => p.hasAttribute('data-empty'));
+
+    select(view, 2);
+    expect(empties()).toEqual([false, true, true]);
+    // Each paragraph is its text plus 2: the caret inside the second (empty) one is at 6.
+    select(view, 6);
+    expect(empties()).toEqual([false, false, true]);
+    view.dispatch(view.state.tr.insertText('two'));
+    expect(empties()).toEqual([false, false, true]);
+    view.destroy();
+  });
+
   it('shows bold in the paragraph typed after a bold one', () => {
     const doc = new Y.Doc();
     const body = doc.getXmlFragment('body');
