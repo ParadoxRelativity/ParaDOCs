@@ -1,5 +1,5 @@
 import { PackageError, openZip, type XmlParser } from './ooxml';
-import { parsePptx, type ShapeRasterizer } from './pptx';
+import { parsePptx, parseThmx, type ShapeRasterizer } from './pptx';
 import type { SlideSize } from '@paradocs/shared';
 import type { ImportProgress, ImportedDeck } from './slideImportTypes';
 
@@ -22,17 +22,33 @@ export interface ParseOptions {
   onProgress?: (progress: ImportProgress) => void;
   /** A .pptx's slides scaled to fit this size rather than keeping their own (see PptxOptions). */
   fitTo?: SlideSize;
+  /** Only the look, for a presentation template: the file's slides are left out (see PptxOptions). */
+  template?: boolean;
 }
+
+/** A PowerPoint theme file (.thmx) holds a theme part and no presentation. */
+const THEME_PART = /^theme\/theme\/theme\d*\.xml$/;
 
 export async function parseSlideFile(data: ArrayBuffer | Uint8Array, fileName: string, options: ParseOptions): Promise<ImportedDeck> {
   const zip = await openZip(data);
   const names = new Set(zip.names());
+  if (!names.has('ppt/presentation.xml') && [...names].some((name) => THEME_PART.test(name))) {
+    return parseThmx(zip, { parseXml: options.parseXml, fileName });
+  }
   if (names.has('ppt/presentation.xml') || names.has('[Content_Types].xml')) {
-    return parsePptx(zip, { parseXml: options.parseXml, fileName, rasterize: options.rasterize, onProgress: options.onProgress, fitTo: options.fitTo });
+    return parsePptx(zip, {
+      parseXml: options.parseXml,
+      fileName,
+      rasterize: options.rasterize,
+      onProgress: options.onProgress,
+      fitTo: options.fitTo,
+      template: options.template,
+    });
   }
   if (names.has('content.xml') && names.has('mimetype')) {
     const { parseOdp } = await import('./odp');
-    return parseOdp(zip, { parseXml: options.parseXml, fileName, onProgress: options.onProgress });
+    const deck = await parseOdp(zip, { parseXml: options.parseXml, fileName, onProgress: options.onProgress });
+    return options.template ? { ...deck, slides: [] } : deck;
   }
   throw new PackageError('That file is not a PowerPoint (.pptx) or OpenDocument (.odp) presentation.');
 }

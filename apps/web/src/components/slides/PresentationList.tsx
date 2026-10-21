@@ -37,7 +37,8 @@ import { FIELD } from '../SettingsParts';
 import { useToast } from '../Toast';
 import { Button, IconButton, InlineIconNameForm, LoadMore, Spinner } from '../ui';
 import Icon from '../Icon';
-import NewPresentationMenu from './NewPresentationMenu';
+import NewPresentationMenu, { type NewPresentationStart } from './NewPresentationMenu';
+import { SaveTemplateDialog } from './PresentationTemplates';
 import ConverterNeededDialog from './ConverterNeededDialog';
 import SlideExportDialog from './SlideExportDialog';
 import SheetContextMenu, { type SheetMenuItem } from '../sheet/SheetContextMenu';
@@ -132,9 +133,9 @@ export function PresentationList({
   const [moving, setMoving] = useState<PresentationSummary | null>(null);
   const [unfiledDrop, setUnfiledDrop] = useState(false);
 
-  async function newPresentation(folderId: string | null = null, themeId?: string) {
+  async function newPresentation(folderId: string | null = null, start: NewPresentationStart = {}) {
     try {
-      const deck = await create.mutateAsync({ folderId, ...(themeId ? { themeId } : {}) });
+      const deck = await create.mutateAsync({ folderId, ...start });
       onSelect(deck.id);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not create the presentation', 'error');
@@ -289,7 +290,7 @@ export function PresentationList({
             <IconButton label="New folder" onClick={() => setCreatingIn(null)}>
               <Icon name="folder-plus" />
             </IconButton>
-            <NewPresentationMenu onCreate={(themeId) => void newPresentation(null, themeId)} disabled={create.isPending} />
+            <NewPresentationMenu workspaceId={workspaceId} onCreate={(start) => void newPresentation(null, start)} disabled={create.isPending} />
           </span>
         )}
       </div>
@@ -710,6 +711,7 @@ function PresentationRow({ deck, depth, ...props }: RowProps & { deck: Presentat
   const { workspaceId, can, canManageAccess } = props;
   const [confirming, setConfirming] = useState(false);
   const [exporting, setExporting] = useState<'pptx' | 'pdf' | null>(null);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const remove = useDeletePresentation(workspaceId);
   const update = useUpdatePresentation(workspaceId);
@@ -739,6 +741,7 @@ function PresentationRow({ deck, depth, ...props }: RowProps & { deck: Presentat
           },
         ),
     });
+    menuItems.push({ label: 'Save as template…', icon: 'bookmark-star', onSelect: () => setSavingTemplate(true) });
   }
   if (canChange && !archived) {
     menuItems.push({ label: 'Move to folder…', icon: 'folder-symlink', onSelect: () => props.onMove(deck) });
@@ -829,6 +832,9 @@ function PresentationRow({ deck, depth, ...props }: RowProps & { deck: Presentat
       {menu && <SheetContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
 
       {exporting && <SlideExportDialog presentationId={deck.id} title={deck.title} initialFormat={exporting} onClose={() => setExporting(null)} />}
+      {savingTemplate && (
+        <SaveTemplateDialog workspaceId={workspaceId} presentationId={deck.id} defaultName={deck.title} onClose={() => setSavingTemplate(false)} />
+      )}
 
       {confirming && (
         <ConfirmDialog

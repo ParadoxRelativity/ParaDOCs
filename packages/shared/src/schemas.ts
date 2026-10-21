@@ -322,6 +322,8 @@ export const createPresentationSchema = z.object({
   folderId: uuid.nullish(),
   /** A starter theme (see STARTER_THEMES) to begin from, with a first Title slide. Omit for an empty deck. */
   themeId: z.string().trim().max(64).optional(),
+  /** A workspace's saved presentation template to begin from instead: its look and one Title slide. */
+  templateId: uuid.optional(),
 });
 
 export const updatePresentationSchema = z.object({

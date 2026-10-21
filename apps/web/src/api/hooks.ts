@@ -38,6 +38,8 @@ import type {
   WorkspaceRole,
   SearchHit,
   PresentationSummary,
+  PresentationTemplateSummary,
+  TemplateStyle,
   SheetFolderNode,
   SlideFolderNode,
   DeckSnapshot,
@@ -113,7 +115,7 @@ import { measure } from '../lib/chatFiles';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
 import { forgetCache } from '../lib/queryPersistence';
-import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken, shareOrigin } from '../lib/server';
+import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken, shareOrigin, toServer } from '../lib/server';
 
 export interface WorkspaceSummary extends Workspace {
   documentCount: number;
@@ -166,6 +168,7 @@ export const keys = {
   slideTree: (ws: string) => ['slideTree', ws] as const,
   presentation: (id: string) => ['presentation', id] as const,
   presentationDeck: (id: string) => ['presentationDeck', id] as const,
+  presentationTemplates: (ws: string) => ['presentationTemplates', ws] as const,
   documents: (ws: string) => ['documents', ws] as const,
   document: (id: string) => ['document', id] as const,
   tags: (ws: string) => ['tags', ws] as const,
@@ -1017,8 +1020,8 @@ export function usePresentationDeck(id: string | undefined) {
 export function useCreatePresentation(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
-    // `themeId` starts the deck from a starter theme with a first Title slide.
-    mutationFn: (input: { title?: string; folderId?: string | null; themeId?: string } = {}) =>
+    // `themeId` starts the deck from a starter theme with a first Title slide; `templateId` from a saved template.
+    mutationFn: (input: { title?: string; folderId?: string | null; themeId?: string; templateId?: string } = {}) =>
       api.post<PresentationSummary>(`/workspaces/${workspaceId}/presentations`, input),
     onSuccess: (deck) => {
       qc.setQueryData(keys.presentation(deck.id), deck);
@@ -1030,6 +1033,44 @@ export function useCreatePresentation(workspaceId: string) {
 }
 
 /** A new presentation from a canvas: one slide per frame, in frame order. */
+/** The workspace's saved presentation templates, by name: everyone who can see Slides sees them. */
+export function usePresentationTemplates(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.presentationTemplates(workspaceId ?? ''),
+    queryFn: () => api.get<PresentationTemplateSummary[]>(`/workspaces/${workspaceId}/presentation-templates`),
+    enabled: !!workspaceId,
+  });
+}
+
+/** Saving a deck's look as a template, renaming and deleting templates, and getting one's look to put on a deck. */
+export function usePresentationTemplateActions(workspaceId: string) {
+  const qc = useQueryClient();
+  const settle = () => void qc.invalidateQueries({ queryKey: keys.presentationTemplates(workspaceId) });
+  return {
+    /** Rereads the list after a template is imported, which happens over several requests outside these (lib/slideTemplates.ts). */
+    imported: settle,
+    save: useMutation({
+      mutationFn: ({ presentationId, ...input }: { presentationId: string; name: string; description?: string }) =>
+        api.post<PresentationTemplateSummary>(`/presentations/${presentationId}/template`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; description?: string }) =>
+        api.patch<PresentationTemplateSummary>(`/presentation-templates/${id}`, patch),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/presentation-templates/${id}`),
+      onSuccess: settle,
+    }),
+    /** The template's look, in the paths the server stores, for the editor to write into the deck. */
+    apply: useMutation({
+      mutationFn: async ({ presentationId, templateId }: { presentationId: string; templateId: string }) =>
+        toServer(await api.post<TemplateStyle>(`/presentations/${presentationId}/apply-template`, { templateId })),
+    }),
+  };
+}
+
 export function useCanvasToPresentation(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -1823,12 +1864,15 @@ export function useUploadFile(workspaceId: string) {
       file,
       documentId,
       presentationId,
+      templateId,
     }: {
       file: File;
       /** Recorded on the attachment so the file is not treated as orphaned. */
       documentId?: string;
       /** A picture on a slide: served to whoever may open the presentation. */
       presentationId?: string;
+      /** A picture of a presentation template being imported: served to the workspace. */
+      templateId?: string;
     }): Promise<UploadedFile> => {
       // Refused here as well as on the server, which cuts an oversized upload
       // off partway and cannot always get its explanation back to the browser.
@@ -1842,6 +1886,7 @@ export function useUploadFile(workspaceId: string) {
       // arrived before the file part.
       if (documentId) body.append('documentId', documentId);
       if (presentationId) body.append('presentationId', presentationId);
+      if (templateId) body.append('templateId', templateId);
       body.append('file', file);
       const res = await fetch(serverUrl(`/api/workspaces/${workspaceId}/uploads`), {
         method: 'POST',

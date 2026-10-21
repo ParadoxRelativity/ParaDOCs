@@ -12,6 +12,7 @@ import {
   deleteSlide,
   isChromeKind,
   isThemeColor,
+  makeTemplateDeck,
   normalizeTheme,
   notesFragmentName,
   readDeck,
@@ -67,6 +68,21 @@ export function encodeImport(deck: ImportedDeck): { update: Uint8Array; slides: 
   try {
     const { slideIds } = applyImport(doc, deck);
     return { update: Y.encodeStateAsUpdate(doc), slides: slideIds.length };
+  } finally {
+    doc.destroy();
+  }
+}
+
+/**
+ * A presentation template's deck, from a file imported as one whose media has
+ * been resolved: its look, and one Title slide in place of its slides.
+ */
+export function encodeTemplateImport(deck: ImportedDeck): Uint8Array {
+  const doc = new Y.Doc();
+  try {
+    applyImport(doc, { ...deck, slides: [] });
+    makeTemplateDeck(doc);
+    return Y.encodeStateAsUpdate(doc);
   } finally {
     doc.destroy();
   }
