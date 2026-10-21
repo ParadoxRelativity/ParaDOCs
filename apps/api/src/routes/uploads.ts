@@ -71,21 +71,37 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
     // whoever may open it. Putting it there takes the right to edit it, not
     // the right to edit documents.
     const presentationId = uuid(fields?.presentationId?.value);
+    // A picture of a presentation template being imported belongs to the
+    // template, and is served to the workspace, as the template is.
+    const templateId = presentationId ? null : uuid(fields?.templateId?.value);
     if (presentationId) {
       const access = await assertPresentationAccess(req, presentationId, 'edit');
       if (access.workspaceId !== req.params.id) throw notFound('Presentation not found');
+    } else if (templateId) {
+      assertMeets(member, 'slides.create');
+      const { rows: drafts } = await query(
+        'SELECT 1 FROM presentation_templates WHERE id = $1 AND workspace_id = $2 AND created_by = $3 AND ydoc IS NULL',
+        [templateId, req.params.id, req.user!.id],
+      );
+      if (!drafts[0]) throw notFound('Template not found');
     } else {
       assertMeets(member, 'docs.edit');
     }
 
     const { storageKey, byteSize } = await storeUpload(file, req.params.id);
 
-    const { rows } = await query(
-      `INSERT INTO attachments (workspace_id, document_id, presentation_id, filename, mime_type, byte_size, storage_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, filename, mime_type AS "mimeType", byte_size::float8 AS "byteSize"`,
-      [req.params.id, presentationId ? null : documentId, presentationId, file.filename, file.mimetype, byteSize, storageKey],
-    );
+    const rows = await transaction(async (client) => {
+      const { rows: inserted } = await client.query<{ id: string; filename: string; mimeType: string; byteSize: number }>(
+        `INSERT INTO attachments (workspace_id, document_id, presentation_id, filename, mime_type, byte_size, storage_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, filename, mime_type AS "mimeType", byte_size::float8 AS "byteSize"`,
+        [req.params.id, presentationId || templateId ? null : documentId, presentationId, file.filename, file.mimetype, byteSize, storageKey],
+      );
+      if (templateId) {
+        await client.query('INSERT INTO presentation_template_attachments (template_id, attachment_id) VALUES ($1, $2)', [templateId, inserted[0].id]);
+      }
+      return inserted;
+    });
 
     reply.status(201);
     return { ...rows[0], url: `/uploads/${storageKey}` };
@@ -121,7 +137,8 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
            LEFT JOIN documents d ON d.id = a.document_id
           WHERE a.workspace_id = $1
             AND ($2::boolean IS NOT TRUE OR (a.document_id IS NULL AND a.presentation_id IS NULL
-                                               AND NOT EXISTS (SELECT 1 FROM presentation_attachments pa WHERE pa.attachment_id = a.id)))
+                                               AND NOT EXISTS (SELECT 1 FROM presentation_attachments pa WHERE pa.attachment_id = a.id)
+                                               AND NOT EXISTS (SELECT 1 FROM presentation_template_attachments ta WHERE ta.attachment_id = a.id)))
             AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::uuid))
           ORDER BY a.created_at DESC, a.id DESC
           LIMIT $5`,
@@ -147,7 +164,8 @@ export const uploadRoutes: FastifyPluginAsync = async (app) => {
                 COALESCE(sum(byte_size) FILTER (WHERE unattached), 0)::bigint AS unattached_bytes
            FROM (SELECT a.byte_size,
                         a.document_id IS NULL AND a.presentation_id IS NULL
-                          AND NOT EXISTS (SELECT 1 FROM presentation_attachments pa WHERE pa.attachment_id = a.id) AS unattached
+                          AND NOT EXISTS (SELECT 1 FROM presentation_attachments pa WHERE pa.attachment_id = a.id)
+                          AND NOT EXISTS (SELECT 1 FROM presentation_template_attachments ta WHERE ta.attachment_id = a.id) AS unattached
                    FROM attachments a WHERE a.workspace_id = $1) a`,
         [req.params.id],
       );

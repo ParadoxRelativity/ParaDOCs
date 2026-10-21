@@ -13,19 +13,20 @@ import type { SlideImportResponse } from './slideImportWorker';
  * same upload and `rememberImport` steps as a direct .pptx.
  *
  * `fitTo` scales the slides to an existing deck's size, for slides pasted into
- * it (lib/powerPointClipboard.ts).
+ * it (lib/powerPointClipboard.ts). `template` reads only the look, for a
+ * presentation template (lib/slideTemplates.ts).
  */
-export async function importSlideFile(file: File, onProgress?: (progress: ImportProgress) => void, fitTo?: SlideSize): Promise<ImportedDeck> {
+export async function importSlideFile(file: File, onProgress?: (progress: ImportProgress) => void, fitTo?: SlideSize, template = false): Promise<ImportedDeck> {
   onProgress?.({ stage: 'reading', done: 0, total: 1, message: `Opening ${file.name}` });
   const data = await file.arrayBuffer();
-  if (typeof Worker === 'undefined') return importOnThisThread(data, file.name, onProgress, fitTo);
+  if (typeof Worker === 'undefined') return importOnThisThread(data, file.name, onProgress, fitTo, template);
 
   return new Promise<ImportedDeck>((resolve, reject) => {
     let worker: Worker;
     try {
       worker = new Worker(new URL('./slideImportWorker.ts', import.meta.url), { type: 'module' });
     } catch {
-      importOnThisThread(data, file.name, onProgress, fitTo).then(resolve, reject);
+      importOnThisThread(data, file.name, onProgress, fitTo, template).then(resolve, reject);
       return;
     }
     worker.onmessage = (event: MessageEvent<SlideImportResponse>) => {
@@ -41,16 +42,23 @@ export async function importSlideFile(file: File, onProgress?: (progress: Import
       worker.terminate();
       reject(new Error(event.message || 'Could not read that file'));
     };
-    worker.postMessage({ data, fileName: file.name, fitTo }, [data]);
+    worker.postMessage({ data, fileName: file.name, fitTo, template }, [data]);
   });
 }
 
 /** Where there is no worker: the same parse, on this thread, with the browser's own XML parser. */
-async function importOnThisThread(data: ArrayBuffer, fileName: string, onProgress?: (progress: ImportProgress) => void, fitTo?: SlideSize): Promise<ImportedDeck> {
+async function importOnThisThread(
+  data: ArrayBuffer,
+  fileName: string,
+  onProgress?: (progress: ImportProgress) => void,
+  fitTo?: SlideSize,
+  template = false,
+): Promise<ImportedDeck> {
   const { parseSlideFile } = await import('./slideImportParse');
   return parseSlideFile(data, fileName, {
     parseXml: (text) => new DOMParser().parseFromString(text, 'text/xml'),
     onProgress,
     fitTo,
+    template,
   });
 }

@@ -15,8 +15,10 @@ import { channelAccessFor } from './channels.js';
  * - `chat/<channel>/…` — whoever can read the channel or conversation.
  * - `work-items/<item>/…` — whoever can see the work item.
  * - `<workspace>/…` — a document's or canvas's file, for whoever can see that
- *   document; a picture on a slide, for whoever can open that presentation;
- *   one belonging to neither, for anyone in the workspace.
+ *   document; a picture a presentation template shows, for anyone in the
+ *   workspace, as the template is; a picture on a slide, for whoever can open
+ *   that presentation; one belonging to none of these, for anyone in the
+ *   workspace.
  *
  * Anything else, or anything malformed, is refused.
  */
@@ -37,8 +39,9 @@ export async function mayReadUpload(userId: string | null, storageKey: string): 
 
   const [workspaceId] = parts;
   if (parts.length !== 2 || !UUID.test(workspaceId)) return false;
-  const { rows } = await query<{ document_id: string | null; presentation_ids: string[] }>(
+  const { rows } = await query<{ document_id: string | null; presentation_ids: string[]; in_template: boolean }>(
     `SELECT a.document_id,
+            EXISTS (SELECT 1 FROM presentation_template_attachments ta WHERE ta.attachment_id = a.id) AS in_template,
             -- The owning deck first, then any copies that show the same picture.
             array_remove(a.presentation_id || ARRAY(SELECT pa.presentation_id FROM presentation_attachments pa
                                                     WHERE pa.attachment_id = a.id), NULL) AS presentation_ids
@@ -48,7 +51,7 @@ export async function mayReadUpload(userId: string | null, storageKey: string): 
   const documentId = rows[0]?.document_id;
   if (documentId) return (await documentAccess(userId, documentId)) !== null;
   const presentationIds = rows[0]?.presentation_ids ?? [];
-  if (presentationIds.length > 0) {
+  if (presentationIds.length > 0 && !rows[0]?.in_template) {
     for (const presentationId of presentationIds) {
       if ((await presentationAccess(userId, presentationId)) !== null) return true;
     }

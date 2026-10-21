@@ -5,7 +5,9 @@ import { Button } from '../ui';
 import BackgroundEditor from './BackgroundEditor';
 import { Group } from './inspectorParts';
 import LayoutEditor from './LayoutEditor';
-import SlideDesignDialog from './SlideDesignDialog';
+import SlideDesignDialog, { type TemplateView } from './SlideDesignDialog';
+import { ImportTemplateDialog, ManageTemplatesDialog, SaveTemplateDialog } from './PresentationTemplates';
+import { usePresentation } from '../../api/hooks';
 import { registerSlideInspectorSection, registerSlideToolbarAction, type SlideEditorContext } from './slideExtensions';
 
 /**
@@ -16,7 +18,7 @@ import { registerSlideInspectorSection, registerSlideToolbarAction, type SlideEd
  * Edit layouts) are drawn by `SlideDesignHost`, which the editor mounts once.
  */
 
-type View = 'design' | 'layouts' | null;
+type View = 'design' | 'layouts' | TemplateView | null;
 let view: View = null;
 const listeners = new Set<() => void>();
 
@@ -37,8 +39,16 @@ function useView(): View {
 
 export function SlideDesignHost({ ctx }: { ctx: SlideEditorContext }) {
   const current = useView();
-  if (current === 'design') return <SlideDesignDialog ctx={ctx} onClose={() => openSlideDesign(null)} onEditLayouts={() => openSlideDesign('layouts')} />;
+  const title = usePresentation(ctx.presentationId).data?.title ?? '';
+  // The template windows stand in for the Design window, and close back to it.
+  const back = () => openSlideDesign('design');
+  if (current === 'design') {
+    return <SlideDesignDialog ctx={ctx} onClose={() => openSlideDesign(null)} onEditLayouts={() => openSlideDesign('layouts')} onOpen={openSlideDesign} />;
+  }
   if (current === 'layouts') return <LayoutEditor ctx={ctx} onClose={() => openSlideDesign(null)} />;
+  if (current === 'saveTemplate') return <SaveTemplateDialog workspaceId={ctx.workspaceId} presentationId={ctx.presentationId} defaultName={title} onClose={back} />;
+  if (current === 'importTemplate') return <ImportTemplateDialog workspaceId={ctx.workspaceId} onClose={back} />;
+  if (current === 'manageTemplates') return <ManageTemplatesDialog workspaceId={ctx.workspaceId} onClose={back} />;
   return null;
 }
 

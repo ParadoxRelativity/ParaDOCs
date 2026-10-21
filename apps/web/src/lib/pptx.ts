@@ -1,5 +1,6 @@
 import {
   DEFAULT_COLOR_MAP,
+  DEFAULT_SLIDE_SIZE,
   MASTER_ID,
   MAX_TEXT_COLUMNS,
   mapOfficeFont,
@@ -83,6 +84,8 @@ export interface PptxOptions {
   onProgress?: (progress: ImportProgress) => void;
   /** Scales the slides to fit this size, centred, instead of choosing one for them (slides pasted into a deck). */
   fitTo?: SlideSize;
+  /** Reads only the main master's theme, master and layouts, for a presentation template: none of the slides. */
+  template?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,6 +1305,8 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
     if (rel) slideOrder.push(rel);
   }
   if (slideOrder.length === 0) slideOrder.push(...slideRels);
+  // A template keeps the look, so its example slides (and the layouts only they use) are not read.
+  if (options.template) slideOrder.length = 0;
 
   const slideParts: Part[] = [];
   for (let i = 0; i < slideOrder.length; i++) {
@@ -1354,6 +1359,34 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
     slides,
     media: shared.media,
     report: report.build(),
+  };
+}
+
+/**
+ * A PowerPoint theme file (.thmx): its colors and fonts, as a deck with no
+ * master, layouts or slides of its own, so it takes the default ones.
+ */
+export async function parseThmx(zip: ZipFiles, options: Pick<PptxOptions, 'parseXml' | 'fileName'>): Promise<ImportedDeck> {
+  const { parseXml, fileName } = options;
+  let themePath = 'theme/theme/theme1.xml';
+  const rootRels = await zip.text('_rels/.rels');
+  if (rootRels) {
+    const main = [...parseRels(parseXml(rootRels), 'package.xml').values()].find((rel) => rel.type === 'officeDocument');
+    if (main) themePath = main.target;
+  }
+  const part = await loadPart({ zip, parseXml }, themePath);
+  if (!part || localName(part.root) !== 'theme') throw new PackageError('That file is not a PowerPoint theme (.thmx).');
+  const theme = readTheme(part.root, DEFAULT_COLOR_MAP);
+  return {
+    fileName,
+    title: fileName.replace(/\.[^.]+$/, '') || theme.name,
+    format: 'pptx',
+    size: DEFAULT_SLIDE_SIZE,
+    settings: {},
+    theme: { name: theme.name, colors: theme.colors, fonts: theme.fonts },
+    slides: [],
+    media: [],
+    report: { items: [] },
   };
 }
 

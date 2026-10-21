@@ -9,12 +9,12 @@ import type { ImportProgress, ImportedDeck } from './slideImportTypes';
  * freeze the UI. A worker has no DOMParser, so the XML is parsed with xmldom
  * (the same DOM interface, in plain JavaScript).
  *
- * Messages in:  { data: ArrayBuffer, fileName, fitTo? }
+ * Messages in:  { data: ArrayBuffer, fileName, fitTo?, template? }
  * Messages out: { type: 'progress', progress } ... then { type: 'done', deck }
  *               or { type: 'error', message }
  */
 
-export type SlideImportRequest = { data: ArrayBuffer; fileName: string; fitTo?: SlideSize };
+export type SlideImportRequest = { data: ArrayBuffer; fileName: string; fitTo?: SlideSize; template?: boolean };
 export type SlideImportResponse =
   | { type: 'progress'; progress: ImportProgress }
   | { type: 'done'; deck: ImportedDeck }
@@ -65,6 +65,7 @@ if (typeof window === 'undefined') {
         parseXml: workerParseXml,
         rasterize,
         fitTo: event.data.fitTo,
+        template: event.data.template,
         onProgress: (progress) => scope.postMessage({ type: 'progress', progress }),
       });
       // Hand the pictures over rather than copying them.
