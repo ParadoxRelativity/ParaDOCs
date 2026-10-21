@@ -46,6 +46,8 @@ function build(): DeckSnapshot {
   setSlideLayout(doc, two, 'titleAndContent');
   setSlideElement(doc, two, rich('b', { placeholder: 'body', paragraphs: [{ bullet: 'bullet', runs: [{ text: 'One' }] }, { bullet: 'bullet', level: 1, runs: [{ text: 'Two', marks: { italic: true } }] }] }));
   setSlideElement(doc, two, { id: 'pic', type: 'image', url: '/uploads/a.png', x: 100, y: 500, width: 600, height: 400, z: 3 } as SlideElement);
+  // Shown smaller than its box, with a margin all round.
+  setSlideElement(doc, two, { id: 'inset', type: 'image', url: '/uploads/a.png', crop: { x: -0.1, y: -0.05, width: 1.2, height: 1.1 }, x: 800, y: 500, width: 600, height: 400, z: 4 } as SlideElement);
   doc.getMap('slide:s2').set('transition', { kind: 'push' });
 
   const three = createSlide(doc, { id: 's3' });
@@ -79,6 +81,11 @@ describe('export, then import', () => {
     expect(texts(back.slides[1].elements)).toEqual(expect.arrayContaining(['One\nTwo']));
     expect(texts(back.slides[2].elements)).toEqual(expect.arrayContaining(['Para one\nPara two', 'Later']));
     expect(back.slides[1].elements.some((e) => e.type === 'image')).toBe(true);
+    const inset = back.slides[1].elements.find((e) => e.type === 'image' && e.x === 800) as SlideElement & { crop: { x: number; y: number; width: number; height: number } };
+    expect(inset.crop.x).toBeCloseTo(-0.1);
+    expect(inset.crop.y).toBeCloseTo(-0.05);
+    expect(inset.crop.width).toBeCloseTo(1.2);
+    expect(inset.crop.height).toBeCloseTo(1.1);
 
     // Notes.
     expect(back.slides[0].notes).toBe('First note\nSecond note');

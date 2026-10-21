@@ -78,6 +78,7 @@ describe('geometry', () => {
     expect(tall.b).toBeCloseTo(1 / 3);
     expect(coverCrop({ width: 600, height: 400 }, { width: 300, height: 200 })).toBeUndefined();
     expect(srcRectXml({ l: 0.125, r: 0.125, t: 0, b: 0 })).toBe('<a:srcRect l="12500" r="12500"/>');
+    expect(srcRectXml({ l: -0.05, r: -0.05, t: 0, b: 0 })).toBe('<a:srcRect l="-5000" r="-5000"/>');
   });
 });
 

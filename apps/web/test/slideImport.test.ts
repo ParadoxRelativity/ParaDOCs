@@ -93,6 +93,32 @@ describe('PowerPoint (python-pptx on the stock template)', () => {
     expect(textOf(els)).toContain('On track');
   });
 
+  it('stretches pictures over their frame as PowerPoint does, margins included', async () => {
+    // The fixture's picture is cropped 10% at each side; swap in other fills for it.
+    const { readFileSync } = await import('node:fs');
+    const { fixturePath } = await import('./helpers');
+    const withFill = async (fill: string) => {
+      const zip = await JSZip.loadAsync(readFileSync(fixturePath('powerpoint-quarterly.pptx')));
+      const slide = await zip.file('ppt/slides/slide3.xml')!.async('string');
+      zip.file('ppt/slides/slide3.xml', slide.replace(/(<a:blip r:embed="rId2"\/>)[\s\S]*?<\/p:blipFill>/, `$1${fill}</p:blipFill>`));
+      const deck = await parseSlideFile(await zip.generateAsync({ type: 'uint8array' }), 'fills.pptx', {
+        parseXml: (t) => new DOMParser().parseFromString(t, 'text/xml') as unknown as Document,
+      });
+      return (deck.slides[2].elements.find((e) => e.type === 'image') as SlideElement & { crop?: Record<string, number> }).crop;
+    };
+    // No source rectangle: the whole picture, stretched to the frame rather than cropped to cover it.
+    expect(await withFill('<a:stretch><a:fillRect/></a:stretch>')).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    // A negative source rectangle leaves a margin round the picture.
+    expect(await withFill('<a:srcRect t="-10000" b="-10000"/><a:stretch><a:fillRect/></a:stretch>')).toEqual({ x: 0, y: -0.1, width: 1, height: expect.closeTo(1.2) });
+    // So does a fill rectangle inset into the frame.
+    const inset = (await withFill('<a:stretch><a:fillRect l="10000" r="10000"/></a:stretch>'))!;
+    expect(inset.x).toBeCloseTo(-0.125);
+    expect(inset.width).toBeCloseTo(1.25);
+    expect(inset.y).toBe(0);
+    // A tiled picture keeps the default fit.
+    expect(await withFill('<a:tile/>')).toBeUndefined();
+  });
+
   it('maps click animations to build animations in timeline order', async () => {
     const deck = await importFixture('powerpoint-quarterly.pptx');
     const [title, body] = deck.slides[4].elements as (RichTextElement & { animation?: unknown })[];
