@@ -44,6 +44,7 @@ import { CANVAS_CLIP_MIME, SlideInsertDialogs, parseCanvasClip, pasteCanvasSelec
 import { SlideDesignHost } from './slideDesign';
 import { SlideExportHost } from './slideExport';
 import SlideImportHost from './SlideImportHost';
+import { usePowerPointPaste } from './SlidePowerPointPaste';
 
 const EMPTY_MEMBERS: WorkspaceMember[] = [];
 const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -194,6 +195,10 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     center: { x: settings.size.width / 2, y: settings.size.height / 2 },
     present: (from) => setShow({ startId: startSlideId(slides, from === 'current' ? currentId : null) }),
   };
+  const powerPoint = usePowerPointPaste(ctx, (ids) => {
+    openSlide(ids[0] ?? null);
+    setRailSelection(new Set(ids));
+  });
 
   // ---- slide operations (rail) --------------------------------------------
 
@@ -297,7 +302,13 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     deleteElements();
   };
   const onPaste = (e: React.ClipboardEvent) => {
-    if (inTextField(e.target) || !canEdit || !slide) return;
+    if (inTextField(e.target) || !canEdit) return;
+    // Slides copied in PowerPoint become slides, rather than the picture of them PowerPoint puts beside them.
+    if (powerPoint.paste(e.clipboardData)) {
+      e.preventDefault();
+      return;
+    }
+    if (!slide) return;
     const clip = parseClip(e.clipboardData.getData(CLIP_MIME));
     e.preventDefault();
     // Pictures and video on the clipboard (a screenshot, a copied image) go to whoever takes that kind of file.
@@ -553,6 +564,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
                 </div>
               </div>
             )}
+            {powerPoint.host}
           </div>
           {slide && panels.length > 0 && (
             <div className="shrink-0 border-t border-[var(--color-line)]">
