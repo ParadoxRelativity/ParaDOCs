@@ -100,7 +100,7 @@ import {
 } from '../lib/access.js';
 import { appEnabledSql } from '../lib/apps.js';
 import { onCallAt } from '../lib/schedules.js';
-import { resolveReferences, resolveWorkItems } from '../lib/chatReferences.js';
+import { resolveReferences, resolveWorkItemDetails, resolveWorkItems } from '../lib/chatReferences.js';
 import {
   dimension,
   displayName,
@@ -2911,6 +2911,12 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   app.post('/work-item-refs/resolve', async (req) => {
     const input = parse(resolveWorkItemsSchema, req.body ?? {});
     return { items: await resolveWorkItems([...new Set(input.ids)], null, req.user!.id) };
+  });
+
+  /** The same, with who is on each item, when it is due and how far the work under it has got: for status slides. */
+  app.post('/work-item-refs/details', async (req) => {
+    const input = parse(resolveWorkItemsSchema, req.body ?? {});
+    return { items: await resolveWorkItemDetails([...new Set(input.ids)].slice(0, 100), req.user!.id) };
   });
 
   /**

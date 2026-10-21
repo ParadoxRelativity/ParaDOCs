@@ -16,6 +16,7 @@ import { followLiveShow, useFollowTarget, useLiveFollower } from '../../lib/live
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import SlideView from './SlideView';
+import { SlideLinkContext, SlideLinkPeek, type SlideLinkTarget } from './slideLinks';
 import { SlideShowStepContext, slideShowSteps } from './slideShowExtensions';
 
 /** Mounted once in the workspace shell: shows the follower view whenever a live show has been opened. */
@@ -42,8 +43,11 @@ function LiveFollower({ presentationId, onClose }: { presentationId: string; onC
   const [box, setBox] = useState({ width: window.innerWidth, height: window.innerHeight });
   // Where this viewer has browsed to; null while they are with the presenter.
   const [away, setAway] = useState<ShowState | null>(null);
+  // What this viewer has opened from the slide, over it; the presenter goes on regardless.
+  const [peek, setPeek] = useState<SlideLinkTarget | null>(null);
 
   useBackHandler(onClose);
+  useBackHandler(() => setPeek(null), { active: peek !== null });
   // The show is over: back to the deck.
   useEffect(() => {
     if (follower.status === 'ended') onClose();
@@ -85,12 +89,20 @@ function LiveFollower({ presentationId, onClose }: { presentationId: string; onC
     },
     [shown, playlist, presenter],
   );
-  const latest = useRef({ browse, onClose });
-  latest.current = { browse, onClose };
+  const latest = useRef({ browse, onClose, peeking: peek !== null });
+  latest.current = { browse, onClose, peeking: peek !== null };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (latest.current.peeking) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setPeek(null);
+        }
+        return;
+      }
       const command = showCommandForKey(e.key, { shift: e.shiftKey });
       if (!command) return;
       if (command.type === 'exit') {
@@ -171,13 +183,16 @@ function LiveFollower({ presentationId, onClose }: { presentationId: string; onC
         ) : size && slide ? (
           <div className="absolute overflow-hidden" style={{ width: size.width * scale, height: size.height * scale, left: (stage.width - size.width * scale) / 2, top: (stage.height - size.height * scale) / 2 }}>
             <SlideShowStepContext.Provider value={{ slideId: slide.id, step: shown?.step ?? 0 }}>
-              <SlideView slide={slide} size={size} theme={theme} width={size.width * scale} />
+              <SlideLinkContext.Provider value={setPeek}>
+                <SlideView slide={slide} size={size} theme={theme} width={size.width * scale} />
+              </SlideLinkContext.Provider>
             </SlideShowStepContext.Provider>
             {blanked && <div aria-hidden className={cx('absolute inset-0', presenter?.blank === 'black' ? 'bg-black' : 'bg-white')} />}
           </div>
         ) : (
           <div className="grid h-full place-items-center text-sm opacity-70">{deck.isError ? 'Could not load the slides.' : follower.state?.slideId === null && follower.status === 'following' ? 'Waiting for the presenter…' : 'Loading…'}</div>
         )}
+        {peek && <SlideLinkPeek target={peek} onClose={() => setPeek(null)} />}
       </div>
 
       <div

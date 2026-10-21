@@ -3,18 +3,20 @@
  * editor binds to.
  *
  * The fragment holds `paragraph` elements (attributes `align`, `bullet`,
- * `level`, `lineHeight`) made of text runs and `mention` elements (attributes
- * `userId`, `label`). A run's formatting is a Y.XmlText attribute per mark, in
- * the shape y-prosemirror reads and writes for the editor's schema: marks
- * without options are `{}`, the rest carry their option (`fontSize` is
- * `{ size }`, `color` is `{ color }`, ...). A bare number for `fontSize`, which
- * the outline writer used before the editor existed, is still understood.
+ * `level`, `lineHeight`) made of text runs, `mention` elements (attributes
+ * `userId`, `label`) and `field` elements (a live value; see slideFields.ts).
+ * A run's formatting is a Y.XmlText attribute per mark, in the shape
+ * y-prosemirror reads and writes for the editor's schema: marks without
+ * options are `{}`, the rest carry their option (`fontSize` is `{ size }`,
+ * `color` is `{ color }`, ...). A bare number for `fontSize`, which the outline
+ * writer used before the editor existed, is still understood.
  *
  * Everything that is not the editor (thumbnails, the slideshow, exports,
  * paste) works from the plain {@link RichParagraph} form.
  */
 
 import * as Y from 'yjs';
+import { FIELD_NODE, fieldAttributes, fieldFromAttributes, type SlideField } from './slideFields.js';
 
 export type RichAlign = 'left' | 'center' | 'right' | 'justify';
 export type RichBullet = 'bullet' | 'number';
@@ -36,6 +38,8 @@ export interface RichRun {
   text?: string;
   /** A tagged member, drawn as their current name; `label` is the name when they were tagged. */
   mention?: { userId: string; label: string };
+  /** A live value, drawn as it is now; `label` is what it read when placed. */
+  field?: { ref: SlideField; label: string };
   marks?: RichMarks;
 }
 
@@ -117,6 +121,10 @@ function readParagraph(node: Y.XmlElement): RichParagraph {
     } else if (child instanceof Y.XmlElement && child.nodeName === MENTION_NODE) {
       const userId = child.getAttribute('userId');
       if (typeof userId === 'string') paragraph.runs.push({ mention: { userId, label: String(child.getAttribute('label') ?? '') } });
+    } else if (child instanceof Y.XmlElement && child.nodeName === FIELD_NODE) {
+      const attrs = child.getAttributes() as Record<string, unknown>;
+      const ref = fieldFromAttributes(attrs);
+      if (ref) paragraph.runs.push({ field: { ref, label: String(attrs.label ?? '') } });
     }
   }
   return paragraph;
@@ -156,6 +164,11 @@ export function paragraphNodes(paragraphs: RichParagraph[]): Y.XmlElement[] {
         mention.setAttribute('userId', run.mention.userId);
         mention.setAttribute('label', run.mention.label);
         children.push(mention);
+      } else if (run.field) {
+        flush();
+        const field = new Y.XmlElement(FIELD_NODE);
+        for (const [key, value] of Object.entries({ ...fieldAttributes(run.field.ref), label: run.field.label })) field.setAttribute(key, value);
+        children.push(field);
       } else if (run.text) {
         if (!text) {
           text = new Y.XmlText();
@@ -193,9 +206,14 @@ export function fragmentMentions(fragment: Y.XmlFragment): string[] {
   return [...found];
 }
 
-/** The same body as plain text, a line per paragraph, a tag as `@name`. */
+/** The same body as plain text, a line per paragraph, a tag as `@name`, a field as what it read when placed. */
 export function paragraphsText(paragraphs: RichParagraph[]): string {
-  return paragraphs.map((p) => p.runs.map((run) => (run.mention ? `@${run.mention.label}` : (run.text ?? ''))).join('')).join('\n');
+  return paragraphs.map((p) => p.runs.map((run) => (run.mention ? `@${run.mention.label}` : run.field ? run.field.label : (run.text ?? ''))).join('')).join('\n');
+}
+
+/** Every live field in a body, in reading order. */
+export function paragraphFields(paragraphs: RichParagraph[]): SlideField[] {
+  return paragraphs.flatMap((p) => p.runs.flatMap((run) => (run.field ? [run.field.ref] : [])));
 }
 
 /**

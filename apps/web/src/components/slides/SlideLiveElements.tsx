@@ -1,19 +1,22 @@
 import { memo, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { CanvasElement, SlideSize } from '@paradocs/shared';
+import type { CanvasElement, SlideSize, WorkspaceMember } from '@paradocs/shared';
 import {
   boardBounds,
   canvasElementsToSlide,
+  workItemPercent,
   type LinkElement,
+  type PersonElement,
   type SheetCellElement,
   type SheetChartElement,
   type SlideElement,
   type WorkItemElement,
+  type WorkItemProgressElement,
 } from '@paradocs/shared';
-import { keys, useDocument, useLinkTargets } from '../../api/hooks';
+import { keys, useDocument, useLinkTargets, useMembers } from '../../api/hooks';
 import { LIVE_REFRESH_MS, useLiveSheetRef } from '../../lib/sheetRefs';
 import { renderMarkdownPreview } from '../../lib/markdownPreview';
-import { useWorkItemRef } from '../../lib/workItemRefs';
+import { useWorkItemDetail, useWorkItemRef } from '../../lib/workItemRefs';
 import { cx, useDebounced } from '../../lib/util';
 import type { SlidesActions } from '../../lib/slidesStore';
 import Icon, { type IconName } from '../Icon';
@@ -22,6 +25,8 @@ import { Button } from '../ui';
 import SheetRefPicker from '../sheet/SheetRefPicker';
 import { ChartPlot } from '../sheet/SheetChartView';
 import { WorkItemPicker } from '../projects/WorkItemRefs';
+import Avatar from '../Avatar';
+import { SlideLinkArea, pathWorkspaceId } from './slideLinks';
 import { useWatched } from './SlideMediaElements';
 import {
   registerSlideElementRenderer,
@@ -32,7 +37,8 @@ import {
 
 /**
  * Live ParaDOCs content on a slide: a spreadsheet chart or cell, a work item,
- * and a document excerpt. The slide stores only where the content lives; each
+ * how far a work item (an epic, usually) has got, a member, and a document
+ * excerpt. The slide stores only where the content lives; each
  * viewer's own client asks for the current value, so
  *
  *  - what is shown follows the sheet, item or document while the slide is on
@@ -41,6 +47,8 @@ import {
  *    never its data, nor even the label the author gave it. The server answers
  *    each lookup for the person asking, so the audience of a live show, who
  *    each draw the slide themselves, see what their own access allows.
+ *  - in the slideshow, clicking one opens what it shows over the slide
+ *    (slideLinks.tsx), so a presentation can be followed into its sources.
  *
  * Sized for a 1920x1080 slide: type is large enough to read from the back.
  */
@@ -107,17 +115,19 @@ const SheetCellRenderer = memo(function SheetCellRenderer({ element }: SlideElem
     const byHeight = el.height * 0.5;
     const byWidth = ((el.width - 80) / Math.max(result.display.length, 1)) * 1.7;
     body = (
-      <Card className="justify-center px-10">
-        <span
-          className={cx('truncate font-semibold tabular-nums leading-none', result.isError && 'text-red-600')}
-          style={{ fontSize: Math.max(32, Math.min(byHeight, byWidth, 360)) }}
-        >
-          {result.display}
-        </span>
-        <span className="mt-3 truncate text-[28px] text-[var(--color-muted)]">
-          {el.label || result.cell} · {result.spreadsheetTitle} › {result.sheetName}
-        </span>
-      </Card>
+      <SlideLinkArea target={{ kind: 'sheet', ref: { kind: 'cell', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, cell: el.cell } }} label={`Open ${result.spreadsheetTitle}`}>
+        <Card className="justify-center px-10">
+          <span
+            className={cx('truncate font-semibold tabular-nums leading-none', result.isError && 'text-red-600')}
+            style={{ fontSize: Math.max(32, Math.min(byHeight, byWidth, 360)) }}
+          >
+            {result.display}
+          </span>
+          <span className="mt-3 truncate text-[28px] text-[var(--color-muted)]">
+            {el.label || result.cell} · {result.spreadsheetTitle} › {result.sheetName}
+          </span>
+        </Card>
+      </SlideLinkArea>
     );
   }
   return (
@@ -140,21 +150,23 @@ const SheetChartRenderer = memo(function SheetChartRenderer({ element }: SlideEl
   else if (result.status !== 'ok' || result.kind !== 'chart') body = <Locked icon="bar-chart" what="This chart" />;
   else {
     body = (
-      <Card>
-        <div className="flex items-baseline gap-6 border-b-2 border-[var(--color-line)] px-8 py-4">
-          <span className="truncate text-[44px] font-semibold">{result.title || el.label || 'Chart'}</span>
-          <span className="ml-auto truncate text-[26px] text-[var(--color-muted)]">
-            {result.spreadsheetTitle} › {result.sheetName}
-          </span>
-        </div>
-        <div className="min-h-0 flex-1 p-6">
-          {result.data.series.length ? (
-            <ChartPlot kind={result.chartKind} data={result.data} />
-          ) : (
-            <div className="grid h-full place-items-center text-[32px] text-[var(--color-muted)]">No numbers in this chart’s range</div>
-          )}
-        </div>
-      </Card>
+      <SlideLinkArea target={{ kind: 'sheet', ref: { kind: 'chart', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, chartId: el.chartId } }} label={`Open ${result.spreadsheetTitle}`}>
+        <Card>
+          <div className="flex items-baseline gap-6 border-b-2 border-[var(--color-line)] px-8 py-4">
+            <span className="truncate text-[44px] font-semibold">{result.title || el.label || 'Chart'}</span>
+            <span className="ml-auto truncate text-[26px] text-[var(--color-muted)]">
+              {result.spreadsheetTitle} › {result.sheetName}
+            </span>
+          </div>
+          <div className="min-h-0 flex-1 p-6">
+            {result.data.series.length ? (
+              <ChartPlot kind={result.chartKind} data={result.data} />
+            ) : (
+              <div className="grid h-full place-items-center text-[32px] text-[var(--color-muted)]">No numbers in this chart’s range</div>
+            )}
+          </div>
+        </Card>
+      </SlideLinkArea>
     );
   }
   return (
@@ -177,23 +189,25 @@ const WorkItemRenderer = memo(function WorkItemRenderer({ element }: SlideElemen
   if (!item) body = query.isLoading ? <Loading /> : <Locked icon="kanban" what="This work item" />;
   else {
     body = (
-      <Card className="gap-5 p-10">
-        <div className="flex items-center gap-4 text-[36px] text-[var(--color-muted)]">
-          <Icon name="kanban" />
-          <span className="font-semibold">{item.key}</span>
-        </div>
-        <p
-          className={cx('line-clamp-4 text-[64px] font-semibold leading-tight', item.statusCategory === 'done' && 'text-[var(--color-muted)] line-through')}
-        >
-          {item.title}
-        </p>
-        <span
-          className="mt-auto inline-flex w-fit items-center rounded-full px-6 py-2 text-[34px] font-medium text-white"
-          style={{ background: item.statusColor || '#71717a' }}
-        >
-          {item.statusName}
-        </span>
-      </Card>
+      <SlideLinkArea target={{ kind: 'workItem', itemId: el.itemId }} label={`Open ${item.key}`}>
+        <Card className="gap-5 p-10">
+          <div className="flex items-center gap-4 text-[36px] text-[var(--color-muted)]">
+            <Icon name="kanban" />
+            <span className="font-semibold">{item.key}</span>
+          </div>
+          <p
+            className={cx('line-clamp-4 text-[64px] font-semibold leading-tight', item.statusCategory === 'done' && 'text-[var(--color-muted)] line-through')}
+          >
+            {item.title}
+          </p>
+          <span
+            className="mt-auto inline-flex w-fit items-center rounded-full px-6 py-2 text-[34px] font-medium text-white"
+            style={{ background: item.statusColor || '#71717a' }}
+          >
+            {item.statusName}
+          </span>
+        </Card>
+      </SlideLinkArea>
     );
   }
   return (
@@ -229,21 +243,23 @@ const DocumentRenderer = memo(function DocumentRenderer({ element }: SlideElemen
   else {
     const text = doc.data.bodyMd?.trim() ?? '';
     body = (
-      <Card>
-        <div className="flex items-center gap-4 border-b-2 border-[var(--color-line)] px-8 py-4 text-[44px]">
-          <Icon name={doc.data.mode === 'canvas' ? 'easel' : 'file-earmark-text'} className="text-[var(--color-muted)]" />
-          <span className="truncate font-semibold">{doc.data.title || el.title || 'Document'}</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-hidden px-8 py-5 text-[34px] leading-snug [&_*]:!text-[inherit] [&_h1]:!text-[44px] [&_h2]:!text-[40px] [&_h3]:!text-[36px] [&_pre]:!text-[28px]">
-          {doc.data.mode === 'canvas' ? (
-            <p className="text-[var(--color-muted)]">A canvas — open the document to see it.</p>
-          ) : text ? (
-            renderMarkdownPreview(text.slice(0, EXCERPT_CHARS))
-          ) : (
-            <p className="text-[var(--color-muted)]">Empty document</p>
-          )}
-        </div>
-      </Card>
+      <SlideLinkArea target={{ kind: 'document', documentId: el.documentId }} label={`Open ${doc.data.title || 'the document'}`}>
+        <Card>
+          <div className="flex items-center gap-4 border-b-2 border-[var(--color-line)] px-8 py-4 text-[44px]">
+            <Icon name={doc.data.mode === 'canvas' ? 'easel' : 'file-earmark-text'} className="text-[var(--color-muted)]" />
+            <span className="truncate font-semibold">{doc.data.title || el.title || 'Document'}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden px-8 py-5 text-[34px] leading-snug [&_*]:!text-[inherit] [&_h1]:!text-[44px] [&_h2]:!text-[40px] [&_h3]:!text-[36px] [&_pre]:!text-[28px]">
+            {doc.data.mode === 'canvas' ? (
+              <p className="text-[var(--color-muted)]">A canvas — open the document to see it.</p>
+            ) : text ? (
+              renderMarkdownPreview(text.slice(0, EXCERPT_CHARS))
+            ) : (
+              <p className="text-[var(--color-muted)]">Empty document</p>
+            )}
+          </div>
+        </Card>
+      </SlideLinkArea>
     );
   }
   return (
@@ -253,6 +269,136 @@ const DocumentRenderer = memo(function DocumentRenderer({ element }: SlideElemen
   );
 });
 
+// ---------------------------------------------------------------------------
+// Work item progress
+// ---------------------------------------------------------------------------
+
+const ProgressRenderer = memo(function ProgressRenderer({ element }: SlideElementRendererProps) {
+  const el = element as WorkItemProgressElement;
+  const [ref, watched] = useWatched<HTMLDivElement>();
+  const query = useWorkItemDetail(el.itemId, watched);
+  const item = query.data;
+  let body: ReactNode;
+  if (!item) body = query.isLoading ? <Loading /> : <Locked icon="kanban" what="This work item" />;
+  else {
+    const percent = workItemPercent(item);
+    const progress = item.progress;
+    // The list takes the right half when the card is wide enough to read both.
+    const list = el.showChildren !== false && item.children.length > 0 && el.width >= 1000;
+    const rows = Math.max(1, Math.floor((el.height - 120) / 64));
+    const shown = item.children.slice(0, rows);
+    body = (
+      <SlideLinkArea target={{ kind: 'workItem', itemId: el.itemId }} label={`Open ${item.key}`}>
+        <Card className="flex-row gap-10 p-10">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex items-center gap-4 text-[32px] text-[var(--color-muted)]">
+              <Icon name="kanban" />
+              <span className="font-semibold">{item.key}</span>
+              <span
+                className="ml-auto truncate rounded-full px-5 py-1 text-[26px] font-medium text-white"
+                style={{ background: item.statusColor || '#71717a' }}
+              >
+                {item.statusName}
+              </span>
+            </div>
+            <p className="mt-3 line-clamp-2 text-[56px] font-semibold leading-tight">{item.title}</p>
+            <div className="mt-auto">
+              <div className="flex items-baseline gap-4">
+                <span className="text-[120px] font-semibold leading-none tabular-nums">{percent}%</span>
+                <span className="text-[34px] text-[var(--color-muted)]">
+                  {progress ? `${progress.done} of ${progress.total} done` : item.statusCategory === 'done' ? 'Done' : 'Not done'}
+                </span>
+              </div>
+              <div className="mt-5 flex h-8 overflow-hidden rounded-full bg-[var(--color-surface)]" aria-hidden>
+                {item.statuses.length > 0 && progress
+                  ? item.statuses.map((s) => <div key={s.name} style={{ width: `${(s.count / progress.total) * 100}%`, background: s.color }} />)
+                  : <div style={{ width: `${percent}%`, background: '#10b981' }} />}
+              </div>
+              {item.statuses.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-[26px] text-[var(--color-muted)]">
+                  {item.statuses.map((s) => (
+                    <span key={s.name} className="inline-flex items-center gap-2">
+                      <span className="h-5 w-5 rounded-full" style={{ background: s.color }} />
+                      {s.name} {s.count}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          {list && (
+            <ul className="min-w-0 flex-1 space-y-2 border-l-2 border-[var(--color-line)] pl-10">
+              {shown.map((child) => (
+                <li key={child.id} className="flex h-14 items-center gap-4 text-[30px]">
+                  <span className="h-5 w-5 shrink-0 rounded-full" style={{ background: child.statusColor }} />
+                  <span className="shrink-0 text-[var(--color-muted)]">{child.key}</span>
+                  <span className={cx('min-w-0 flex-1 truncate', child.statusCategory === 'done' && 'text-[var(--color-muted)] line-through')}>{child.title}</span>
+                </li>
+              ))}
+              {item.children.length > shown.length && (
+                <li className="text-[26px] text-[var(--color-muted)]">and {item.children.length - shown.length} more</li>
+              )}
+            </ul>
+          )}
+        </Card>
+      </SlideLinkArea>
+    );
+  }
+  return (
+    <div ref={ref} className="h-full w-full">
+      {body}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Person
+// ---------------------------------------------------------------------------
+
+const PersonRenderer = memo(function PersonRenderer({ element, members }: SlideElementRendererProps) {
+  const el = element as PersonElement;
+  // Thumbnails and the show are drawn without the member list the stage has.
+  const fetched = useMembers(members.length ? undefined : (pathWorkspaceId() ?? undefined));
+  const list = members.length ? members : (fetched.data ?? []);
+  const member = list.find((m) => m.userId === el.userId);
+  if (!member) {
+    if (fetched.isLoading) return <Loading />;
+    return (
+      <Card className="items-center justify-center gap-3 px-10 text-center">
+        <Icon name="person" className="text-[96px] text-[var(--color-muted)]" />
+        <span className="text-[36px] text-[var(--color-muted)]">No longer a member of this workspace</span>
+      </Card>
+    );
+  }
+  const size = Math.min(el.height - 80, 280);
+  return (
+    <Card className="flex-row items-center gap-10 px-10">
+      {member.avatarUrl ? (
+        <img src={member.avatarUrl} alt="" draggable={false} className="shrink-0 rounded-full object-cover" style={{ width: size, height: size }} />
+      ) : (
+        <span
+          className="grid shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] font-semibold text-[var(--color-accent)]"
+          style={{ width: size, height: size, fontSize: size * 0.42 }}
+        >
+          {initials(member.name)}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[64px] font-semibold leading-tight">{member.name}</p>
+        <p className="mt-2 truncate text-[34px] text-[var(--color-muted)]">{member.workspaceRole.name}</p>
+        <p className="mt-1 truncate text-[30px] text-[var(--color-muted)]">{member.email}</p>
+      </div>
+    </Card>
+  );
+});
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+registerSlideElementRenderer('workItemProgress', ProgressRenderer);
+registerSlideElementRenderer('person', PersonRenderer);
 registerSlideElementRenderer('sheetCell', SheetCellRenderer);
 registerSlideElementRenderer('sheetChart', SheetChartRenderer);
 registerSlideElementRenderer('workItem', WorkItemRenderer);
@@ -262,7 +408,7 @@ registerSlideElementRenderer('link', DocumentRenderer);
 // Inserting
 // ---------------------------------------------------------------------------
 
-type Request = { kind: 'cell' | 'chart' | 'workItem' | 'document'; ctx: SlideEditorContext };
+type Request = { kind: 'cell' | 'chart' | 'workItem' | 'progress' | 'person' | 'document'; ctx: SlideEditorContext };
 
 let current: Request | null = null;
 const listeners = new Set<() => void>();
@@ -327,7 +473,7 @@ export function SlideInsertDialogs() {
       />
     );
   }
-  if (kind === 'workItem') {
+  if (kind === 'workItem' || kind === 'progress') {
     return (
       <WorkItemPicker
         workspaceId={ctx.workspaceId}
@@ -335,11 +481,14 @@ export function SlideInsertDialogs() {
         onCancel={close}
         onPick={(item) => {
           close();
-          place(ctx, 880, 400, { type: 'workItem', itemId: item.id, label: `${item.key} ${item.title}` });
+          const label = `${item.key} ${item.title}`;
+          if (kind === 'progress') place(ctx, 1600, 640, { type: 'workItemProgress', itemId: item.id, label });
+          else place(ctx, 880, 400, { type: 'workItem', itemId: item.id, label });
         }}
       />
     );
   }
+  if (kind === 'person') return <PersonPicker ctx={ctx} onClose={close} />;
   return (
     <DocumentPicker
       workspaceId={ctx.workspaceId}
@@ -353,15 +502,69 @@ export function SlideInsertDialogs() {
   );
 }
 
+/** Chooses a member of the workspace for a person card. */
+function PersonPicker({ ctx, onClose }: { ctx: SlideEditorContext; onClose: () => void }) {
+  const members = useMembers(ctx.workspaceId).data ?? [];
+  const [query, setQuery] = useState('');
+  const needle = query.trim().toLowerCase();
+  const matches = members.filter((m) => !m.disabled && (m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle))).slice(0, 50);
+  const pick = (member: WorkspaceMember) => {
+    onClose();
+    place(ctx, 1100, 360, { type: 'person', userId: member.userId, label: member.name });
+  };
+  return (
+    <Modal
+      title="Show a person"
+      description="Their picture, name and role, as their profile has them."
+      onClose={onClose}
+      footer={
+        <Button variant="subtle" className="text-xs" onClick={onClose}>
+          Cancel
+        </Button>
+      }
+    >
+      <input
+        autoFocus
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && matches[0]) {
+            e.preventDefault();
+            pick(matches[0]);
+          }
+        }}
+        placeholder="Search by name or email"
+        className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] px-2.5 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+      />
+      <ul className="scroll-thin mt-2 max-h-72 overflow-y-auto rounded-md border border-[var(--color-line)]">
+        {matches.map((member) => (
+          <li key={member.userId}>
+            <button onClick={() => pick(member)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface)]">
+              <Avatar name={member.name} url={member.avatarUrl} seed={member.userId} size="md" />
+              <span className="min-w-0 flex-1 truncate">{member.name}</span>
+              <span className="truncate text-xs text-[var(--color-muted)]">{member.workspaceRole.name}</span>
+            </button>
+          </li>
+        ))}
+        {members.length > 0 && matches.length === 0 && <li className="px-3 py-2 text-xs text-[var(--color-muted)]">Nobody matches.</li>}
+      </ul>
+    </Modal>
+  );
+}
+
 /** Chooses a document from those the reader can open, searched by title as it is typed. */
-function DocumentPicker({
+export function DocumentPicker({
   workspaceId,
   confirmLabel,
+  title = 'Show a document',
+  description = 'Its opening text is shown on the slide and stays current.',
   onPick,
   onCancel,
 }: {
   workspaceId: string;
   confirmLabel: string;
+  title?: string;
+  description?: string;
   onPick: (doc: { id: string; title: string }) => void;
   onCancel: () => void;
 }) {
@@ -374,8 +577,8 @@ function DocumentPicker({
   const chosen = items[cursor];
   return (
     <Modal
-      title="Show a document"
-      description="Its opening text is shown on the slide and stays current."
+      title={title}
+      description={description}
       onClose={onCancel}
       wide
       footer={
@@ -435,6 +638,8 @@ registerSlideInsertTool({ id: 'sheet-chart', label: 'Spreadsheet chart', icon: '
 registerSlideInsertTool({ id: 'sheet-cell', label: 'Spreadsheet cell', icon: 'table', order: 51, run: (ctx) => ask('cell', ctx) });
 registerSlideInsertTool({ id: 'work-item', label: 'Work item', icon: 'kanban', order: 52, run: (ctx) => ask('workItem', ctx) });
 registerSlideInsertTool({ id: 'document-excerpt', label: 'Document', icon: 'file-earmark-text', order: 53, run: (ctx) => ask('document', ctx) });
+registerSlideInsertTool({ id: 'work-item-progress', label: 'Work item progress', icon: 'bar-chart-steps', order: 54, run: (ctx) => ask('progress', ctx) });
+registerSlideInsertTool({ id: 'person', label: 'Person', icon: 'person-badge', order: 55, run: (ctx) => ask('person', ctx) });
 
 // ---------------------------------------------------------------------------
 // Pasting from a canvas

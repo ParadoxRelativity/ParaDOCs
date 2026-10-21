@@ -51,7 +51,7 @@ const ZOOMS: Zoom[] = ['fit', 0.25, 0.5, 0.75, 1, 1.5, 2];
 
 /** What a copy puts on the clipboard: readable text for anywhere else, and the elements themselves for another slide. */
 const CLIP_MIME = 'application/x-paradocs-slide-elements';
-const PASTEABLE: SlideElementType[] = ['text', 'shape', 'image', 'video', 'embed', 'sheetCell', 'sheetChart', 'workItem', 'connector', 'richText', 'table', 'link'];
+const PASTEABLE: SlideElementType[] = ['text', 'shape', 'image', 'video', 'embed', 'sheetCell', 'sheetChart', 'workItem', 'workItemProgress', 'person', 'connector', 'richText', 'table', 'link'];
 const MAX_PASTE = 200;
 
 interface ClipPayload {
