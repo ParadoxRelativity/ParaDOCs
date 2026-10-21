@@ -81,6 +81,8 @@ export interface PptxOptions {
   fileName: string;
   rasterize?: ShapeRasterizer;
   onProgress?: (progress: ImportProgress) => void;
+  /** Scales the slides to fit this size, centred, instead of choosing one for them (slides pasted into a deck). */
+  fitTo?: SlideSize;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +144,8 @@ interface Shared {
   report: ReportBuilder;
   size: SlideSize;
   k: number;
+  /** Where the source slide's corner lands, in slide units: off zero only when fitting to another size. */
+  origin: { x: number; y: number };
   theme: Theme;
   defaultFontSize: number;
   rasterize?: ShapeRasterizer;
@@ -189,6 +193,13 @@ export function chooseSlideSize(cx: number, cy: number): { size: SlideSize; k: n
   else if (ratio >= 1) size = { width: 1920, height: Math.max(160, Math.round((1920 * cy) / cx)) };
   else size = { width: Math.max(160, Math.round((1920 * cx) / cy)), height: 1920 };
   return { size, k: size.width / cx };
+}
+
+/** The source size scaled to fit `fitTo` and centred in it, or {@link chooseSlideSize}'s pick when there is none. */
+export function fitSlideSize(cx: number, cy: number, fitTo?: SlideSize): { size: SlideSize; k: number; origin: { x: number; y: number } } {
+  if (!fitTo) return { ...chooseSlideSize(cx, cy), origin: { x: 0, y: 0 } };
+  const k = Math.min(fitTo.width / cx, fitTo.height / cy);
+  return { size: fitTo, k, origin: { x: Math.round((fitTo.width - cx * k) / 2), y: Math.round((fitTo.height - cy * k) / 2) } };
 }
 
 const THEME_SLOT_TAGS: [string, ThemeColorSlot][] = [
@@ -301,8 +312,8 @@ function readXfrm(scope: Scope, xfrm: Element | null, tf: Affine): Placed | null
   const cx = numAttr(ext, 'cx') ?? 0;
   const cy = numAttr(ext, 'cy') ?? 0;
   return {
-    x: emu(shared, tf.dx + tf.sx * x),
-    y: emu(shared, tf.dy + tf.sy * y),
+    x: shared.origin.x + emu(shared, tf.dx + tf.sx * x),
+    y: shared.origin.y + emu(shared, tf.dy + tf.sy * y),
     width: emu(shared, tf.sx * cx),
     height: emu(shared, tf.sy * cy),
     rotation: ((numAttr(xfrm, 'rot') ?? 0) / 60000) % 360,
@@ -1241,7 +1252,7 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
   }
 
   const sldSz = child(presentation.root, 'sldSz');
-  const { size, k } = chooseSlideSize(numAttr(sldSz, 'cx') ?? 9144000, numAttr(sldSz, 'cy') ?? 6858000);
+  const { size, k, origin } = fitSlideSize(numAttr(sldSz, 'cx') ?? 9144000, numAttr(sldSz, 'cy') ?? 6858000, options.fitTo);
 
   // The first master in the deck's list styles the deck; layouts of any master are kept, since slides may sit on them.
   const masterRels = kids(child(presentation.root, 'sldMasterIdLst'), 'sldMasterId')
@@ -1262,6 +1273,7 @@ export async function parsePptx(zip: ZipFiles, options: PptxOptions): Promise<Im
     report,
     size,
     k,
+    origin,
     theme,
     defaultFontSize: 0,
     rasterize: options.rasterize,
