@@ -80,6 +80,17 @@ export function descendants(el: Element | null | undefined, name: string): Eleme
   return out;
 }
 
+const RELATIONSHIPS_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+/**
+ * An element's relationship id (`r:id`). {@link attr} cannot find it on
+ * elements that also carry a plain `id`, such as `p:sldId`: the plain one wins.
+ */
+export function relId(el: Element | null | undefined): string | undefined {
+  if (!el) return undefined;
+  return el.getAttributeNS(RELATIONSHIPS_NS, 'id') || el.getAttribute('r:id') || undefined;
+}
+
 /** An attribute by its local name, whatever its prefix (`embed` finds `r:embed`). */
 export function attr(el: Element | null | undefined, name: string): string | undefined {
   if (!el) return undefined;
