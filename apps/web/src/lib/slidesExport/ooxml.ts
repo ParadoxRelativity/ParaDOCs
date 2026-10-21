@@ -221,7 +221,8 @@ export function coverCrop(image: { width: number; height: number } | undefined, 
 
 export function srcRectXml(crop: Crop | undefined): string {
   if (!crop) return '';
-  const part = (name: string, v: number) => (v > 0.0005 ? ` ${name}="${Math.round(v * 100000)}"` : '');
+  // A negative inset shows a margin around the picture.
+  const part = (name: string, v: number) => (Math.abs(v) > 0.0005 ? ` ${name}="${Math.round(v * 100000)}"` : '');
   const attrs = part('l', crop.l) + part('t', crop.t) + part('r', crop.r) + part('b', crop.b);
   return attrs ? `<a:srcRect${attrs}/>` : '';
 }
