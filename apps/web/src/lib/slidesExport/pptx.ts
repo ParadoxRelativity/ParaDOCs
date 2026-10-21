@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type PptxGenJSType from 'pptxgenjs';
 import {
+  DEFAULT_COLUMN_GAP,
   buildPlan,
   coveredCells,
   findLayout,
@@ -9,6 +10,8 @@ import {
   shapeGeometry,
   supportsParagraphBuild,
   tableCellKey,
+  textColumns,
+  textInsets,
   themeColor,
   weightsOf,
   type BuildUnit,
@@ -133,6 +136,8 @@ interface SlideMeta {
   /** Shape name -> the placeholder it fills. */
   placeholders: Map<string, PlaceholderSpec>;
   crops: Map<string, Crop>;
+  /** Shape name -> the `a:bodyPr` attributes that lay its text in columns, which pptxgenjs cannot write. */
+  columns: Map<string, string>;
   slideNumberShapes: string[];
   /** Elements that animate, by shape name, with whether they build by paragraph. */
   textBuilds: Map<string, boolean>;
@@ -214,6 +219,7 @@ class Exporter {
       layoutIndex,
       placeholders: new Map(),
       crops: new Map(),
+      columns: new Map(),
       slideNumberShapes: [],
       textBuilds: new Map(),
     };
@@ -279,7 +285,7 @@ class Exporter {
 
     switch (el.type) {
       case 'richText':
-        return this.addRichText(slide, el, name);
+        return this.addRichText(slide, el, name, meta);
       case 'text':
         slide.addText(el.text, {
           ...this.box(el),
@@ -354,15 +360,20 @@ class Exporter {
     return out;
   }
 
-  private addRichText(slide: PptxSlide, el: RichTextElement, name: string) {
+  private addRichText(slide: PptxSlide, el: RichTextElement, name: string, meta: SlideMeta) {
     const paragraphs = el.paragraphs?.length ? el.paragraphs : [{ runs: el.text ? [{ text: el.text }] : [] }];
     const fill = el.fill && el.fill !== 'transparent' ? this.color(el.fill) : undefined;
+    const inset = textInsets(el);
+    const columns = textColumns(el);
+    if (columns > 1) meta.columns.set(name, ` numCol="${columns}" spcCol="${emu(el.columnGap ?? DEFAULT_COLUMN_GAP)}"`);
     slide.addText(this.runs(el, paragraphs) as never, {
       ...this.box(el),
       color: this.color(el.color ?? 'theme:text1', '000000'),
       fontFace: el.fontFamily,
       valign: el.verticalAlign ?? 'top',
-      margin: MARGIN_PT,
+      // pptxgenjs reads the sides as left, right, bottom, top, whatever its documentation says.
+      margin: [inset.left, inset.right, inset.bottom, inset.top].map(points),
+      wrap: el.wrap !== false,
       ...(fill ? { fill: { color: fill } } : {}),
       ...(el.stroke ? { line: { color: this.color(el.stroke), width: points(el.strokeWidth ?? 2) } } : {}),
       fit: el.autofit === false ? 'none' : 'shrink',
@@ -838,6 +849,7 @@ export async function buildPptx(deck: DeckSnapshot, options: PptxExportOptions):
       layoutIndex: 0,
       placeholders: new Map(),
       crops: new Map(),
+      columns: new Map(),
       slideNumberShapes: [],
       textBuilds: new Map(),
     };
@@ -980,6 +992,7 @@ async function finish(pkg: Package, deck: DeckSnapshot, exporter: Exporter, meta
 
     for (const [name, spec] of meta.placeholders) xml = patchBlock(xml, name, (b) => tieToPlaceholder(b, spec));
     for (const name of meta.slideNumberShapes) xml = patchBlock(xml, name, asSlideNumberField);
+    for (const [name, attrs] of meta.columns) xml = patchBlock(xml, name, (b) => b.replace('<a:bodyPr', `<a:bodyPr${attrs}`));
     for (const [name, crop] of meta.crops) {
       const rect = srcRectXml(crop);
       if (rect) xml = patchBlock(xml, name, (b) => b.replace('<a:stretch>', `${rect}<a:stretch>`));

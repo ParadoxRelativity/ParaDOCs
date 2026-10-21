@@ -4,6 +4,7 @@ import {
   MAX_LIST_LEVEL,
   SLIDE_FONTS,
   resolveSlideColor,
+  textColumns,
   type RichAlign,
   type RichTextElement,
   type RichTextVerticalAlign,
@@ -179,9 +180,23 @@ function RichTextInspector({ ctx }: { ctx: SlideEditorContext }) {
             onChange={(value) => patch({ verticalAlign: value === 'top' ? undefined : value })}
           />
         </Field>
+        <Field label="Columns">
+          <SelectInput
+            label="Columns"
+            value={String(textColumns(boxes[0]))}
+            disabled={disabled}
+            options={['1', '2', '3', '4'].map((v) => ({ value: v, label: v }))}
+            // Written outright, so a box can undo what its placeholder sets.
+            onChange={(value) => patch({ columns: Number(value) })}
+          />
+        </Field>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={boxes[0].autofit !== false} disabled={disabled} onChange={(e) => patch({ autofit: e.target.checked ? undefined : false })} />
           <span>Shrink text on overflow</span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={boxes[0].wrap !== false} disabled={disabled} onChange={(e) => patch({ wrap: e.target.checked })} />
+          <span>Wrap text in box</span>
         </label>
       </Group>
 

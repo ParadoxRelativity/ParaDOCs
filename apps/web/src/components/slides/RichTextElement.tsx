@@ -7,10 +7,13 @@ import { EditorState, Selection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { redo, undo, yUndoPlugin, ySyncPlugin, ySyncPluginKey } from 'y-prosemirror';
 import {
+  DEFAULT_COLUMN_GAP,
   fontStack,
   listNumbers,
   resolveSlideColor,
   richTextBody,
+  textColumns,
+  textInsets,
   type RichParagraph,
   type RichTextElement,
   type Theme,
@@ -18,12 +21,11 @@ import {
 } from '@paradocs/shared';
 import { MentionPicker, mentionQueryAt, useMemberNames, type MentionPick } from '../canvas/MentionText';
 import { backspaceInList, indentCommand, numberingPlugin, splitParagraph, toggleSimpleMark } from './richTextCommands';
-import { markStyle, paragraphStyle, px, richTextSchema, safeHref } from './richTextModel';
+import { insetPadding, markStyle, paragraphStyle, px, richTextSchema, safeHref } from './richTextModel';
 import { clearEditor, publishEditor } from './richTextSession';
 import { SlideDocContext, registerSlideElementRenderer, type SlideElementRendererProps } from './slideExtensions';
 import './slideText.css';
 
-const PADDING = 12;
 const DEFAULT_SIZE = 32;
 const DEFAULT_LINE_SPACING = 1.2;
 const MIN_FIT = 0.2;
@@ -36,7 +38,11 @@ const MIN_FIT = 0.2;
  * Autofit shrinks the text rather than letting it overflow: the box measures
  * its content at full size, and when that is taller than the box, searches for
  * the largest `--fit` (a multiplier every size in the box is written in terms
- * of) that makes it fit.
+ * of) that makes it fit. Text in columns fills the box's height column by
+ * column, so there it overflows sideways, into a column past the last.
+ *
+ * Unwrapped text runs on past the box's sides, as PowerPoint draws it, out
+ * from the side its alignment holds to.
  */
 function Frame({
   element,
@@ -56,6 +62,9 @@ function Frame({
   const outer = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   const autofit = element.autofit !== false;
+  const inset = textInsets(element);
+  const columns = textColumns(element);
+  const wrap = element.wrap !== false;
 
   const fit = useRef(() => {});
   fit.current = () => {
@@ -64,14 +73,15 @@ function Frame({
     if (!box || !content) return;
     box.style.setProperty('--fit', '1');
     if (!autofit) return;
-    const available = box.clientHeight - PADDING * 2;
-    if (available <= 0 || content.offsetHeight <= available + 0.5) return;
+    const available = box.clientHeight - inset.top - inset.bottom;
+    const fits = () => (columns > 1 ? content.scrollWidth <= content.clientWidth + 0.5 : content.offsetHeight <= available + 0.5);
+    if (available <= 0 || fits()) return;
     let low = MIN_FIT;
     let high = 1;
     for (let i = 0; i < 9; i++) {
       const mid = (low + high) / 2;
       box.style.setProperty('--fit', String(mid));
-      if (content.offsetHeight <= available + 0.5) low = mid;
+      if (fits()) low = mid;
       else high = mid;
     }
     box.style.setProperty('--fit', String(low));
@@ -102,8 +112,11 @@ function Frame({
     width: '100%',
     height: '100%',
     boxSizing: 'border-box',
-    padding: PADDING,
-    overflow: 'hidden',
+    alignItems: wrap ? undefined : element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
+    padding: insetPadding(element),
+    overflow: wrap ? 'hidden' : 'visible',
+    whiteSpace: wrap ? undefined : 'pre',
+    overflowWrap: wrap ? undefined : 'normal',
     fontFamily: fontStack(family),
     fontSize: px(element.fontSize ?? DEFAULT_SIZE),
     lineHeight: element.lineSpacing ?? DEFAULT_LINE_SPACING,
@@ -118,9 +131,13 @@ function Frame({
     border: element.stroke ? `${element.strokeWidth ?? 2}px solid ${resolveSlideColor(element.stroke, theme)}` : undefined,
     ['--slide-link' as string]: theme.colors.hyperlink,
   };
+  const contentStyle: CSSProperties =
+    columns > 1
+      ? { flex: '1 1 0', minHeight: 0, position: 'relative', columnCount: columns, columnGap: element.columnGap ?? DEFAULT_COLUMN_GAP, columnFill: 'auto' }
+      : { flex: 'none', position: 'relative', ...(wrap ? {} : { width: 'max-content', minWidth: '100%' }) };
   return (
     <div ref={outer} className="slide-text" style={style} data-rich-text>
-      <div ref={inner} style={{ flex: 'none', position: 'relative' }} data-placeholder={!readOnly && empty ? (element.prompt ?? 'Click to add text') : undefined} className={!readOnly && empty ? 'slide-text-empty' : undefined}>
+      <div ref={inner} style={contentStyle} data-placeholder={!readOnly && empty ? (element.prompt ?? 'Click to add text') : undefined} className={!readOnly && empty ? 'slide-text-empty' : undefined}>
         {children}
       </div>
     </div>
@@ -133,7 +150,14 @@ function Paragraphs({ paragraphs, names, link }: { paragraphs: RichParagraph[]; 
   return (
     <>
       {paragraphs.map((paragraph, i) => (
-        <p key={i} className="slide-p" data-bullet={paragraph.bullet} data-num={numbers[i] ?? undefined} style={paragraphStyle(paragraph)}>
+        <p
+          key={i}
+          className="slide-p"
+          data-bullet={paragraph.bullet}
+          data-num={numbers[i] ?? undefined}
+          data-empty={paragraph.bullet && !paragraph.runs.some((run) => run.mention || run.text) ? '' : undefined}
+          style={paragraphStyle(paragraph)}
+        >
           {paragraph.runs.length === 0 ? (
             <br />
           ) : (
