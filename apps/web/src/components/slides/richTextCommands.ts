@@ -149,15 +149,25 @@ export const indentCommand = (delta: number): Command => (state, dispatch, view)
   return true;
 };
 
-/** Numbers each numbered paragraph by decoration, so the number is never stored and follows edits and reordering. */
+/**
+ * Numbers each numbered paragraph by decoration, so the number is never stored
+ * and follows edits and reordering. Also marks empty list items, which show no
+ * bullet (as in PowerPoint) unless the caret is in one.
+ */
 export function numberingPlugin(): Plugin {
   return new Plugin({
     props: {
       decorations(state) {
-        const items: { pos: number; size: number; bullet?: RichBullet; level: number }[] = [];
-        state.doc.forEach((node, pos) => items.push({ pos, size: node.nodeSize, bullet: node.attrs.bullet, level: levelOf(node.attrs) }));
+        const items: { pos: number; size: number; bullet?: RichBullet; level: number; empty: boolean }[] = [];
+        state.doc.forEach((node, pos) => items.push({ pos, size: node.nodeSize, bullet: node.attrs.bullet, level: levelOf(node.attrs), empty: node.content.size === 0 }));
         const numbers = listNumbers(items);
-        const decorations = items.flatMap((item, i) => (numbers[i] === null ? [] : [Decoration.node(item.pos, item.pos + item.size, { 'data-num': String(numbers[i]) })]));
+        const caret = state.selection.$head.pos;
+        const decorations = items.flatMap((item, i) => {
+          const attrs: Record<string, string> = {};
+          if (numbers[i] !== null) attrs['data-num'] = String(numbers[i]);
+          if (item.bullet && item.empty && (caret <= item.pos || caret >= item.pos + item.size)) attrs['data-empty'] = '';
+          return Object.keys(attrs).length ? [Decoration.node(item.pos, item.pos + item.size, attrs)] : [];
+        });
         return DecorationSet.create(state.doc, decorations);
       },
     },

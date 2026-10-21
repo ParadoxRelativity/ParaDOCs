@@ -29,6 +29,7 @@ import Icon from '../Icon';
 import { Button, IconButton } from '../ui';
 import BackgroundEditor, { ThemeColorPicker, uploadPicture } from './BackgroundEditor';
 import { Field, NumberInput, SelectInput, ToolButton } from './inspectorParts';
+import { insetPadding } from './richTextModel';
 import type { SlideEditorContext } from './slideExtensions';
 import { SlideFrameLayer, backgroundStyle } from './SlideView';
 
@@ -423,7 +424,7 @@ function Preview({
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: s.verticalAlign === 'bottom' ? 'flex-end' : s.verticalAlign === 'middle' ? 'center' : 'flex-start',
-                  padding: 12,
+                  padding: insetPadding(s),
                   boxSizing: 'border-box',
                   overflow: 'hidden',
                   fontFamily: fontStack(s.fontFamily ?? (p.kind === 'title' ? theme.fonts.heading : theme.fonts.body)),

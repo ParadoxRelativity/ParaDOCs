@@ -1,9 +1,12 @@
 import {
+  DEFAULT_COLUMN_GAP,
   MAPPED_COLOR_SLOTS,
   THEME_COLOR_SLOTS,
   animationDelay,
   animationDuration,
   isThemeColor,
+  textColumns,
+  textInsets,
   type BuildUnit,
   type ColorMap,
   type LayoutPlaceholder,
@@ -330,7 +333,6 @@ export function phXml(spec: PlaceholderSpec): string {
 }
 
 const ANCHOR = { top: 't', middle: 'ctr', bottom: 'b' } as const;
-const INSET = 76200;
 
 function defRPr(style: PlaceholderStyle, extra = ''): string {
   const attrs =
@@ -345,7 +347,10 @@ function defRPr(style: PlaceholderStyle, extra = ''): string {
 function bodyPrXml(style: PlaceholderStyle): string {
   const anchor = ANCHOR[style.verticalAlign ?? 'top'];
   const fit = style.autofit === false ? '<a:noAutofit/>' : '<a:normAutofit/>';
-  return `<a:bodyPr vert="horz" lIns="${INSET}" tIns="${INSET}" rIns="${INSET}" bIns="${INSET}" rtlCol="0" anchor="${anchor}">${fit}</a:bodyPr>`;
+  const inset = textInsets(style);
+  const columns = textColumns(style);
+  const layout = (style.wrap === false ? ' wrap="none"' : '') + (columns > 1 ? ` numCol="${columns}" spcCol="${emu(style.columnGap ?? DEFAULT_COLUMN_GAP)}"` : '');
+  return `<a:bodyPr vert="horz"${layout} lIns="${emu(inset.left)}" tIns="${emu(inset.top)}" rIns="${emu(inset.right)}" bIns="${emu(inset.bottom)}" rtlCol="0" anchor="${anchor}">${fit}</a:bodyPr>`;
 }
 
 function shapeFillXml(style: PlaceholderStyle): string {

@@ -223,9 +223,37 @@ export interface RichTextElement extends SlideElementBase {
   lineSpacing?: number;
   /** Shrink the text when it overflows the box. On unless set to false. */
   autofit?: boolean;
+  /** Break lines at the box's width. On unless set to false; off, a line runs on past the box. */
+  wrap?: boolean;
+  /** Columns the text flows through, each filled before the next. Default 1. */
+  columns?: number;
+  /** Space between columns, in slide units. Default 24. */
+  columnGap?: number;
+  /** Space between each edge of the box and its text, in slide units. Default 12. */
+  insetLeft?: number;
+  insetTop?: number;
+  insetRight?: number;
+  insetBottom?: number;
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
+}
+
+export const DEFAULT_TEXT_INSET = 12;
+export const DEFAULT_COLUMN_GAP = 24;
+/** PowerPoint's limit, which a box imported from it may reach. */
+export const MAX_TEXT_COLUMNS = 16;
+
+/** The space a text box leaves around its text on each side, in slide units. */
+export function textInsets(box: Pick<RichTextElement, 'insetLeft' | 'insetTop' | 'insetRight' | 'insetBottom'>): { left: number; top: number; right: number; bottom: number } {
+  const side = (value: number | undefined) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : DEFAULT_TEXT_INSET);
+  return { left: side(box.insetLeft), top: side(box.insetTop), right: side(box.insetRight), bottom: side(box.insetBottom) };
+}
+
+/** How many columns a text box flows its text through, from 1. */
+export function textColumns(box: Pick<RichTextElement, 'columns'>): number {
+  const n = Math.floor(Number(box.columns));
+  return Number.isFinite(n) ? Math.min(Math.max(n, 1), MAX_TEXT_COLUMNS) : 1;
 }
 
 export interface TableCell {
