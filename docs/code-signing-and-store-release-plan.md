@@ -14,7 +14,7 @@ The ticket asks for three things:
 
 ## TL;DR
 
-- **Most of the CI work is already done.** `.github/workflows/release.yml` already takes optional signing secrets for macOS, Android and iOS, and skips signing when they're missing. Android already builds a signed APK and an `.aab` once it has a keystore. iOS already archives an `.ipa` once it has a certificate and a provisioning profile. **What's mostly missing is accounts and credentials, not code.**
+- **Most of the CI work is already done.** `.github/workflows/build.yml` (called by the Release and Dev build workflows) already takes optional signing secrets for macOS, Android and iOS, and skips signing when they're missing. Android already builds a signed APK and an `.aab` once it has a keystore. iOS already archives an `.ipa` once it has a certificate and a provisioning profile. **What's mostly missing is accounts and credentials, not code.**
 - **Windows is the exception.** The current note to "use `WIN_CSC_LINK`" (a `.pfx` file) no longer works. Since June 2023, CAs only issue code-signing keys on hardware or in a cloud HSM, so the key can't be exported. **Recommendation: Azure Trusted Signing** (Microsoft is renaming it *Artifact Signing*). It costs about $10 a month, and electron-builder 26 supports it directly through `win.azureSignOptions`.
 - **Neither store will accept the app as it is today.** The fixes can stay small, along the lines of what Teams and Slack do (§5.1):
   - an in-app "Request deletion" in Settings, which notifies every server admin and flags the account in the admin console (PARA-42)
@@ -39,7 +39,7 @@ The ticket asks for three things:
 Other things worth knowing:
 
 - **Identifiers:** `com.paradocs.desktop` and `com.paradocs.mobile`. Both stores tie these to the app forever, so settle them before the first upload (see Decisions).
-- **Version and build numbers:** both mobile platforms use `major*10000 + minor*100 + patch` (`apps/mobile/android/app/build.gradle`, and the `Version` step in `release.yml`). Both stores reject a build number they've already seen, so **re-running a release for a version that's already uploaded will fail at upload.** A hotfix always needs a version bump. That's fine, but it's worth knowing. Minor and patch numbers above 99 would collide.
+- **Version and build numbers:** both mobile platforms use `major*10000 + minor*100 + patch` (`apps/mobile/android/app/build.gradle`, and the `Version` step in `build.yml`). Both stores reject a build number they've already seen, so **re-running a release for a version that's already uploaded will fail at upload.** A hotfix always needs a version bump. That's fine, but it's worth knowing. Minor and patch numbers above 99 would collide.
 - **The README release steps only bump the desktop version.** `verify` fails if `apps/mobile/package.json` doesn't match. The README should say `npm version X.Y.Z --workspace=@paradocs/desktop --workspace=@paradocs/mobile --no-git-tag-version`.
 - **iOS project gaps:** no `PrivacyInfo.xcprivacy`, and no `ITSAppUsesNonExemptEncryption` key in `Info.plist`. The project uses `CODE_SIGN_STYLE = Automatic` with no `DEVELOPMENT_TEAM`, and CI overrides that to manual.
 - **Android manifest:** `usesCleartextTraffic="true"` and `allowMixedContent` are there for HTTP servers on a LAN. Play allows both, but they have to be declared accurately in the Data safety form.
@@ -51,7 +51,7 @@ Other things worth knowing:
 
 ### 2.1 Why the existing plan doesn't work
 
-The comment in `release.yml` expects a certificate in `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`. Since the CA/Browser Forum baseline change of 1 June 2023, every OV and EV code-signing certificate must keep its private key on a FIPS 140-2 Level 2 device: a USB token, an HSM, or a cloud HSM. No CA will hand you a `.pfx` to put in a GitHub secret. EV certificates also stopped getting instant SmartScreen reputation in 2024, so paying the EV premium buys little for this project.
+The comment in `build.yml` expects a certificate in `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`. Since the CA/Browser Forum baseline change of 1 June 2023, every OV and EV code-signing certificate must keep its private key on a FIPS 140-2 Level 2 device: a USB token, an HSM, or a cloud HSM. No CA will hand you a `.pfx` to put in a GitHub secret. EV certificates also stopped getting instant SmartScreen reputation in 2024, so paying the EV premium buys little for this project.
 
 ### 2.2 Options
 
@@ -87,7 +87,7 @@ win:
 
 This needs one caveat handled: when `azureSignOptions` is present, electron-builder tries to sign and fails if there are no Azure credentials. Forks and local builds would then break. Keep the "sign only when credentials exist" pattern by **adding the block at build time** instead of committing it. One way is a `--config.win.azureSignOptions.*` override on the command line. Another is a small `electron-builder.sign.yml` that `extends` the base config and is used only when the secrets are present.
 
-`release.yml`, in the `build` job, Windows only:
+`build.yml`, in the `build` job, Windows only:
 
 ```yaml
 - name: Configure Windows signing
@@ -199,7 +199,7 @@ Google is rolling out **developer verification for all apps installed on certifi
 
 Two ways to do it. **Recommendation: B**, because it removes the yearly certificate and profile rotation.
 
-**A. Manual (what `release.yml` expects today)**
+**A. Manual (what `build.yml` expects today)**
 
 1. In *Certificates, Identifiers & Profiles*, register the **App ID** `com.paradocs.mobile` with no extra capabilities. Add Push Notifications or Associated Domains later only if they're needed.
 2. Create an **Apple Distribution** certificate (CSR from Keychain Access), export it as `.p12` with a password → `IOS_CERTIFICATE_P12` (base64) and `IOS_CERTIFICATE_PASSWORD`.
