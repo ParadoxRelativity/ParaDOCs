@@ -1,0 +1,38 @@
+# Makes a test build of the dev branch.
+#
+# Every push to dev runs the Build workflow (build.yml) as a test build.
+# Nothing is released: the installers and APK are kept as workflow artifacts
+# on the run for 14 days, and the server image is pushed as `dev` and as its
+# own version (1.2.4-dev.17), never as latest. Once dev has been tried, it is
+# merged into main and tagged, which the Release workflow (release.yml) builds
+# and releases.
+#
+# This workflow can read the repository and push images, and nothing more: it
+# cannot create or change a release.
+name: Dev build
+
+on:
+  push:
+    branches: [dev]
+  # Re-runs a test build without a new push. Run it on dev; the build refuses
+  # any other branch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to dev replaces a test build still running.
+concurrency:
+  group: dev-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    with:
+      channel: dev
+    secrets: inherit
+    permissions:
+      contents: read
+      packages: write # the server image
