@@ -20,7 +20,7 @@ import {
   type PresentationSummary,
 } from '@paradocs/shared';
 import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
-import { query } from '../db/pool.js';
+import { query, transaction } from '../db/pool.js';
 import { HttpError, badRequest, notFound, parse } from '../lib/http.js';
 import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
 import { assertFolderAccess, assertMoveKeepsAccess, assertPresentationAccess, presentationLevelSql, roleIdSql } from '../lib/access.js';
@@ -29,6 +29,7 @@ import { treeChanged } from '../lib/treeEvents.js';
 import { loadDeck } from '../lib/deck.js';
 import { liveDocument } from '../lib/liveDocuments.js';
 import { activeShows } from '../lib/liveShows.js';
+import { linkTemplateAssetsToPresentation, usableTemplate } from './presentationTemplates.js';
 
 /**
  * Presentations, as their own application.
@@ -115,23 +116,30 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
     const input = parse(createPresentationSchema, req.body ?? {});
     // Filing into a folder takes being allowed to change what is in it.
     if (input.folderId) await assertFolderAccess(req, input.folderId, 'edit', req.params.id, 'slides');
-    const { rows } = await query<{ id: string }>(
-      `INSERT INTO presentations (workspace_id, folder_id, title, icon, created_by, ydoc)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id`,
-      [
-        req.params.id,
-        input.folderId ?? null,
-        input.title || 'Untitled',
-        input.icon ?? null,
-        req.user!.id,
-        // Starting from a theme: its styling and a first Title slide, so the theme shows at once.
-        input.themeId ? Buffer.from(createStyledDeck(input.themeId)) : null,
-      ],
-    );
+    // Starting from a saved template: a copy of its deck, which is its look and one Title slide.
+    const template = input.templateId ? await usableTemplate(req.params.id, input.templateId) : null;
+    const id = await transaction(async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO presentations (workspace_id, folder_id, title, icon, created_by, ydoc)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [
+          req.params.id,
+          input.folderId ?? null,
+          input.title || 'Untitled',
+          input.icon ?? null,
+          req.user!.id,
+          // Starting from a theme: its styling and a first Title slide, so the theme shows at once.
+          template ? template.ydoc : input.themeId ? Buffer.from(createStyledDeck(input.themeId)) : null,
+        ],
+      );
+      // The deck shows the template's pictures, so its readers may read them, after the template is gone too.
+      if (input.templateId) await linkTemplateAssetsToPresentation(client, input.templateId, rows[0].id);
+      return rows[0].id;
+    });
     treeChanged(req.params.id, 'slides');
     reply.status(201);
-    return fetchPresentation(rows[0].id, req.user!.id);
+    return fetchPresentation(id, req.user!.id);
   });
 
   /**

@@ -83,7 +83,7 @@ async function whenReady(root: HTMLElement, deck: DeckSnapshot, cancelled: () =>
     );
   await Promise.all([...pictures, ...backgrounds]);
   const deadline = Date.now() + LIVE_WAIT_MS;
-  while (!cancelled() && Date.now() < deadline && /Loading…/.test(root.textContent ?? '')) await new Promise((resolve) => setTimeout(resolve, 150));
+  while (!cancelled() && Date.now() < deadline && (/Loading…/.test(root.textContent ?? '') || root.querySelector('[data-live-loading]'))) await new Promise((resolve) => setTimeout(resolve, 150));
   // One more frame so layout (autofit text in particular) settles at the final fonts.
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }

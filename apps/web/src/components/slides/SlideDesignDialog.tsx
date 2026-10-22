@@ -4,15 +4,22 @@ import {
   STARTER_THEMES,
   THEME_COLOR_SLOTS,
   applyStarterTheme,
+  applyTemplate,
   resolveSlideColor,
   updateTheme,
   writeDeckSettings,
   type DeckSettings,
+  type PresentationTemplateSummary,
 } from '@paradocs/shared';
+import { usePresentationTemplateActions, usePresentationTemplates, useWorkspaces } from '../../api/hooks';
 import { useIsMobile } from '../../lib/mobile';
+import { canFrom } from '../../lib/permissions';
 import { cx } from '../../lib/util';
+import Icon from '../Icon';
+import { useToast } from '../Toast';
 import { Button } from '../ui';
 import { Modal } from '../Modal';
+import { TemplateGrid } from './PresentationTemplates';
 import BackgroundEditor, { SLOT_LABELS, uploadPicture } from './BackgroundEditor';
 import { ColorInput, Field, SelectInput } from './inspectorParts';
 import type { SlideEditorContext } from './slideExtensions';
@@ -31,7 +38,20 @@ const TABS: { id: Tab; label: string }[] = [
  * slide, switch or tune the theme, and turn the footer, slide number and date
  * on. A full-screen sheet on a phone, with controls sized for touch.
  */
-export default function SlideDesignDialog({ ctx, onClose, onEditLayouts }: { ctx: SlideEditorContext; onClose: () => void; onEditLayouts: () => void }) {
+/** The template windows the Design window opens in its place, coming back to it when they close. */
+export type TemplateView = 'saveTemplate' | 'importTemplate' | 'manageTemplates';
+
+export default function SlideDesignDialog({
+  ctx,
+  onClose,
+  onEditLayouts,
+  onOpen,
+}: {
+  ctx: SlideEditorContext;
+  onClose: () => void;
+  onEditLayouts: () => void;
+  onOpen: (view: TemplateView) => void;
+}) {
   const mobile = useIsMobile();
   const [tab, setTab] = useState<Tab>('theme');
   return (
@@ -72,7 +92,7 @@ export default function SlideDesignDialog({ ctx, onClose, onEditLayouts }: { ctx
       </div>
       <div className={cx('scroll-thin space-y-4 overflow-y-auto text-sm', mobile ? 'min-h-0 flex-1' : 'max-h-[60vh]')}>
         {tab === 'slide' && <SlideTab ctx={ctx} />}
-        {tab === 'theme' && <ThemeTab ctx={ctx} />}
+        {tab === 'theme' && <ThemeTab ctx={ctx} onOpen={onOpen} />}
         {tab === 'footer' && <FooterTab ctx={ctx} />}
       </div>
     </Modal>
@@ -156,7 +176,7 @@ export function LayoutGlyph({ ctx, layoutId }: { ctx: SlideEditorContext; layout
   );
 }
 
-function ThemeTab({ ctx }: { ctx: SlideEditorContext }) {
+function ThemeTab({ ctx, onOpen }: { ctx: SlideEditorContext; onOpen: (view: TemplateView) => void }) {
   const { deck, canEdit, actions, theme } = ctx;
   const fonts = SLIDE_FONTS.map((f) => ({ value: f.family, label: f.family }));
   const update = (patch: Parameters<typeof updateTheme>[2]) => actions.edit((doc) => updateTheme(doc, theme.id, patch));
@@ -186,6 +206,7 @@ function ThemeTab({ ctx }: { ctx: SlideEditorContext }) {
         </div>
         <p className="text-xs text-[var(--color-muted)]">Changing the theme recolors everything that uses theme colors, on every slide. Colors you chose yourself stay.</p>
       </Section>
+      <TemplatesSection ctx={ctx} onOpen={onOpen} />
       <Section title={`Colors: ${theme.name}`}>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
           {THEME_COLOR_SLOTS.map((slot) => (
@@ -204,6 +225,63 @@ function ThemeTab({ ctx }: { ctx: SlideEditorContext }) {
         </Field>
       </Section>
     </>
+  );
+}
+
+/**
+ * The workspace's saved templates: choosing one puts its theme, master and
+ * layouts on this deck in one undoable step, each slide moving to the layout
+ * of the same kind. The deck's own look can be saved as one from here too.
+ */
+function TemplatesSection({ ctx, onOpen }: { ctx: SlideEditorContext; onOpen: (view: TemplateView) => void }) {
+  const { workspaceId, presentationId, canEdit, actions } = ctx;
+  const templates = usePresentationTemplates(workspaceId).data ?? [];
+  const templateActions = usePresentationTemplateActions(workspaceId);
+  const workspaces = useWorkspaces();
+  const canCreate = canFrom(workspaces.data?.find((w) => w.id === workspaceId)?.permissions)('slides.create');
+  const toast = useToast();
+  const [applied, setApplied] = useState<string | null>(null);
+
+  const apply = (template: PresentationTemplateSummary) =>
+    templateActions.apply.mutate(
+      { presentationId, templateId: template.id },
+      {
+        onSuccess: (style) => {
+          actions.edit((doc) => applyTemplate(doc, style));
+          setApplied(template.id);
+          toast(`Applied ${template.name}. Undo puts the old look back.`);
+        },
+        onError: (err) => toast(err instanceof Error ? err.message : 'Could not apply the template', 'error'),
+      },
+    );
+
+  if (templates.length === 0 && !canCreate) return null;
+  return (
+    <Section title="Templates">
+      <TemplateGrid workspaceId={workspaceId} selectedId={applied} disabled={!canEdit || templateActions.apply.isPending} onPick={apply} className="sm:grid-cols-3" />
+      {templates.length > 0 ? (
+        <p className="text-xs text-[var(--color-muted)]">A template brings its theme, master and layouts. Each slide keeps its content and moves to the layout of the same kind.</p>
+      ) : (
+        <p className="text-xs text-[var(--color-muted)]">No templates yet. Save this presentation&apos;s look, or import one from PowerPoint.</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {canCreate && (
+          <>
+            <Button variant="subtle" className="min-h-9 text-xs" onClick={() => onOpen('saveTemplate')}>
+              <Icon name="bookmark-star" /> Save as template…
+            </Button>
+            <Button variant="subtle" className="min-h-9 text-xs" onClick={() => onOpen('importTemplate')}>
+              <Icon name="box-arrow-in-down" /> Import a template…
+            </Button>
+          </>
+        )}
+        {templates.length > 0 && (
+          <Button variant="subtle" className="min-h-9 text-xs" onClick={() => onOpen('manageTemplates')}>
+            <Icon name="collection" /> Manage templates…
+          </Button>
+        )}
+      </div>
+    </Section>
   );
 }
 

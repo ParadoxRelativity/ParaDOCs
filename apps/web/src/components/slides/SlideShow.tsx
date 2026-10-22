@@ -18,6 +18,7 @@ import { assetUrl, isNativeApp } from '../../lib/server';
 import { cx } from '../../lib/util';
 import Icon from '../Icon';
 import SlideView from './SlideView';
+import { SlideLinkContext, SlideLinkPeek, useRefreshLiveContent, type SlideLinkTarget } from './slideLinks';
 import './slideBuildBuiltins';
 import { SlideShowStepContext, slideShowAddons, slideShowSteps } from './slideShowExtensions';
 
@@ -55,6 +56,9 @@ interface Leaving {
  * Its state lives in a SlideShowController (lib/slideShow), which add-ons
  * registered in slideShowExtensions.tsx receive: the presenter view, build
  * animations and live following all hang off that.
+ *
+ * Live content on a slide can be clicked: what it shows opens over the slide
+ * (slideLinks.tsx) until closed, and the show waits where it was.
  */
 export default function SlideShow({ slides, size, theme, presentationId, workspaceId, ydoc, startId, onExit }: Props) {
   const controller = useSlideShow(slides, startId, slideShowSteps);
@@ -72,8 +76,12 @@ export default function SlideShow({ slides, size, theme, presentationId, workspa
   const leavingKey = useRef(0);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
+  const [peek, setPeek] = useState<SlideLinkTarget | null>(null);
 
   useBackHandler(onExit);
+  // Registered after the show's own, so Android back closes what is open over the slide first.
+  useBackHandler(() => setPeek(null), { active: peek !== null });
+  useRefreshLiveContent();
 
   // Focus moves into the show, as PresentMode does, so keys are not aimed at the button behind it. It goes back on exit.
   useEffect(() => {
@@ -149,13 +157,22 @@ export default function SlideShow({ slides, size, theme, presentationId, workspa
     [controller, onExit],
   );
   // Keys are bound once but must act on the newest controller.
-  const latest = useRef({ run, jumping: state.jump !== '' });
-  latest.current = { run, jumping: state.jump !== '' };
+  const latest = useRef({ run, jumping: state.jump !== '', peeking: peek !== null });
+  latest.current = { run, jumping: state.jump !== '', peeking: peek !== null };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Browser and OS shortcuts (reload, devtools, switching apps) are not the show's.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // While something is open over the slide its keys are its own (arrows scroll it), and Escape closes it.
+      if (latest.current.peeking) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setPeek(null);
+        }
+        return;
+      }
       const command = showCommandForKey(e.key, { shift: e.shiftKey, jumping: latest.current.jumping });
       if (!command) return;
       // The show claims its keys before the editor underneath can act on them.
@@ -296,7 +313,9 @@ export default function SlideShow({ slides, size, theme, presentationId, workspa
           )}
           <div ref={incomingLayer} className="absolute overflow-hidden" style={layerStyle}>
             <SlideShowStepContext.Provider value={{ slideId: slide.id, step: state.step }}>
-              <SlideView slide={slide} size={size} theme={theme} width={width} />
+              <SlideLinkContext.Provider value={setPeek}>
+                <SlideView slide={slide} size={size} theme={theme} width={width} />
+              </SlideLinkContext.Provider>
             </SlideShowStepContext.Provider>
           </div>
         </>
@@ -353,6 +372,8 @@ export default function SlideShow({ slides, size, theme, presentationId, workspa
       {addons.map((addon) => (
         <div key={addon.id}>{addon.render(addonContext)}</div>
       ))}
+
+      {peek && <SlideLinkPeek target={peek} onClose={() => setPeek(null)} />}
     </div>,
     document.body,
   );

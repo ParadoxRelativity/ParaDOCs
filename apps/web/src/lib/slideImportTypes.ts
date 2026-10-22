@@ -149,3 +149,23 @@ export function isSlideImportFile(name: string): boolean {
   const lower = name.toLowerCase();
   return SLIDE_IMPORT_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
+
+// --- which files are presentation templates to import (PARA-110) ----------
+
+export const TEMPLATE_IMPORT_EXTENSIONS = ['.potx', '.pptx', '.thmx'];
+export const TEMPLATE_IMPORT_ACCEPT = [
+  ...TEMPLATE_IMPORT_EXTENSIONS,
+  'application/vnd.openxmlformats-officedocument.presentationml.template',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-officetheme',
+].join(',');
+
+export function isTemplateImportFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return TEMPLATE_IMPORT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** A template's name from its file: the file name without its extension. */
+export function templateNameOf(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, '').trim().slice(0, 100) || 'Imported template';
+}

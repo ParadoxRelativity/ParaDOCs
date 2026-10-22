@@ -103,6 +103,15 @@ const nodes: Record<string, NodeSpec> = {
     attrs: { userId: { default: '' }, label: { default: '' } },
     toDOM: (node) => ['span', { class: 'slide-mention', 'data-user-id': node.attrs.userId }, `@${node.attrs.label}`],
   },
+  // A live value (shared/slideFields.ts). The editor draws it with a node view; this is only what it copies as.
+  field: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    selectable: true,
+    attrs: { kind: { default: '' }, target: { default: '' }, sheet: { default: '' }, cell: { default: '' }, part: { default: '' }, label: { default: '' } },
+    toDOM: (node) => ['span', { class: 'slide-field' }, String(node.attrs.label)],
+  },
   text: { group: 'inline' },
 };
 

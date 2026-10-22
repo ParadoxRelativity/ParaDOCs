@@ -7,6 +7,7 @@ import {
   STARTER_THEMES,
   THEME_COLOR_SLOTS,
   addLayout,
+  cardPalette,
   applyStarterTheme,
   createSlide,
   createStyledDeck,
@@ -66,6 +67,31 @@ describe('theme colors', () => {
   it('resolves gradient stops', () => {
     const background = resolveBackground({ kind: 'gradient', angle: 90, stops: [{ offset: 0, color: 'theme:accent1' }, { offset: 1, color: '#000' }] }, DEFAULT_THEME);
     expect(background).toMatchObject({ stops: [{ color: DEFAULT_THEME.colors.accent1 }, { color: '#000' }] });
+  });
+});
+
+describe('live content cards', () => {
+  it('are light unless set, and dark whatever the theme', () => {
+    const midnight = STARTER_THEMES.find((s) => s.theme.id === 'midnight')!.theme;
+    expect(cardPalette(undefined, midnight).raised).toBe('#ffffff');
+    expect(cardPalette('dark', DEFAULT_THEME).ink).toBe('#ededf0');
+  });
+
+  it('take the slide background, text and accent of the deck theme', () => {
+    const midnight = STARTER_THEMES.find((s) => s.theme.id === 'midnight')!.theme;
+    const palette = cardPalette('theme', midnight);
+    expect(palette.raised).toBe(resolveSlideColor(themeColor('background1'), midnight));
+    expect(palette.ink).toBe(resolveSlideColor(themeColor('text1'), midnight));
+    expect(palette.accent).toBe(midnight.colors.accent1);
+    expect(palette.muted).not.toBe(palette.ink);
+    expect(palette.line).not.toBe(palette.raised);
+  });
+
+  it('can drop the card, keeping the theme text colors', () => {
+    const palette = cardPalette('transparent', DEFAULT_THEME);
+    expect(palette.raised).toBe('transparent');
+    expect(palette.border).toBe('transparent');
+    expect(palette.ink).toBe(DEFAULT_THEME.colors.dark1);
   });
 });
 

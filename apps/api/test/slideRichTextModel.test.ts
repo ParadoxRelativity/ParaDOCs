@@ -32,4 +32,35 @@ describe('rich text editor schema and the shared body format', () => {
     prosemirrorToYXmlFragment(node, again);
     expect(readParagraphs(again)).toEqual(paragraphs);
   });
+
+  it('carries live fields both ways, as the editor makes them', () => {
+    const item = '33333333-3333-4333-8333-333333333333';
+    const withFields: RichParagraph[] = [
+      {
+        runs: [
+          { text: 'Done: ' },
+          { field: { ref: { kind: 'workItem', itemId: item, part: 'percent' }, label: '60%' } },
+          { text: ' of ' },
+          { field: { ref: { kind: 'cell', spreadsheetId: item, sheetId: 'sheet-1', cell: 'B5' }, label: '42' } },
+          { field: { ref: { kind: 'document', documentId: item }, label: 'Plan' } },
+        ],
+      },
+    ];
+    const body = new Y.Doc().getXmlFragment('a');
+    writeParagraphs(body, withFields);
+    const node = yXmlFragmentToProseMirrorRootNode(body, richTextSchema);
+    expect(node.child(0).child(1).type.name).toBe('field');
+    expect(node.child(0).child(1).attrs).toMatchObject({ kind: 'workItem', target: item, part: 'percent', label: '60%' });
+    const again = new Y.Doc().getXmlFragment('b');
+    prosemirrorToYXmlFragment(node, again);
+    expect(readParagraphs(again)).toEqual(withFields);
+
+    // As the editor inserts one: every attribute it knows, the unused ones empty.
+    const typed = richTextSchema.node('doc', null, [
+      richTextSchema.node('paragraph', null, [richTextSchema.nodes.field.create({ kind: 'document', target: item, label: 'Plan' })]),
+    ]);
+    const written = new Y.Doc().getXmlFragment('c');
+    prosemirrorToYXmlFragment(typed, written);
+    expect(readParagraphs(written)).toEqual([{ runs: [{ field: { ref: { kind: 'document', documentId: item }, label: 'Plan' } }] }]);
+  });
 });

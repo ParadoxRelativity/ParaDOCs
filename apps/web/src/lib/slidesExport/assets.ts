@@ -1,12 +1,18 @@
 import {
+  fieldKey,
   sheetRefKey,
+  workItemFieldText,
+  workItemPercent,
   type ResolvedSheetRef,
   type SheetRef,
   type SlideElement,
+  type SlideField,
   type WorkItemReference,
+  type WorkspaceMember,
 } from '@paradocs/shared';
 import { api } from '../../api/client';
 import { assetUrl } from '../server';
+import { fetchWorkItemDetails } from '../workItemRefs';
 import { sniffImage } from './imageInfo';
 import type { ExportAssets, LiveSnapshot, LoadedImage, LoadedMedia } from './pptx';
 
@@ -133,6 +139,29 @@ async function liveSnapshot(element: SlideElement): Promise<LiveSnapshot | null>
         return null;
       }
     }
+    case 'workItemProgress': {
+      const item = (await fetchWorkItemDetails([element.itemId.toLowerCase()]).catch(() => []))[0];
+      if (!item) return null;
+      const progress = item.progress;
+      return {
+        kind: 'progress',
+        key: item.key,
+        title: item.title,
+        statusName: item.statusName,
+        statusColor: item.statusColor,
+        percent: workItemPercent(item),
+        caption: progress ? `${progress.done} of ${progress.total} done` : item.statusCategory === 'done' ? 'Done' : 'Not done',
+        children: element.showChildren === false ? [] : item.children.map((c) => ({ key: c.key, title: c.title, statusName: c.statusName, done: c.statusCategory === 'done' })),
+      };
+    }
+    case 'person': {
+      // A person is shown to anyone in the workspace the deck is in, which is the one the page is in.
+      const workspaceId = /^\/w\/([^/]+)/.exec(window.location.pathname)?.[1];
+      if (!workspaceId) return null;
+      const members = await api.get<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`).catch(() => [] as WorkspaceMember[]);
+      const member = members.find((m) => m.userId === element.userId);
+      return member ? { kind: 'person', name: member.name, role: member.workspaceRole?.name ?? '', email: member.email } : null;
+    }
     case 'link': {
       try {
         const doc = await api.get<{ title: string; mode?: string; bodyMd?: string }>(`/documents/${element.documentId}`);
@@ -147,11 +176,30 @@ async function liveSnapshot(element: SlideElement): Promise<LiveSnapshot | null>
   }
 }
 
+/** What a field in text reads now, or null where the exporter may not see its source. */
+async function fieldText(field: SlideField): Promise<string | null> {
+  switch (field.kind) {
+    case 'cell': {
+      const result = await resolveRef({ kind: 'cell', spreadsheetId: field.spreadsheetId, sheetId: field.sheetId, cell: field.cell });
+      return result?.status === 'ok' && result.kind === 'cell' ? result.display : null;
+    }
+    case 'workItem': {
+      const item = (await fetchWorkItemDetails([field.itemId]).catch(() => []))[0];
+      return item ? workItemFieldText(field.part, item) : null;
+    }
+    case 'document': {
+      const doc = await api.get<{ title: string }>(`/documents/${field.documentId}`).catch(() => null);
+      return doc ? doc.title || 'Untitled' : null;
+    }
+  }
+}
+
 /** The loaders for one export. Pictures are fetched once even when several slides use them. */
 export function browserAssets(): ExportAssets {
   const images = new Map<string, Promise<LoadedImage | null>>();
   const media = new Map<string, Promise<LoadedMedia | null>>();
   const live = new Map<string, Promise<LiveSnapshot | null>>();
+  const fields = new Map<string, Promise<string | null>>();
   return {
     image: (url) => images.get(url) ?? images.set(url, loadImage(url)).get(url)!,
     media: (url) => media.get(url) ?? media.set(url, loadMedia(url)).get(url)!,
@@ -160,6 +208,10 @@ export function browserAssets(): ExportAssets {
       const { id: _id, x: _x, y: _y, width: _w, height: _h, z: _z, rotation: _r, animation: _a, ...source } = element as unknown as Record<string, unknown>;
       const key = JSON.stringify(source);
       return live.get(key) ?? live.set(key, liveSnapshot(element)).get(key)!;
+    },
+    field(field) {
+      const key = fieldKey(field);
+      return fields.get(key) ?? fields.set(key, fieldText(field)).get(key)!;
     },
   };
 }

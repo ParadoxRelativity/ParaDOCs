@@ -53,6 +53,7 @@ export default function SlideRail({
   const [dropAt, setDropAt] = useState<DropAt>(null);
   const dragging = useRef<string[] | null>(null);
   const currentRef = useRef<HTMLLIElement>(null);
+  const listRef = useRef<HTMLOListElement>(null);
   const thumbWidth = horizontal ? 112 : 176;
 
   // Keep the open slide in view as it changes (arrow keys, a remote delete).
@@ -63,14 +64,27 @@ export default function SlideRail({
   const indexOfCurrent = slides.findIndex((slide) => slide.id === currentId);
   const allHidden = [...selection].every((id) => slides.find((s) => s.id === id)?.hidden);
 
-  /** The drop position among the slides that are not moving, from the pointer over a thumbnail. */
-  const dropIndex = (e: React.DragEvent, over: number) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const after = horizontal ? e.clientX > rect.left + rect.width / 2 : e.clientY > rect.top + rect.height / 2;
+  /**
+   * The drop position among the slides that are not moving, from where the
+   * pointer is in the rail: before the first slide whose middle it has not
+   * passed. The gaps between slides and the space after the last count too,
+   * so a slide can be dropped at the end.
+   */
+  const dropIndex = (e: React.DragEvent) => {
+    const items = [...(listRef.current?.querySelectorAll<HTMLElement>(':scope > li[data-slide]') ?? [])];
+    const pointer = horizontal ? e.clientX : e.clientY;
+    const at = items.filter((item) => {
+      const rect = item.getBoundingClientRect();
+      return pointer > (horizontal ? rect.left + rect.width / 2 : rect.top + rect.height / 2);
+    }).length;
     const moving = dragging.current ?? [];
-    const at = after ? over + 1 : over;
     // Counted among the slides that stay, as moveSlides expects.
     return slides.slice(0, at).filter((s) => !moving.includes(s.id)).length;
+  };
+
+  const endDrag = () => {
+    dragging.current = null;
+    setDropAt(null);
   };
 
   return (
@@ -107,20 +121,36 @@ export default function SlideRail({
       )}
 
       <ol
+        ref={listRef}
         aria-label="Slides"
         className={cx('scroll-thin flex min-h-0 min-w-0 flex-1 gap-2 p-2', horizontal ? 'flex-row overflow-x-auto' : 'flex-col overflow-y-auto')}
+        onDragOver={(e) => {
+          if (!dragging.current) return;
+          e.preventDefault();
+          setDropAt({ index: dropIndex(e) });
+        }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropAt(null);
+        }}
+        onDrop={(e) => {
+          if (!dragging.current) return;
+          e.preventDefault();
+          const to = dropIndex(e);
+          const ids = dragging.current;
+          endDrag();
+          // The moved slides are the selection by now, so move reads from it.
+          if (ids.length) onMove(to);
         }}
       >
         {slides.map((slide, index) => {
           const current = slide.id === currentId;
           const selected = selection.has(slide.id);
           const here = peers.filter((peer) => peer.slideId === slide.id);
-          const showBefore = dropAt && dragging.current && dropIndexBefore(slides, dragging.current, dropAt.index) === index;
+          const markerAt = dropAt && dragging.current ? dropIndexBefore(slides, dragging.current, dropAt.index) : -1;
           return (
             <li
               key={slide.id}
+              data-slide
               ref={current ? currentRef : undefined}
               className={cx('relative flex shrink-0 gap-1.5', horizontal ? 'flex-col items-center' : 'flex-row items-start')}
               draggable={canEdit}
@@ -130,28 +160,15 @@ export default function SlideRail({
                 if (!selected) onOpen(slide.id, 'replace');
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', slide.id);
+                if (dragging.current.length > 1) {
+                  const thumb = e.currentTarget.querySelector('button');
+                  if (thumb) setStackDragImage(e.dataTransfer, thumb, dragging.current.length);
+                }
               }}
-              onDragOver={(e) => {
-                if (!dragging.current) return;
-                e.preventDefault();
-                setDropAt({ index: dropIndex(e, index) });
-              }}
-              onDrop={(e) => {
-                if (!dragging.current) return;
-                e.preventDefault();
-                const to = dropIndex(e, index);
-                const ids = dragging.current;
-                dragging.current = null;
-                setDropAt(null);
-                // The moved slides are the selection by now, so move reads from it.
-                if (ids.length) onMove(to);
-              }}
-              onDragEnd={() => {
-                dragging.current = null;
-                setDropAt(null);
-              }}
+              onDragEnd={endDrag}
             >
-              {showBefore && <DropMarker horizontal={horizontal} />}
+              {markerAt === index && <DropMarker horizontal={horizontal} />}
+              {markerAt === slides.length && index === slides.length - 1 && <DropMarker horizontal={horizontal} after />}
               <span className="w-4 shrink-0 pt-1 text-right text-[11px] tabular-nums text-[var(--color-muted)]">{index + 1}</span>
               <button
                 type="button"
@@ -180,7 +197,6 @@ export default function SlideRail({
             </li>
           );
         })}
-        {dropAt && dragging.current && dropIndexBefore(slides, dragging.current, dropAt.index) === slides.length && <DropMarker horizontal={horizontal} />}
         {slides.length === 0 && (
           <li className="px-2 py-4 text-center text-xs text-[var(--color-muted)]">{canEdit ? 'No slides yet. Add one with +.' : 'No slides yet.'}</li>
         )}
@@ -190,6 +206,62 @@ export default function SlideRail({
       </span>
     </div>
   );
+}
+
+/**
+ * What follows the pointer when several slides are dragged: the grabbed
+ * thumbnail on a stack of cards, with how many are moving. The browser takes a
+ * picture of the node as the drag starts, so it is removed straight after.
+ */
+function setStackDragImage(dataTransfer: DataTransfer, thumb: HTMLElement, count: number) {
+  const { width, height } = thumb.getBoundingClientRect();
+  const offset = 6;
+  const layers = Math.min(count, 3);
+  const stack = document.createElement('div');
+  // Off screen, but laid out, or the browser draws nothing.
+  Object.assign(stack.style, {
+    position: 'fixed',
+    top: '-10000px',
+    left: '-10000px',
+    width: `${width + offset * (layers - 1) + 12}px`,
+    height: `${height + offset * (layers - 1) + 12}px`,
+    pointerEvents: 'none',
+  });
+  for (let i = layers - 1; i > 0; i--) {
+    const card = document.createElement('div');
+    Object.assign(card.style, {
+      position: 'absolute',
+      top: `${offset * i}px`,
+      left: `${offset * i}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+      borderRadius: '6px',
+      background: 'var(--color-raised)',
+      border: '1px solid var(--color-line)',
+      boxShadow: '0 1px 3px rgb(0 0 0 / 0.25)',
+    });
+    stack.appendChild(card);
+  }
+  const front = thumb.cloneNode(true) as HTMLElement;
+  Object.assign(front.style, { position: 'absolute', top: '0', left: '0', width: `${width}px`, height: `${height}px`, boxShadow: '0 2px 6px rgb(0 0 0 / 0.3)' });
+  stack.appendChild(front);
+  const badge = document.createElement('span');
+  badge.textContent = `${count} slides`;
+  Object.assign(badge.style, {
+    position: 'absolute',
+    right: '0',
+    bottom: '0',
+    padding: '2px 8px',
+    borderRadius: '9999px',
+    background: 'var(--color-accent)',
+    color: '#fff',
+    font: '600 11px/16px system-ui, sans-serif',
+    boxShadow: '0 1px 3px rgb(0 0 0 / 0.3)',
+  });
+  stack.appendChild(badge);
+  document.body.appendChild(stack);
+  dataTransfer.setDragImage(stack, Math.min(24, width / 2), Math.min(24, height / 2));
+  setTimeout(() => stack.remove(), 0);
 }
 
 /** Which slide's position the drop marker sits before, given a drop index counted among the slides that stay. */
@@ -203,11 +275,15 @@ function dropIndexBefore(slides: SlideSnapshot[], moving: string[], dropIndex: n
   return slides.length;
 }
 
-function DropMarker({ horizontal }: { horizontal: boolean }) {
+/** The line where dragged slides would land: before a slide, or after the last. */
+function DropMarker({ horizontal, after }: { horizontal: boolean; after?: boolean }) {
   return (
     <span
       aria-hidden
-      className={cx('pointer-events-none absolute rounded bg-[var(--color-accent)]', horizontal ? '-left-1.5 top-0 h-full w-0.5' : '-top-1.5 left-0 h-0.5 w-full')}
+      className={cx(
+        'pointer-events-none absolute rounded bg-[var(--color-accent)]',
+        horizontal ? cx(after ? '-right-1.5' : '-left-1.5', 'top-0 h-full w-0.5') : cx(after ? '-bottom-1.5' : '-top-1.5', 'left-0 h-0.5 w-full'),
+      )}
     />
   );
 }
