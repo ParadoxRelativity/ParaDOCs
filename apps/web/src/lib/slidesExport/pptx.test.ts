@@ -388,6 +388,35 @@ describe('buildPptx: other decks', () => {
     expect(result.report.some((r) => r.includes('Embedded web pages'))).toBe(true);
   });
 
+  it('draws a live card in the colors of its style', async () => {
+    const doc = new Y.Doc();
+    const id = createSlide(doc);
+    setSlideElement(doc, id, { id: 'w', type: 'workItem', itemId: 'i', cardStyle: 'dark', x: 0, y: 0, width: 880, height: 400, z: 1 } as SlideElement);
+    const deck = readDeck(doc);
+    const result = await buildPptx(deck, {
+      title: 'Dark card',
+      assets: assets(() => ({ kind: 'workItem', key: 'PARA-1', title: 'Ship it', statusName: 'Open', statusColor: '#2563eb', done: false })),
+    });
+    const xml = await (await unzip(result)).text('ppt/slides/slide1.xml');
+    expect(xml).toContain('srgbClr val="1C1C21"');
+    expect(xml).toContain('srgbClr val="EDEDF0"');
+  });
+
+  it('draws a transparent live card with no fill or outline', async () => {
+    const doc = new Y.Doc();
+    const id = createSlide(doc);
+    setSlideElement(doc, id, { id: 'w', type: 'workItem', itemId: 'i', cardStyle: 'transparent', x: 0, y: 0, width: 880, height: 400, z: 1 } as SlideElement);
+    const result = await buildPptx(readDeck(doc), {
+      title: 'Bare card',
+      assets: assets(() => ({ kind: 'workItem', key: 'PARA-1', title: 'Ship it', statusName: 'Open', statusColor: '#2563eb', done: false })),
+    });
+    const xml = await (await unzip(result)).text('ppt/slides/slide1.xml');
+    const shape = /<p:sp>(?:(?!<\/p:sp>).)*Ship it(?:(?!<\/p:sp>).)*<\/p:sp>/s.exec(xml)![0];
+    const props = /<p:spPr>.*<\/p:spPr>/s.exec(shape)![0];
+    expect(props).not.toContain('solidFill');
+    expect(shape).not.toContain('<p:style>');
+  });
+
   it('writes live fields in text as they read now, and a dash where the exporter may not see them', async () => {
     const doc = new Y.Doc();
     const id = createSlide(doc);

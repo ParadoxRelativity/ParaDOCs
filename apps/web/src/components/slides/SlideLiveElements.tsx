@@ -4,12 +4,15 @@ import type { CanvasElement, SlideSize, WorkspaceMember } from '@paradocs/shared
 import {
   boardBounds,
   canvasElementsToSlide,
+  cardPalette,
   workItemPercent,
   type LinkElement,
   type PersonElement,
   type SheetCellElement,
   type SheetChartElement,
   type SlideElement,
+  type CardStyle,
+  type Theme,
   type WorkItemElement,
   type WorkItemProgressElement,
 } from '@paradocs/shared';
@@ -28,9 +31,11 @@ import { WorkItemPicker } from '../projects/WorkItemRefs';
 import Avatar from '../Avatar';
 import { SlideLinkArea, pathWorkspaceId } from './slideLinks';
 import { useWatched } from './SlideMediaElements';
+import { Field, Group, SelectInput } from './inspectorParts';
 import {
   registerSlideElementRenderer,
   registerSlideInsertTool,
+  registerSlideInspectorSection,
   type SlideEditorContext,
   type SlideElementRendererProps,
 } from './slideExtensions';
@@ -53,25 +58,32 @@ import {
  * Sized for a 1920x1080 slide: type is large enough to read from the back.
  */
 
-/** A slide is a page: it keeps its light colors whatever theme the app is in. */
-const LIGHT: CSSProperties = {
-  ['--color-canvas' as string]: '#ffffff',
-  ['--color-surface' as string]: '#f7f7f8',
-  ['--color-raised' as string]: '#ffffff',
-  ['--color-line' as string]: '#e4e4e7',
-  ['--color-ink' as string]: '#18181b',
-  ['--color-muted' as string]: '#71717a',
-  ['--color-accent' as string]: '#6366f1',
-  ['--color-accent-soft' as string]: '#eef2ff',
-  ['--color-series-1' as string]: '#2a78d6',
-  ['--color-series-2' as string]: '#eb6834',
-};
+/**
+ * A slide is a page: a card keeps the colors its style gives it (light unless
+ * set; dark, the deck theme's, or none) whatever theme the app is in.
+ */
+function cardVars(element: SlideElement, theme: Theme): CSSProperties {
+  const p = cardPalette(element.cardStyle, theme);
+  return {
+    ['--color-canvas' as string]: p.canvas,
+    ['--color-surface' as string]: p.surface,
+    ['--color-raised' as string]: p.raised,
+    ['--card-border' as string]: p.border,
+    ['--color-line' as string]: p.line,
+    ['--color-ink' as string]: p.ink,
+    ['--color-muted' as string]: p.muted,
+    ['--color-accent' as string]: p.accent,
+    ['--color-accent-soft' as string]: p.accentSoft,
+    ['--color-series-1' as string]: p.series1,
+    ['--color-series-2' as string]: p.series2,
+  };
+}
 
-const CARD = 'flex h-full w-full flex-col overflow-hidden rounded-3xl border-2 border-[var(--color-line)] bg-[var(--color-raised)] text-[var(--color-ink)]';
+const CARD = 'flex h-full w-full flex-col overflow-hidden rounded-3xl border-2 border-[var(--card-border)] bg-[var(--color-raised)] text-[var(--color-ink)]';
 
 function Card({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cx(CARD, className)} style={LIGHT}>
+    <div className={cx(CARD, className)}>
       {children}
     </div>
   );
@@ -103,7 +115,7 @@ function Loading() {
 // Sheet cell
 // ---------------------------------------------------------------------------
 
-const SheetCellRenderer = memo(function SheetCellRenderer({ element }: SlideElementRendererProps) {
+const SheetCellRenderer = memo(function SheetCellRenderer({ element, theme }: SlideElementRendererProps) {
   const el = element as SheetCellElement;
   const [ref, watched] = useWatched<HTMLDivElement>();
   const result = useLiveSheetRef({ kind: 'cell', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, cell: el.cell }, watched);
@@ -131,7 +143,7 @@ const SheetCellRenderer = memo(function SheetCellRenderer({ element }: SlideElem
     );
   }
   return (
-    <div ref={ref} className="h-full w-full">
+    <div ref={ref} className="h-full w-full" style={cardVars(el, theme)}>
       {body}
     </div>
   );
@@ -141,7 +153,7 @@ const SheetCellRenderer = memo(function SheetCellRenderer({ element }: SlideElem
 // Sheet chart
 // ---------------------------------------------------------------------------
 
-const SheetChartRenderer = memo(function SheetChartRenderer({ element }: SlideElementRendererProps) {
+const SheetChartRenderer = memo(function SheetChartRenderer({ element, theme }: SlideElementRendererProps) {
   const el = element as SheetChartElement;
   const [ref, watched] = useWatched<HTMLDivElement>();
   const result = useLiveSheetRef({ kind: 'chart', spreadsheetId: el.spreadsheetId, sheetId: el.sheetId, chartId: el.chartId }, watched);
@@ -170,7 +182,7 @@ const SheetChartRenderer = memo(function SheetChartRenderer({ element }: SlideEl
     );
   }
   return (
-    <div ref={ref} className="h-full w-full">
+    <div ref={ref} className="h-full w-full" style={cardVars(el, theme)}>
       {body}
     </div>
   );
@@ -180,7 +192,7 @@ const SheetChartRenderer = memo(function SheetChartRenderer({ element }: SlideEl
 // Work item
 // ---------------------------------------------------------------------------
 
-const WorkItemRenderer = memo(function WorkItemRenderer({ element }: SlideElementRendererProps) {
+const WorkItemRenderer = memo(function WorkItemRenderer({ element, theme }: SlideElementRendererProps) {
   const el = element as WorkItemElement;
   const [ref, watched] = useWatched<HTMLDivElement>();
   const query = useWorkItemRef(el.itemId, watched);
@@ -211,7 +223,7 @@ const WorkItemRenderer = memo(function WorkItemRenderer({ element }: SlideElemen
     );
   }
   return (
-    <div ref={ref} className="h-full w-full">
+    <div ref={ref} className="h-full w-full" style={cardVars(el, theme)}>
       {body}
     </div>
   );
@@ -223,7 +235,7 @@ const WorkItemRenderer = memo(function WorkItemRenderer({ element }: SlideElemen
 
 const EXCERPT_CHARS = 1500;
 
-const DocumentRenderer = memo(function DocumentRenderer({ element }: SlideElementRendererProps) {
+const DocumentRenderer = memo(function DocumentRenderer({ element, theme }: SlideElementRendererProps) {
   const el = element as LinkElement;
   const [ref, watched] = useWatched<HTMLDivElement>();
   const doc = useDocument(el.documentId);
@@ -263,7 +275,7 @@ const DocumentRenderer = memo(function DocumentRenderer({ element }: SlideElemen
     );
   }
   return (
-    <div ref={ref} className="h-full w-full">
+    <div ref={ref} className="h-full w-full" style={cardVars(el, theme)}>
       {body}
     </div>
   );
@@ -273,7 +285,7 @@ const DocumentRenderer = memo(function DocumentRenderer({ element }: SlideElemen
 // Work item progress
 // ---------------------------------------------------------------------------
 
-const ProgressRenderer = memo(function ProgressRenderer({ element }: SlideElementRendererProps) {
+const ProgressRenderer = memo(function ProgressRenderer({ element, theme }: SlideElementRendererProps) {
   const el = element as WorkItemProgressElement;
   const [ref, watched] = useWatched<HTMLDivElement>();
   const query = useWorkItemDetail(el.itemId, watched);
@@ -345,7 +357,7 @@ const ProgressRenderer = memo(function ProgressRenderer({ element }: SlideElemen
     );
   }
   return (
-    <div ref={ref} className="h-full w-full">
+    <div ref={ref} className="h-full w-full" style={cardVars(el, theme)}>
       {body}
     </div>
   );
@@ -355,8 +367,16 @@ const ProgressRenderer = memo(function ProgressRenderer({ element }: SlideElemen
 // Person
 // ---------------------------------------------------------------------------
 
-const PersonRenderer = memo(function PersonRenderer({ element, members }: SlideElementRendererProps) {
+const PersonRenderer = memo(function PersonRenderer({ element, theme, members }: SlideElementRendererProps) {
   const el = element as PersonElement;
+  return (
+    <div className="h-full w-full" style={cardVars(el, theme)}>
+      <PersonCard el={el} members={members} />
+    </div>
+  );
+});
+
+function PersonCard({ el, members }: { el: PersonElement; members: WorkspaceMember[] }) {
   // Thumbnails and the show are drawn without the member list the stage has.
   const fetched = useMembers(members.length ? undefined : (pathWorkspaceId() ?? undefined));
   const list = members.length ? members : (fetched.data ?? []);
@@ -390,12 +410,65 @@ const PersonRenderer = memo(function PersonRenderer({ element, members }: SlideE
       </div>
     </Card>
   );
-});
+}
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] ?? '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
+
+// ---------------------------------------------------------------------------
+// Inspector
+// ---------------------------------------------------------------------------
+
+const LIVE_TYPES: SlideElement['type'][] = ['sheetCell', 'sheetChart', 'workItem', 'workItemProgress', 'person', 'link'];
+
+const STYLE_OPTIONS: { value: CardStyle; label: string }[] = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'theme', label: 'Deck theme' },
+  { value: 'transparent', label: 'Transparent' },
+];
+
+function CardInspector({ ctx }: { ctx: SlideEditorContext }) {
+  const { selection, slide, actions, canEdit } = ctx;
+  if (!slide) return null;
+  const patch = (changes: Record<string, unknown>) =>
+    actions.updateElements(slide.id, selection.map((element) => ({ id: element.id, patch: changes })));
+  const styles = new Set(selection.map((el) => el.cardStyle ?? 'light'));
+  const progress = selection.filter((el): el is WorkItemProgressElement => el.type === 'workItemProgress');
+  return (
+    <Group title="Card">
+      <Field label="Colors">
+        <SelectInput<CardStyle>
+          label="Card colors"
+          value={styles.size === 1 ? [...styles][0] : ''}
+          options={styles.size === 1 ? STYLE_OPTIONS : [{ value: '', label: 'Mixed' }, ...STYLE_OPTIONS]}
+          disabled={!canEdit}
+          onChange={(style) => style && patch({ cardStyle: style === 'light' ? undefined : style })}
+        />
+      </Field>
+      {progress.length === selection.length && (
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={progress.every((el) => el.showChildren !== false)}
+            disabled={!canEdit}
+            onChange={(e) => patch({ showChildren: e.target.checked ? undefined : false })}
+          />
+          <span>List the work under it</span>
+        </label>
+      )}
+    </Group>
+  );
+}
+
+registerSlideInspectorSection({
+  id: 'live-card',
+  order: 12,
+  applies: (ctx, scope) => scope === 'elements' && ctx.selection.length > 0 && ctx.selection.every((el) => LIVE_TYPES.includes(el.type)),
+  render: (ctx) => <CardInspector ctx={ctx} />,
+});
 
 registerSlideElementRenderer('workItemProgress', ProgressRenderer);
 registerSlideElementRenderer('person', PersonRenderer);

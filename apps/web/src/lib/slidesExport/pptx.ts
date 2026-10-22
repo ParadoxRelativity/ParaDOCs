@@ -8,6 +8,7 @@ import {
   findLayout,
   paragraphFields,
   resolveLayoutPlaceholders,
+  cardPalette,
   resolveSlideColor,
   shapeGeometry,
   supportsParagraphBuild,
@@ -176,6 +177,14 @@ const INK = '18181B';
 const MUTED = '71717A';
 const CARD_LINE = 'E4E4E7';
 
+/** A card's fill and outline, as PptxGenJS takes colors; null draws none. */
+interface CardLook {
+  fill: string | null;
+  line: string | null;
+}
+
+const LIGHT_LOOK: CardLook = { fill: 'FFFFFF', line: CARD_LINE };
+
 function safeUrl(url: string | undefined): string | undefined {
   return url && /^(https?:|mailto:)/i.test(url) ? url : undefined;
 }
@@ -324,7 +333,7 @@ class Exporter {
       case 'audio':
         return this.addMedia(slide, el, name);
       case 'embed':
-        return this.card(slide, el, name, [
+        return this.card(slide, el, name, LIGHT_LOOK, [
           { text: el.title || 'Embedded content', options: { bold: true, fontSize: 24, color: INK, breakLine: true } },
           { text: el.url, options: { fontSize: 16, color: '2563EB', hyperlink: safeUrl(el.url) ? { url: el.url } : undefined } },
         ], 'Embedded web pages are exported as a link.');
@@ -532,7 +541,7 @@ class Exporter {
         ? `Some ${el.type} files are in a format PowerPoint cannot play (${media.ext}); they are exported as a link.`
         : `Some ${el.type} files could not be embedded (too large or not reachable); they are exported as a link.`,
     );
-    this.card(slide, el, name, [
+    this.card(slide, el, name, LIGHT_LOOK, [
       { text: el.title || (el.type === 'video' ? 'Video' : 'Audio'), options: { bold: true, fontSize: 24, color: INK, breakLine: true } },
       { text: el.url, options: { fontSize: 14, color: '2563EB', hyperlink: safeUrl(el.url) ? { url: el.url } : undefined } },
     ]);
@@ -593,14 +602,14 @@ class Exporter {
   // --- live content --------------------------------------------------------
 
   /** A single rounded shape with text, standing in for content that cannot be drawn natively. */
-  private card(slide: PptxSlide, el: SlideElement, name: string, runs: Opts[], note?: string) {
+  private card(slide: PptxSlide, el: SlideElement, name: string, look: CardLook, runs: Opts[], note?: string) {
     if (note) this.note(note);
     slide.addText(runs as never, {
       ...this.box(el),
       shape: 'roundRect',
       rectRadius: 0.12,
-      fill: { color: 'FFFFFF' },
-      line: { color: CARD_LINE, width: 1.5 },
+      fill: look.fill ? { color: look.fill } : { type: 'none' },
+      line: look.line ? { color: look.line, width: 1.5 } : { type: 'none' },
       valign: 'middle',
       margin: 10,
       fit: 'shrink',
@@ -614,6 +623,14 @@ class Exporter {
     name: string,
   ) {
     const live = await this.assets.live(el).catch(() => null);
+    const palette = cardPalette(el.cardStyle, this.theme);
+    const hex = (color: string) => color.replace('#', '').toUpperCase();
+    const ink = hex(palette.ink);
+    const muted = hex(palette.muted);
+    const look: CardLook = {
+      fill: palette.raised === 'transparent' ? null : hex(palette.raised),
+      line: palette.border === 'transparent' ? null : hex(palette.border),
+    };
     const what = {
       sheetCell: 'This value',
       sheetChart: 'This chart',
@@ -625,9 +642,9 @@ class Exporter {
     if (!live) {
       // Never the label or title the author gave it: the exporter may not be allowed to know what it was.
       this.note('Live content you cannot access is exported as an empty placeholder.');
-      return this.card(slide, el, name, [
-        { text: `${what} is not available`, options: { bold: true, fontSize: 24, color: INK, align: 'center', breakLine: true } },
-        { text: 'You may not have access to its source.', options: { fontSize: 14, color: MUTED, align: 'center' } },
+      return this.card(slide, el, name, look, [
+        { text: `${what} is not available`, options: { bold: true, fontSize: 24, color: ink, align: 'center', breakLine: true } },
+        { text: 'You may not have access to its source.', options: { fontSize: 14, color: muted, align: 'center' } },
       ]);
     }
     this.note('Live content (cells, charts, work items, documents) is exported as it stands now and no longer updates.');
@@ -635,51 +652,51 @@ class Exporter {
       case 'cell': {
         const byHeight = el.height * 0.5;
         const byWidth = ((el.width - 80) / Math.max(live.display.length, 1)) * 1.7;
-        return this.card(slide, el, name, [
-          { text: live.display, options: { bold: true, fontSize: points(Math.max(32, Math.min(byHeight, byWidth, 360))), color: live.isError ? 'DC2626' : INK, breakLine: true } },
-          { text: live.caption, options: { fontSize: 14, color: MUTED } },
+        return this.card(slide, el, name, look, [
+          { text: live.display, options: { bold: true, fontSize: points(Math.max(32, Math.min(byHeight, byWidth, 360))), color: live.isError ? 'DC2626' : ink, breakLine: true } },
+          { text: live.caption, options: { fontSize: 14, color: muted } },
         ]);
       }
       case 'workItem':
-        return this.card(slide, el, name, [
-          { text: live.key, options: { bold: true, fontSize: 18, color: MUTED, breakLine: true } },
-          { text: live.title, options: { bold: true, fontSize: 32, color: live.done ? MUTED : INK, strike: live.done ? 'sngStrike' : undefined, breakLine: true } },
+        return this.card(slide, el, name, look, [
+          { text: live.key, options: { bold: true, fontSize: 18, color: muted, breakLine: true } },
+          { text: live.title, options: { bold: true, fontSize: 32, color: live.done ? muted : ink, strike: live.done ? 'sngStrike' : undefined, breakLine: true } },
           { text: ` ${live.statusName} `, options: { fontSize: 17, color: 'FFFFFF', highlight: this.color(live.statusColor || '#71717a') } },
         ]);
       case 'document':
-        return this.card(slide, el, name, [
-          { text: live.title, options: { bold: true, fontSize: 22, color: INK, breakLine: true } },
-          { text: live.text, options: { fontSize: 14, color: INK } },
+        return this.card(slide, el, name, look, [
+          { text: live.title, options: { bold: true, fontSize: 22, color: ink, breakLine: true } },
+          { text: live.text, options: { fontSize: 14, color: ink } },
         ]);
       case 'progress': {
         const runs: Opts[] = [
-          { text: `${live.key} · ${live.statusName}`, options: { bold: true, fontSize: 16, color: MUTED, breakLine: true } },
-          { text: live.title, options: { bold: true, fontSize: 28, color: INK, breakLine: true } },
-          { text: `${live.percent}%`, options: { bold: true, fontSize: 48, color: INK, breakLine: true } },
-          { text: live.caption, options: { fontSize: 16, color: MUTED, breakLine: live.children.length > 0 } },
+          { text: `${live.key} · ${live.statusName}`, options: { bold: true, fontSize: 16, color: muted, breakLine: true } },
+          { text: live.title, options: { bold: true, fontSize: 28, color: ink, breakLine: true } },
+          { text: `${live.percent}%`, options: { bold: true, fontSize: 48, color: ink, breakLine: true } },
+          { text: live.caption, options: { fontSize: 16, color: muted, breakLine: live.children.length > 0 } },
         ];
         live.children.slice(0, 12).forEach((child, i, shown) =>
           runs.push({
             text: `${child.key}  ${child.title} — ${child.statusName}`,
-            options: { fontSize: 13, color: child.done ? MUTED : INK, strike: child.done ? 'sngStrike' : undefined, breakLine: i < shown.length - 1 },
+            options: { fontSize: 13, color: child.done ? muted : ink, strike: child.done ? 'sngStrike' : undefined, breakLine: i < shown.length - 1 },
           }),
         );
-        return this.card(slide, el, name, runs);
+        return this.card(slide, el, name, look, runs);
       }
       case 'person':
-        return this.card(slide, el, name, [
-          { text: live.name, options: { bold: true, fontSize: 32, color: INK, breakLine: true } },
-          { text: live.role, options: { fontSize: 18, color: MUTED, breakLine: true } },
-          { text: live.email, options: { fontSize: 16, color: MUTED } },
+        return this.card(slide, el, name, look, [
+          { text: live.name, options: { bold: true, fontSize: 32, color: ink, breakLine: true } },
+          { text: live.role, options: { fontSize: 18, color: muted, breakLine: true } },
+          { text: live.email, options: { fontSize: 16, color: muted } },
         ]);
       case 'chart':
-        return this.addChart(slide, el, name, live);
+        return this.addChart(slide, el, name, live, look, ink, muted, hex(palette.line));
     }
   }
 
-  private addChart(slide: PptxSlide, el: SlideElement, name: string, live: Extract<LiveSnapshot, { kind: 'chart' }>) {
+  private addChart(slide: PptxSlide, el: SlideElement, name: string, live: Extract<LiveSnapshot, { kind: 'chart' }>, look: CardLook, ink: string, muted: string, grid: string) {
     if (live.data.series.length === 0 || live.data.categories.length === 0) {
-      return this.card(slide, el, name, [{ text: `${live.title || 'Chart'}: no numbers in this chart's range`, options: { fontSize: 20, color: MUTED, align: 'center' } }]);
+      return this.card(slide, el, name, look, [{ text: `${live.title || 'Chart'}: no numbers in this chart's range`, options: { fontSize: 20, color: muted, align: 'center' } }]);
     }
     const labels = live.data.categories;
     const series = live.data.series.map((s) => ({ name: s.name || 'Series', labels, values: s.values.map((v) => v ?? 0) }));
@@ -690,9 +707,15 @@ class Exporter {
       showTitle: !!live.title,
       title: live.title,
       titleFontSize: 20,
-      titleColor: INK,
+      titleColor: ink,
       showLegend: live.chartKind === 'pie' || series.length > 1,
       legendPos: 'b',
+      legendColor: muted,
+      catAxisLabelColor: muted,
+      valAxisLabelColor: muted,
+      valGridLine: { color: grid, size: 0.75 },
+      // The card the chart stands on in the editor, if it has one.
+      ...(look.fill ? { chartArea: { fill: { color: look.fill }, ...(look.line ? { border: { color: look.line, pt: 1.5 } } : {}), roundedCorners: true } } : {}),
       chartColors: colors,
       objectName: name,
     };

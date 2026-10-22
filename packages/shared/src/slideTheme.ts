@@ -151,6 +151,123 @@ export function resolveSlideColor(value: string | undefined, theme: Theme): stri
 }
 
 // ---------------------------------------------------------------------------
+// Live content cards
+// ---------------------------------------------------------------------------
+
+/**
+ * How a live content card (a chart, a work item, a person) is colored: the
+ * app's light or dark look, the deck's theme, or no card at all, the content
+ * standing on the slide in the theme's text colors.
+ */
+export type CardStyle = 'light' | 'dark' | 'theme' | 'transparent';
+export const CARD_STYLES: readonly CardStyle[] = ['light', 'dark', 'theme', 'transparent'];
+
+/** The colors a card is drawn with, named as the app's color tokens are. `raised` and `border` may be `transparent`. */
+export interface CardPalette {
+  canvas: string;
+  surface: string;
+  raised: string;
+  /** The card's outline; `line` is for rules inside it. */
+  border: string;
+  line: string;
+  ink: string;
+  muted: string;
+  accent: string;
+  accentSoft: string;
+  series1: string;
+  series2: string;
+}
+
+const LIGHT_CARD: CardPalette = {
+  canvas: '#ffffff',
+  surface: '#f7f7f8',
+  raised: '#ffffff',
+  border: '#e4e4e7',
+  line: '#e4e4e7',
+  ink: '#18181b',
+  muted: '#71717a',
+  accent: '#6366f1',
+  accentSoft: '#eef2ff',
+  series1: '#2a78d6',
+  series2: '#eb6834',
+};
+
+const DARK_CARD: CardPalette = {
+  canvas: '#0f0f11',
+  surface: '#16161a',
+  raised: '#1c1c21',
+  border: '#2a2a31',
+  line: '#2a2a31',
+  ink: '#ededf0',
+  muted: '#8f8f9c',
+  accent: '#818cf8',
+  accentSoft: '#1e1b3a',
+  series1: '#3987e5',
+  series2: '#d95926',
+};
+
+/** `from` moved `amount` (0 to 1) of the way to `to`; either left as it is unless both are six-digit hex. */
+function blendHex(from: string, to: string, amount: number): string {
+  const a = /^#([0-9a-f]{6})$/i.exec(from);
+  const b = /^#([0-9a-f]{6})$/i.exec(to);
+  if (!a || !b) return from;
+  const x = parseInt(a[1], 16);
+  const y = parseInt(b[1], 16);
+  const channel = (shift: number) => {
+    const c = (x >> shift) & 255;
+    return Math.round(c + (((y >> shift) & 255) - c) * amount)
+      .toString(16)
+      .padStart(2, '0');
+  };
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
+}
+
+/**
+ * A card's colors. In the theme's style the card takes the slide's own
+ * background and text colors, and its accents; transparent keeps those but
+ * drops the card's fill and outline.
+ */
+export function cardPalette(style: CardStyle | undefined, theme: Theme): CardPalette {
+  if (style === 'dark') return DARK_CARD;
+  if (style !== 'theme' && style !== 'transparent') return LIGHT_CARD;
+  const color = (slot: MappedColorSlot | ThemeColorSlot) => resolveSlideColor(themeColor(slot), theme)!;
+  const raised = color('background1');
+  const ink = color('text1');
+  const second = color('background2');
+  const accent = color('accent1');
+  const line = blendHex(raised, ink, 0.15);
+  if (style === 'transparent') {
+    return {
+      canvas: 'transparent',
+      // A bar's empty track still needs to show against whatever is behind.
+      surface: line,
+      raised: 'transparent',
+      border: 'transparent',
+      line,
+      ink,
+      muted: blendHex(ink, raised, 0.4),
+      accent,
+      accentSoft: blendHex(raised, accent, 0.15),
+      series1: accent,
+      series2: color('accent2'),
+    };
+  }
+  return {
+    canvas: raised,
+    surface: second.toLowerCase() !== raised.toLowerCase() ? second : blendHex(raised, ink, 0.05),
+    raised,
+    border: line,
+    line,
+    ink,
+    muted: blendHex(ink, raised, 0.4),
+    accent,
+    accentSoft: blendHex(raised, accent, 0.15),
+    series1: accent,
+    series2: color('accent2'),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Backgrounds
 // ---------------------------------------------------------------------------
 

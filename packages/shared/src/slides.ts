@@ -60,6 +60,7 @@ import {
   defaultMaster,
   normalizeTheme,
   resolveSlide,
+  type CardStyle,
   type SlideBackground,
   type SlideFrame,
   type PlaceholderKind,
@@ -151,9 +152,11 @@ export interface SlideElementBase extends Omit<CanvasElementBase, 'type'> {
   rotation?: number;
   /** How it builds in or out during the slideshow; see slideBuilds.ts. */
   animation?: ElementAnimation;
+  /** Live content cards only: their colors. Light unless set. */
+  cardStyle?: CardStyle;
 }
 
-type OnSlide<T extends CanvasElementBase> = T & { rotation?: number; animation?: ElementAnimation };
+type OnSlide<T extends CanvasElementBase> = T & { rotation?: number; animation?: ElementAnimation; cardStyle?: CardStyle };
 
 /** A shape on a slide: the canvas shape's fill and outline, more outlines to choose from, a shadow, and sized text. */
 export type SlideShapeElement = Omit<ShapeElement, 'shape'> & {
