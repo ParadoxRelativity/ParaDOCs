@@ -23,6 +23,7 @@ import { Button, IconButton } from '../ui';
 import Icon from '../Icon';
 import SlideInspector from './SlideInspector';
 import SlideRail from './SlideRail';
+import SlideShortcutsDialog from './SlideShortcutsDialog';
 import SlideShow from './SlideShow';
 import SlideStage, { type Zoom } from './SlideStage';
 import {
@@ -120,6 +121,7 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
   const [scale, setScale] = useState(1);
   const [grid, setGrid] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // The slideshow is local to this person: it reads the deck and writes nothing to it.
   const [show, setShow] = useState<{ startId: string | null } | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -370,7 +372,8 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
   // ---- keyboard -------------------------------------------------------------
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (inTextField(e.target)) return;
+    // The shortcuts dialog renders inside the editor, so its keys would otherwise reach the slides under it.
+    if (shortcutsOpen || inTextField(e.target)) return;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key;
     const inRail = (e.target as HTMLElement).closest?.('[data-slide-rail]') !== null;
@@ -418,6 +421,9 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
       handled();
       const d = e.shiftKey ? 10 : 1;
       nudge(key === 'ArrowLeft' ? -d : key === 'ArrowRight' ? d : 0, key === 'ArrowUp' ? -d : key === 'ArrowDown' ? d : 0);
+    } else if (key === '?' && !mod) {
+      handled();
+      setShortcutsOpen(true);
     } else if (key === 'Enter' && selection.length === 1 && canEdit && (e.target as HTMLElement).closest?.('[data-slide-stage]')) {
       handled();
       setEditingId(selection[0].id);
@@ -498,6 +504,11 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
               </span>
             ))}
           </span>
+          {!mobile && (
+            <IconButton label="Keyboard shortcuts (?)" onClick={() => setShortcutsOpen(true)}>
+              <Icon name="keyboard" />
+            </IconButton>
+          )}
           <button
             type="button"
             aria-pressed={grid}
@@ -619,6 +630,15 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
       )}
 
       <SlideInsertDialogs />
+      {shortcutsOpen && (
+        <SlideShortcutsDialog
+          canEdit={canEdit}
+          onClose={() => {
+            setShortcutsOpen(false);
+            root.current?.focus();
+          }}
+        />
+      )}
       <SlideImportHost presentationId={presentation.id} />
 
       {mobile && sheetOpen && (
