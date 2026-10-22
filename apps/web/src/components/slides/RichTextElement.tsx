@@ -8,6 +8,7 @@ import { EditorView } from 'prosemirror-view';
 import { redo, undo, yUndoPlugin, ySyncPlugin, ySyncPluginKey } from 'y-prosemirror';
 import {
   DEFAULT_COLUMN_GAP,
+  fieldFromAttributes,
   fontStack,
   listNumbers,
   resolveSlideColor,
@@ -16,6 +17,7 @@ import {
   textInsets,
   type RichParagraph,
   type RichTextElement,
+  type SlideField,
   type Theme,
   type WorkspaceMember,
 } from '@paradocs/shared';
@@ -23,6 +25,9 @@ import { MentionPicker, mentionQueryAt, useMemberNames, type MentionPick } from 
 import { backspaceInList, indentCommand, numberingPlugin, splitParagraph, toggleSimpleMark } from './richTextCommands';
 import { insetPadding, markStyle, paragraphStyle, px, richTextSchema, safeHref } from './richTextModel';
 import { clearEditor, publishEditor } from './richTextSession';
+import { LiveFieldValue, placeQueuedFields } from './SlideLiveFields';
+import { useWatched } from './SlideMediaElements';
+import { stopShow, useSlideLink } from './slideLinks';
 import { SlideDocContext, registerSlideElementRenderer, type SlideElementRendererProps } from './slideExtensions';
 import './slideText.css';
 
@@ -145,8 +150,10 @@ function Frame({
 }
 
 /** Read-only rich text: React drawn from the snapshot, so thumbnails and the slideshow mount no editor. */
-function Paragraphs({ paragraphs, names, link }: { paragraphs: RichParagraph[]; names: Map<string, string>; link: boolean }) {
+function Paragraphs({ paragraphs, names, link, live }: { paragraphs: RichParagraph[]; names: Map<string, string>; link: boolean; live: boolean }) {
   const numbers = useMemo(() => listNumbers(paragraphs), [paragraphs]);
+  // The slide is drawn ignoring the pointer; in a show, its links take it back.
+  const presenting = useSlideLink() !== null;
   return (
     <>
       {paragraphs.map((paragraph, i) => (
@@ -155,7 +162,7 @@ function Paragraphs({ paragraphs, names, link }: { paragraphs: RichParagraph[]; 
           className="slide-p"
           data-bullet={paragraph.bullet}
           data-num={numbers[i] ?? undefined}
-          data-empty={paragraph.bullet && !paragraph.runs.some((run) => run.mention || run.text) ? '' : undefined}
+          data-empty={paragraph.bullet && !paragraph.runs.some((run) => run.mention || run.field || run.text) ? '' : undefined}
           style={paragraphStyle(paragraph)}
         >
           {paragraph.runs.length === 0 ? (
@@ -169,11 +176,21 @@ function Paragraphs({ paragraphs, names, link }: { paragraphs: RichParagraph[]; 
                   </span>
                 );
               }
+              if (run.field) return <LiveFieldValue key={r} field={run.field.ref} live={live} />;
               const href = safeHref(run.marks?.link);
               const style = markStyle(run.marks);
               // A link is only followable where the slide is being read; on the stage a click selects it.
               return href && link ? (
-                <a key={r} href={href} target="_blank" rel="noopener noreferrer" style={style}>
+                <a
+                  key={r}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={presenting ? { ...style, pointerEvents: 'auto' } : style}
+                  onPointerDown={stopShow}
+                  onPointerUp={stopShow}
+                  onClick={stopShow}
+                >
                   {run.text}
                 </a>
               ) : (
@@ -194,11 +211,15 @@ const EMPTY: RichParagraph[] = [];
 function RichTextView({ element, theme, members, readOnly }: { element: RichTextElement; theme: Theme; members: WorkspaceMember[]; readOnly: boolean }) {
   const names = useMemberNames(members);
   const paragraphs = element.paragraphs ?? EMPTY;
-  const empty = !element.text?.trim() && !paragraphs.some((p) => p.runs.some((run) => run.mention));
+  const empty = !element.text?.trim() && !paragraphs.some((p) => p.runs.some((run) => run.mention || run.field));
+  // Fields keep asking only while the box is drawn big enough to read: on the stage or in the show, not in thumbnails.
+  const [box, watched] = useWatched<HTMLDivElement>();
   return (
-    <Frame element={element} theme={theme} readOnly={readOnly} empty={empty}>
-      <Paragraphs paragraphs={paragraphs} names={names} link={readOnly} />
-    </Frame>
+    <div ref={box} className="h-full w-full">
+      <Frame element={element} theme={theme} readOnly={readOnly} empty={empty}>
+        <Paragraphs paragraphs={paragraphs} names={names} link={readOnly} live={watched} />
+      </Frame>
+    </div>
   );
 }
 
@@ -228,6 +249,8 @@ function RichTextEditor({
   const [mention, setMention] = useState<{ query: string; from: number; to: number } | null>(null);
   const dismissed = useRef<number | null>(null);
   const [view, setView] = useState<EditorView | null>(null);
+  // Fields draw their live value through React, portalled into the node views ProseMirror makes for them.
+  const [fields, setFields] = useState<Map<HTMLElement, { key: number; ref: SlideField | null }>>(() => new Map());
 
   const fragment = doc ? richTextBody(doc.ydoc, doc.slideId, element.id) : null;
 
@@ -288,6 +311,23 @@ function RichTextEditor({
           dom.textContent = `@${live.current.names.get(node.attrs.userId) ?? node.attrs.label}`;
           return { dom };
         },
+        field: (node) => {
+          const dom = document.createElement('span');
+          dom.className = 'slide-field-editing';
+          dom.contentEditable = 'false';
+          const entry = { key: ++fieldKeys, ref: fieldFromAttributes(node.attrs as Record<string, unknown>) };
+          setFields((map) => new Map(map).set(dom, entry));
+          return {
+            dom,
+            ignoreMutation: () => true,
+            destroy: () =>
+              setFields((map) => {
+                const next = new Map(map);
+                next.delete(dom);
+                return next;
+              }),
+          };
+        },
       },
       // `this`, not `editor`: the sync plugin dispatches while the view is still being constructed.
       dispatchTransaction(this: EditorView, tr) {
@@ -298,6 +338,7 @@ function RichTextEditor({
     setView(editor);
     editor.focus();
     editor.dispatch(editor.state.tr.setSelection(Selection.atEnd(editor.state.doc)));
+    placeQueuedFields(id, editor);
     afterUpdate(editor);
 
     return () => {
@@ -322,6 +363,7 @@ function RichTextEditor({
   return (
     <Frame element={element} theme={theme} readOnly={false} empty={empty} refit={refit}>
       <div ref={mount} />
+      {[...fields].map(([dom, { key, ref }]) => createPortal(ref ? <LiveFieldValue field={ref} live /> : <span className="slide-field">?</span>, dom, String(key)))}
       {mention && caret && members.length > 0 &&
         createPortal(
           <div style={{ position: 'fixed', left: caret.left, top: caret.bottom, zIndex: 60 }}>
@@ -341,10 +383,13 @@ function RichTextEditor({
   );
 }
 
+let fieldKeys = 0;
+
+/** Whether the body holds anything that is not text: a tag or a field. */
 function hasMention(state: EditorState): boolean {
   let found = false;
   state.doc.descendants((node) => {
-    if (node.type === richTextSchema.nodes.mention) found = true;
+    if (node.type === richTextSchema.nodes.mention || node.type === richTextSchema.nodes.field) found = true;
     return !found;
   });
   return found;

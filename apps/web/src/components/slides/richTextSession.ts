@@ -32,6 +32,11 @@ export function clearEditor(elementId: string) {
   emit();
 }
 
+/** The editor open now, read at the moment of an action rather than rendered from. */
+export function currentEditor(): ActiveEditor | null {
+  return active;
+}
+
 export function useActiveEditor(): ActiveEditor | null {
   return useSyncExternalStore(
     (listener) => {

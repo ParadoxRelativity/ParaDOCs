@@ -4,7 +4,9 @@ import {
   DEFAULT_COLUMN_GAP,
   buildPlan,
   coveredCells,
+  fieldKey,
   findLayout,
+  paragraphFields,
   resolveLayoutPlaceholders,
   resolveSlideColor,
   shapeGeometry,
@@ -21,6 +23,7 @@ import {
   type RichParagraph,
   type RichTextElement,
   type SlideBackground,
+  type SlideField,
   type SlideElement,
   type SlideLayout,
   type SlideShapeElement,
@@ -97,7 +100,19 @@ export type LiveSnapshot =
   | { kind: 'cell'; display: string; caption: string; isError: boolean }
   | { kind: 'chart'; title: string; chartKind: ChartKind; data: ChartData; caption: string }
   | { kind: 'workItem'; key: string; title: string; statusName: string; statusColor: string; done: boolean }
-  | { kind: 'document'; title: string; text: string };
+  | { kind: 'document'; title: string; text: string }
+  | {
+      kind: 'progress';
+      key: string;
+      title: string;
+      statusName: string;
+      statusColor: string;
+      percent: number;
+      /** "3 of 5 done", or the item's own state when nothing is under it. */
+      caption: string;
+      children: { key: string; title: string; statusName: string; done: boolean }[];
+    }
+  | { kind: 'person'; name: string; role: string; email: string };
 
 export interface ExportAssets {
   /** A picture by its url as stored on a slide, or null when it cannot be had. */
@@ -106,6 +121,8 @@ export interface ExportAssets {
   media(url: string, kind: 'video' | 'audio'): Promise<LoadedMedia | null>;
   /** The current value of a live element as the exporting person may see it; null when they may not. */
   live(element: SlideElement): Promise<LiveSnapshot | null>;
+  /** What a live field in text reads now, as the exporting person may see it; null when they may not. */
+  field?(field: SlideField): Promise<string | null>;
 }
 
 export interface PptxExportOptions {
@@ -285,7 +302,7 @@ class Exporter {
 
     switch (el.type) {
       case 'richText':
-        return this.addRichText(slide, el, name, meta);
+        return await this.addRichText(slide, el, name, meta);
       case 'text':
         slide.addText(el.text, {
           ...this.box(el),
@@ -314,6 +331,8 @@ class Exporter {
       case 'sheetCell':
       case 'sheetChart':
       case 'workItem':
+      case 'workItemProgress':
+      case 'person':
       case 'link':
         return this.addLive(slide, el, name);
       default:
@@ -323,7 +342,7 @@ class Exporter {
 
   // --- rich text -----------------------------------------------------------
 
-  private runs(el: RichTextElement, paragraphs: RichParagraph[]): Opts[] {
+  private runs(el: RichTextElement, paragraphs: RichParagraph[], fields: Map<string, string | null> = new Map()): Opts[] {
     const base = el.fontSize ?? DEFAULT_TEXT;
     const out: Opts[] = [];
     paragraphs.forEach((p, i) => {
@@ -339,7 +358,8 @@ class Exporter {
       const runs = p.runs.length ? p.runs : [{ text: '' }];
       runs.forEach((run, r) => {
         const marks = run.marks ?? {};
-        const text = run.mention ? `@${run.mention.label}` : (run.text ?? '');
+        // A field is written as it reads now; one the exporter may not see, as a dash rather than its label.
+        const text = run.mention ? `@${run.mention.label}` : run.field ? (fields.get(fieldKey(run.field.ref)) ?? '—') : (run.text ?? '');
         const linked = safeUrl(marks.link);
         const options: Opts = {
           ...(r === 0 ? paragraph : {}),
@@ -360,13 +380,23 @@ class Exporter {
     return out;
   }
 
-  private addRichText(slide: PptxSlide, el: RichTextElement, name: string, meta: SlideMeta) {
+  private async addRichText(slide: PptxSlide, el: RichTextElement, name: string, meta: SlideMeta) {
     const paragraphs = el.paragraphs?.length ? el.paragraphs : [{ runs: el.text ? [{ text: el.text }] : [] }];
+    const fields = new Map<string, string | null>();
+    for (const field of paragraphFields(paragraphs)) {
+      const key = fieldKey(field);
+      if (fields.has(key)) continue;
+      fields.set(key, this.assets.field ? await this.assets.field(field).catch(() => null) : null);
+    }
+    if (fields.size) {
+      this.note('Live values in text are exported as they stand now and no longer update.');
+      if ([...fields.values()].includes(null)) this.note('Live values in text you cannot access are exported as a dash.');
+    }
     const fill = el.fill && el.fill !== 'transparent' ? this.color(el.fill) : undefined;
     const inset = textInsets(el);
     const columns = textColumns(el);
     if (columns > 1) meta.columns.set(name, ` numCol="${columns}" spcCol="${emu(el.columnGap ?? DEFAULT_COLUMN_GAP)}"`);
-    slide.addText(this.runs(el, paragraphs) as never, {
+    slide.addText(this.runs(el, paragraphs, fields) as never, {
       ...this.box(el),
       color: this.color(el.color ?? 'theme:text1', '000000'),
       fontFace: el.fontFamily,
@@ -578,9 +608,20 @@ class Exporter {
     } as Opts as never);
   }
 
-  private async addLive(slide: PptxSlide, el: Extract<SlideElement, { type: 'sheetCell' | 'sheetChart' | 'workItem' | 'link' }>, name: string) {
+  private async addLive(
+    slide: PptxSlide,
+    el: Extract<SlideElement, { type: 'sheetCell' | 'sheetChart' | 'workItem' | 'workItemProgress' | 'person' | 'link' }>,
+    name: string,
+  ) {
     const live = await this.assets.live(el).catch(() => null);
-    const what = { sheetCell: 'This value', sheetChart: 'This chart', workItem: 'This work item', link: 'This document' }[el.type];
+    const what = {
+      sheetCell: 'This value',
+      sheetChart: 'This chart',
+      workItem: 'This work item',
+      workItemProgress: 'This work item',
+      person: 'This person',
+      link: 'This document',
+    }[el.type];
     if (!live) {
       // Never the label or title the author gave it: the exporter may not be allowed to know what it was.
       this.note('Live content you cannot access is exported as an empty placeholder.');
@@ -609,6 +650,27 @@ class Exporter {
         return this.card(slide, el, name, [
           { text: live.title, options: { bold: true, fontSize: 22, color: INK, breakLine: true } },
           { text: live.text, options: { fontSize: 14, color: INK } },
+        ]);
+      case 'progress': {
+        const runs: Opts[] = [
+          { text: `${live.key} · ${live.statusName}`, options: { bold: true, fontSize: 16, color: MUTED, breakLine: true } },
+          { text: live.title, options: { bold: true, fontSize: 28, color: INK, breakLine: true } },
+          { text: `${live.percent}%`, options: { bold: true, fontSize: 48, color: INK, breakLine: true } },
+          { text: live.caption, options: { fontSize: 16, color: MUTED, breakLine: live.children.length > 0 } },
+        ];
+        live.children.slice(0, 12).forEach((child, i, shown) =>
+          runs.push({
+            text: `${child.key}  ${child.title} — ${child.statusName}`,
+            options: { fontSize: 13, color: child.done ? MUTED : INK, strike: child.done ? 'sngStrike' : undefined, breakLine: i < shown.length - 1 },
+          }),
+        );
+        return this.card(slide, el, name, runs);
+      }
+      case 'person':
+        return this.card(slide, el, name, [
+          { text: live.name, options: { bold: true, fontSize: 32, color: INK, breakLine: true } },
+          { text: live.role, options: { fontSize: 18, color: MUTED, breakLine: true } },
+          { text: live.email, options: { fontSize: 16, color: MUTED } },
         ]);
       case 'chart':
         return this.addChart(slide, el, name, live);

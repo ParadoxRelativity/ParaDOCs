@@ -54,3 +54,19 @@
   opacity: 0.4;
   pointer-events: none;
 }
+/* A live value reads as the text around it; only while editing is it marked out as one. */
+.slide-text .slide-field-editing {
+  border-radius: 0.2em;
+  padding: 0 0.1em;
+  background: rgb(16 185 129 / 0.16);
+  box-shadow: inset 0 -0.08em 0 rgb(16 185 129 / 0.7);
+}
+.slide-text .slide-field-locked {
+  opacity: 0.55;
+  font-size: 0.8em;
+}
+.slide-text .slide-field-link {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.15em;
+}

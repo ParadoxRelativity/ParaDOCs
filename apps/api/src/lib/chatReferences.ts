@@ -1,4 +1,5 @@
 import {
+  MAX_WORK_ITEM_CHILDREN,
   collectReferences,
   type ChannelReference,
   type DocumentReference,
@@ -7,7 +8,11 @@ import {
   type PresentationReference,
   type ProjectReference,
   type ScheduleReference,
+  type EpicProgress,
   type SpreadsheetReference,
+  type StatusCategory,
+  type WorkItemChild,
+  type WorkItemDetail,
   type WorkItemReference,
 } from '@paradocs/shared';
 import { query } from '../db/pool.js';
@@ -173,4 +178,93 @@ export async function resolveWorkItems(
     [ids, workspaceId, ...(viewerId ? [viewerId] : [])],
   );
   return rows;
+}
+
+/**
+ * Work items in detail, for the status slides of a presentation: each item as
+ * {@link resolveWorkItems} gives it, with who is on it, when it is due, and
+ * how far the work under it has got. The same access rule applies, and the
+ * work under an item is counted and listed only where the viewer may see it.
+ */
+export async function resolveWorkItemDetails(ids: string[], viewerId: string): Promise<WorkItemDetail[]> {
+  if (ids.length === 0) return [];
+  const viewerRole = roleIdSql('$2', 'p.workspace_id');
+  const { rows } = await query<Omit<WorkItemDetail, 'progress' | 'children' | 'statuses'>>(
+    `SELECT i.id, i.project_id AS "projectId", p.key || '-' || i.number AS key, i.title,
+            st.name AS "statusName", st.category AS "statusCategory", st.color AS "statusColor",
+            COALESCE(t.name, '') AS "typeName", COALESCE(t.epic, false) AS epic,
+            to_char(i.due_date, 'YYYY-MM-DD') AS "dueDate",
+            COALESCE((
+              SELECT json_agg(COALESCE(u.name, wr.name) ORDER BY wr.created_at)
+                FROM work_item_roles wr
+                LEFT JOIN users u ON u.id = wr.user_id
+               WHERE wr.work_item_id = i.id
+                 AND wr.role_id = (SELECT r.id FROM project_roles r
+                                    WHERE r.project_id = i.project_id
+                                    ORDER BY r.position, r.created_at LIMIT 1)
+                 AND COALESCE(u.name, wr.name) IS NOT NULL
+            ), '[]'::json) AS people
+       FROM work_items i
+       JOIN projects p ON p.id = i.project_id
+       JOIN project_statuses st ON st.id = i.status_id
+       LEFT JOIN project_item_types t ON t.id = i.type_id
+      WHERE i.id = ANY($1::uuid[])
+        AND ${appEnabledSql('p.workspace_id', 'projects')}
+        AND ${projectLevelSql('$2', viewerRole)} > 0`,
+    [ids, viewerId],
+  );
+  if (rows.length === 0) return [];
+
+  const found = rows.map((row) => row.id);
+  const childRole = roleIdSql('$2', 'cp.workspace_id');
+  const [children, statuses, totals] = await Promise.all([
+    query<WorkItemChild & { epicId: string; rank: number }>(
+      `SELECT * FROM (
+         SELECT c.epic_id AS "epicId", c.id, cp.key || '-' || c.number AS key, c.title,
+                cs.name AS "statusName", cs.category AS "statusCategory", cs.color AS "statusColor",
+                row_number() OVER (PARTITION BY c.epic_id ORDER BY (cs.category = 'done'), cs.position, c.position) AS rank
+           FROM work_items c
+           JOIN projects cp ON cp.id = c.project_id
+           JOIN project_statuses cs ON cs.id = c.status_id
+          WHERE c.epic_id = ANY($1::uuid[]) AND c.archived_at IS NULL
+            AND ${projectLevelSql('$2', childRole, 'cp')} > 0
+       ) ranked
+       WHERE rank <= $3
+       ORDER BY "epicId", rank`,
+      [found, viewerId, MAX_WORK_ITEM_CHILDREN],
+    ),
+    query<{ epicId: string; name: string; color: string; category: StatusCategory; count: number }>(
+      `SELECT c.epic_id AS "epicId", cs.name, cs.color, cs.category, count(*)::int AS count
+         FROM work_items c
+         JOIN projects cp ON cp.id = c.project_id
+         JOIN project_statuses cs ON cs.id = c.status_id
+        WHERE c.epic_id = ANY($1::uuid[])
+          AND ${projectLevelSql('$2', childRole, 'cp')} > 0
+        GROUP BY c.epic_id, cs.name, cs.color, cs.category
+        ORDER BY c.epic_id, min(cs.position)`,
+      [found, viewerId],
+    ),
+    // Archived work is always done, as epicProgress counts it.
+    query<{ epicId: string } & EpicProgress>(
+      `SELECT c.epic_id AS "epicId", count(*)::int AS total,
+              count(*) FILTER (WHERE cs.category = 'done' OR c.archived_at IS NOT NULL)::int AS done,
+              COALESCE(sum(c.estimate), 0)::float8 AS estimate,
+              COALESCE(sum(c.estimate) FILTER (WHERE cs.category = 'done' OR c.archived_at IS NOT NULL), 0)::float8 AS "doneEstimate"
+         FROM work_items c
+         JOIN projects cp ON cp.id = c.project_id
+         JOIN project_statuses cs ON cs.id = c.status_id
+        WHERE c.epic_id = ANY($1::uuid[])
+          AND ${projectLevelSql('$2', childRole, 'cp')} > 0
+        GROUP BY c.epic_id`,
+      [found, viewerId],
+    ),
+  ]);
+
+  const progress = new Map(totals.rows.map(({ epicId, ...rest }) => [epicId, rest]));
+  return rows.map((row) => ({
+    ...row,
+    progress: progress.get(row.id) ?? null,
+    children: children.rows.filter((c) => c.epicId === row.id).map(({ epicId: _e, rank: _r, ...child }) => child),
+    statuses: statuses.rows.filter((s) => s.epicId === row.id).map(({ name, color, category, count }) => ({ name, color, category, count })),
+  }));
 }

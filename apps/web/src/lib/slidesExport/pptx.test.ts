@@ -388,6 +388,42 @@ describe('buildPptx: other decks', () => {
     expect(result.report.some((r) => r.includes('Embedded web pages'))).toBe(true);
   });
 
+  it('writes live fields in text as they read now, and a dash where the exporter may not see them', async () => {
+    const doc = new Y.Doc();
+    const id = createSlide(doc);
+    const item = '33333333-3333-4333-8333-333333333333';
+    setSlideElement(doc, id, rich('r', {
+      paragraphs: [
+        {
+          runs: [
+            { text: 'Epic is ' },
+            { field: { ref: { kind: 'workItem', itemId: item, part: 'percent' }, label: 'SECRET-LABEL' } },
+            { text: ' done; revenue ' },
+            { field: { ref: { kind: 'cell', spreadsheetId: item, sheetId: 's', cell: 'B5' }, label: 'SECRET-CELL' } },
+          ],
+        },
+      ],
+    }));
+    setSlideElement(doc, id, { id: 'p', type: 'workItemProgress', itemId: item, label: 'SECRET-EPIC', x: 0, y: 600, width: 1600, height: 400, z: 2 } as SlideElement);
+    const deck = readDeck(doc);
+    const seen: ExportAssets = {
+      ...assets((el) =>
+        el.type === 'workItemProgress'
+          ? { kind: 'progress', key: 'PARA-7', title: 'Ship it', statusName: 'In progress', statusColor: '#2563eb', percent: 60, caption: '3 of 5 done', children: [{ key: 'PARA-8', title: 'Docs', statusName: 'Done', done: true }] }
+          : null,
+      ),
+      field: async (field) => (field.kind === 'workItem' ? '60%' : null),
+    };
+    const result = await buildPptx(deck, { title: 'Fields', assets: seen });
+    const xml = await (await unzip(result)).text('ppt/slides/slide1.xml');
+    expect(xml).toContain('<a:t>60%</a:t>');
+    expect(xml).toContain('—');
+    expect(xml).toContain('3 of 5 done');
+    expect(xml).toContain('PARA-8');
+    expect(xml).not.toContain('SECRET');
+    expect(result.report.join(' ')).toContain('as a dash');
+  });
+
   it('never lets a theme-color token reach the file', async () => {
     const deck = fixture();
     const out = await unzip(await buildPptx(deck, { title: 'Tokens', assets: assets(live) }));

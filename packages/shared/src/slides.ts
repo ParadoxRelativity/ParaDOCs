@@ -42,6 +42,7 @@ import type {
 } from './canvas.js';
 import type { ElementAnimation } from './slideBuilds.js';
 import type { AccessMode, Permission } from './types.js';
+import { FIELD_NODE } from './slideFields.js';
 import {
   MENTION_NODE,
   fragmentMentions,
@@ -68,6 +69,7 @@ import {
 } from './slideTheme.js';
 
 export * from './slideRichText.js';
+export * from './slideFields.js';
 export * from './slideShapes.js';
 export * from './slideFonts.js';
 export * from './slideFromCanvas.js';
@@ -293,7 +295,29 @@ export interface TableElement extends SlideElementBase {
   headerRow?: boolean;
 }
 
-export type SlideElement = SlideCanvasElement | RichTextElement | TableElement;
+/**
+ * How far a work item has got, as a status slide shows it: for an epic, the
+ * share of the work under it that is done, with that work listed by status.
+ * Like the other live elements it stores only which item.
+ */
+export interface WorkItemProgressElement extends SlideElementBase {
+  type: 'workItemProgress';
+  itemId: string;
+  /** What it was called when placed, for search; never shown to someone who cannot see the item. */
+  label?: string;
+  /** List the work under it beside the bar. On unless set to false. */
+  showChildren?: boolean;
+}
+
+/** A workspace member as a card: picture, name and role, as they are now. */
+export interface PersonElement extends SlideElementBase {
+  type: 'person';
+  userId: string;
+  /** Their name when placed, for search and for when they are no longer a member. */
+  label?: string;
+}
+
+export type SlideElement = SlideCanvasElement | RichTextElement | TableElement | WorkItemProgressElement | PersonElement;
 export type SlideElementType = SlideElement['type'];
 
 export function tableCellKey(row: number, column: number): string {
@@ -500,6 +524,7 @@ export function fragmentText(fragment: Y.XmlFragment): string {
       return (node.toDelta() as { insert?: unknown }[]).map((op) => (typeof op.insert === 'string' ? op.insert : '')).join('');
     }
     if (node instanceof Y.XmlElement && node.nodeName === MENTION_NODE) return `@${node.getAttribute('label') ?? ''}`;
+    if (node instanceof Y.XmlElement && node.nodeName === FIELD_NODE) return String(node.getAttribute('label') ?? '');
     // BlockNote nests a line per block inside group and container nodes (speaker notes are written with it); runs inside a block join.
     const blocks = node instanceof Y.XmlElement && (node.nodeName === 'blockGroup' || node.nodeName === 'blockContainer');
     return node
@@ -626,6 +651,8 @@ export function slideElementText(element: SlideElement): string {
     case 'sheetCell':
     case 'sheetChart':
     case 'workItem':
+    case 'workItemProgress':
+    case 'person':
       return element.label ?? '';
     case 'link':
       return element.title ?? '';
