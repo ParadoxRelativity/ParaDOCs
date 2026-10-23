@@ -20,7 +20,7 @@ import {
   type PresentationSummary,
 } from '@paradocs/shared';
 import { CURSOR_TEXT, decodeCursor, encodeCursor, isUuid } from '../lib/cursor.js';
-import { query, transaction } from '../db/pool.js';
+import { query, transaction, type DbClient } from '../db/pool.js';
 import { HttpError, badRequest, notFound, parse } from '../lib/http.js';
 import { assertDocumentAccess, assertWorkspaceAccess } from '../plugins/session.js';
 import { assertFolderAccess, assertMoveKeepsAccess, assertPresentationAccess, presentationLevelSql, roleIdSql } from '../lib/access.js';
@@ -29,6 +29,7 @@ import { treeChanged } from '../lib/treeEvents.js';
 import { loadDeck } from '../lib/deck.js';
 import { liveDocument } from '../lib/liveDocuments.js';
 import { activeShows } from '../lib/liveShows.js';
+import { removeStoredFiles } from '../lib/storage.js';
 import { linkTemplateAssetsToPresentation, usableTemplate } from './presentationTemplates.js';
 
 /**
@@ -51,6 +52,44 @@ async function fetchPresentation(id: string, userId: string) {
   );
   if (!rows[0]) throw notFound('Presentation not found');
   return rows[0];
+}
+
+/**
+ * The pictures a deck shows, whether uploaded to it or linked to it, that no
+ * other deck, document or template holds the address of. A slide pasted into
+ * another deck, or a picture pasted into a document, carries the address
+ * without linking the upload, so their contents are searched for it: saved,
+ * and open in the collaboration server, which is newer than saved.
+ */
+async function picturesOnlyIn(db: Pick<DbClient, 'query'>, workspaceId: string, presentationId: string): Promise<string[]> {
+  // Yjs stores text as plain UTF-8, so the address can be found in the saved state as bytes.
+  const { rows: pictures } = await db.query<{ id: string; storage_key: string }>(
+    `SELECT a.id, a.storage_key FROM attachments a
+      WHERE a.workspace_id = $1
+        AND (a.presentation_id = $2
+             OR EXISTS (SELECT 1 FROM presentation_attachments pa WHERE pa.attachment_id = a.id AND pa.presentation_id = $2))
+        AND NOT EXISTS (SELECT 1 FROM presentations p
+                         WHERE p.workspace_id = $1 AND p.id <> $2 AND position(convert_to(a.storage_key, 'UTF8') IN p.ydoc) > 0)
+        AND NOT EXISTS (SELECT 1 FROM presentation_templates t
+                         WHERE t.workspace_id = $1 AND position(convert_to(a.storage_key, 'UTF8') IN t.ydoc) > 0)
+        AND NOT EXISTS (SELECT 1 FROM documents d
+                         WHERE d.workspace_id = $1
+                           AND (strpos(d.body::text, a.storage_key) > 0 OR position(convert_to(a.storage_key, 'UTF8') IN d.ydoc) > 0))`,
+    [workspaceId, presentationId],
+  );
+  if (pictures.length === 0) return [];
+
+  const { rows: others } = await db.query<{ id: string; deck: boolean }>(
+    `SELECT id, true AS deck FROM presentations WHERE workspace_id = $1 AND id <> $2
+     UNION ALL
+     SELECT id, false FROM documents WHERE workspace_id = $1`,
+    [workspaceId, presentationId],
+  );
+  const open = others.flatMap(({ id, deck }) => {
+    const doc = liveDocument(deck ? slidesCollabName(id) : id);
+    return doc ? [Buffer.from(Y.encodeStateAsUpdate(doc))] : [];
+  });
+  return pictures.filter((p) => !open.some((state) => state.includes(p.storage_key))).map((p) => p.id);
 }
 
 const presentationListSchema = z.object({
@@ -350,7 +389,23 @@ export const presentationRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { id: string } }>('/presentations/:id', async (req, reply) => {
     const { workspaceId } = await assertPresentationAccess(req, req.params.id, 'delete');
-    await query('DELETE FROM presentations WHERE id = $1', [req.params.id]);
+    const removed = await transaction(async (client) => {
+      const pictures = await picturesOnlyIn(client, workspaceId, req.params.id);
+      await client.query('DELETE FROM presentations WHERE id = $1', [req.params.id]);
+      if (pictures.length === 0) return [];
+      // With the deck gone, a picture it owned has no presentation, and its
+      // link from this deck is gone; what still has neither is used nowhere.
+      const { rows } = await client.query<{ storage_key: string }>(
+        `DELETE FROM attachments a
+          WHERE a.id = ANY($1::uuid[]) AND a.document_id IS NULL AND a.presentation_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM presentation_attachments pa WHERE pa.attachment_id = a.id)
+            AND NOT EXISTS (SELECT 1 FROM presentation_template_attachments ta WHERE ta.attachment_id = a.id)
+          RETURNING a.storage_key`,
+        [pictures],
+      );
+      return rows.map((row) => row.storage_key);
+    });
+    await removeStoredFiles(removed, req.log);
     treeChanged(workspaceId, 'slides');
     reply.status(204);
   });

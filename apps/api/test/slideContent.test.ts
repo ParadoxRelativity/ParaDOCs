@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startApi, type Api, type TestUser } from './harness.js';
 
@@ -72,6 +74,44 @@ describe('slide content', () => {
     const { body } = await upload(owner, { presentationId: id });
     const unattached = (await api.call(owner, 'GET', `/workspaces/${ws}/uploads?unattached=true`)).body.uploads as { id: string }[];
     expect(unattached.some((u) => u.id === body.id)).toBe(false);
+  });
+
+  it('deletes the pictures only a deleted deck used, file and all', async () => {
+    const id = await deck();
+    const { body } = await upload(owner, { presentationId: id });
+    const onDisk = path.join(process.env.UPLOAD_DIR!, body.url.slice('/uploads/'.length));
+    expect(fs.existsSync(onDisk)).toBe(true);
+    expect((await api.call(owner, 'DELETE', `/presentations/${id}`)).status).toBe(204);
+    expect(await api.sql('SELECT 1 FROM attachments WHERE id = $1', [body.id])).toHaveLength(0);
+    expect(fs.existsSync(onDisk)).toBe(false);
+  });
+
+  it('keeps a deleted deck\'s pictures that a copy, another deck or a document still shows', async () => {
+    const id = await deck();
+    const copied = (await upload(owner, { presentationId: id })).body;
+    const pasted = (await upload(owner, { presentationId: id })).body;
+    const inDocument = (await upload(owner, { presentationId: id })).body;
+    const unused = (await upload(owner, { presentationId: id })).body;
+
+    // A copy is linked to every picture; keep only the first linked, to see each way of using one on its own.
+    const copy = (await api.call(owner, 'POST', `/presentations/${id}/duplicate`)).body.id as string;
+    await api.sql('DELETE FROM presentation_attachments WHERE presentation_id = $1 AND attachment_id <> $2', [copy, copied.id]);
+    // A slide pasted into another deck carries the picture's address, unlinked.
+    const other = await deck();
+    await api.sql('UPDATE presentations SET ydoc = $2 WHERE id = $1', [other, Buffer.from(`..."src":"${pasted.url}"...`)]);
+    const doc = (await api.call(owner, 'POST', `/workspaces/${ws}/documents`, { title: 'Notes' })).body.id as string;
+    await api.sql('UPDATE documents SET body = $2::jsonb WHERE id = $1', [
+      doc,
+      JSON.stringify([{ type: 'image', props: { url: inDocument.url }, children: [] }]),
+    ]);
+
+    expect((await api.call(owner, 'DELETE', `/presentations/${id}`)).status).toBe(204);
+    const left = (await api.sql<{ id: string }>('SELECT id FROM attachments WHERE id = ANY($1::uuid[])', [
+      [copied.id, pasted.id, inDocument.id, unused.id],
+    ])).map((row) => row.id);
+    expect(left.sort()).toEqual([copied.id, pasted.id, inDocument.id].sort());
+    // What is kept is still served to those who could see it.
+    expect(await fetchFile(viewer, copied.url)).toBe(200);
   });
 
   it('tells a member they were tagged on a slide, opening the deck there, once, and only if they can open it', async () => {
