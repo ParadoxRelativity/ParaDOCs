@@ -18,6 +18,7 @@ import type {
   CalendarEvent,
   Channel,
   Comment,
+  SlideCommentThreads,
   Doc,
   DocumentMode,
   DocumentSummary,
@@ -36,7 +37,12 @@ import type {
   WorkspacePermission,
   WorkspaceRole,
   SearchHit,
+  PresentationSummary,
+  PresentationTemplateSummary,
+  TemplateStyle,
   SheetFolderNode,
+  SlideFolderNode,
+  DeckSnapshot,
   SheetSearchHit,
   SpreadsheetSummary,
   Tag,
@@ -87,6 +93,7 @@ import type {
   WorkItemSummary,
   WorkItemTimeline,
   CreateLayerInput,
+  PresentationSearchHit,
   ScheduleSearchHit,
   CreateOverrideInput,
   CreateRequestInput,
@@ -108,7 +115,7 @@ import { measure } from '../lib/chatFiles';
 import { rememberNewDocument } from '../lib/newDocuments';
 import { api, qs } from './client';
 import { forgetCache } from '../lib/queryPersistence';
-import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken, shareOrigin } from '../lib/server';
+import { authHeaders, fromServer, serverUrl, setMediaToken, setSessionToken, shareOrigin, toServer } from '../lib/server';
 
 export interface WorkspaceSummary extends Workspace {
   documentCount: number;
@@ -138,6 +145,12 @@ export interface SheetTree {
   unfiledCount: number;
 }
 
+/** The Slides app's tree: folders with their counts, and how many presentations are in none. */
+export interface SlideTree {
+  folders: SlideFolderNode[];
+  unfiledCount: number;
+}
+
 export type DocumentSort = 'updated' | 'created' | 'title';
 
 export interface DocumentList {
@@ -152,10 +165,15 @@ export const keys = {
   workspaces: ['workspaces'] as const,
   tree: (ws: string) => ['tree', ws] as const,
   sheetTree: (ws: string) => ['sheetTree', ws] as const,
+  slideTree: (ws: string) => ['slideTree', ws] as const,
+  presentation: (id: string) => ['presentation', id] as const,
+  presentationDeck: (id: string) => ['presentationDeck', id] as const,
+  presentationTemplates: (ws: string) => ['presentationTemplates', ws] as const,
   documents: (ws: string) => ['documents', ws] as const,
   document: (id: string) => ['document', id] as const,
   tags: (ws: string) => ['tags', ws] as const,
   comments: (id: string) => ['comments', id] as const,
+  slideComments: (presentationId: string) => ['slideComments', presentationId] as const,
   events: (ws: string, from: string, to: string) => ['events', ws, from, to] as const,
   activity: (ws: string, from: string, to: string) => ['activity', ws, from, to] as const,
   search: (ws: string, key: string) => ['search', ws, key] as const,
@@ -433,6 +451,15 @@ export function useSheetTree(workspaceId: string | undefined) {
   });
 }
 
+/** The Slides app's folders, the presentations in each, and those in none. */
+export function useSlideTree(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.slideTree(workspaceId ?? ''),
+    queryFn: () => api.get<SlideTree>(`/workspaces/${workspaceId}/slide-tree`),
+    enabled: Boolean(workspaceId),
+  });
+}
+
 /**
  * A folder's documents, by title, a page at a time, read only while it is
  * open. Kept under the tree's key, so whatever asks for the tree again asks
@@ -475,9 +502,49 @@ export function useUnfiledSpreadsheets(workspaceId: string | undefined, enabled 
   });
 }
 
+/** The same for a Slides folder's presentations, under the Slides tree's key. */
+export function useFolderPresentations(workspaceId: string, folderId: string, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: [...keys.slideTree(workspaceId), 'folder', folderId] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<ContentsPage<PresentationSummary>>(`/folders/${folderId}/presentations${qs({ cursor: pageParam ?? undefined })}`),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+  });
+}
+
+/** The presentations in no folder, most recently touched first, a page at a time. */
+export function useUnfiledPresentations(workspaceId: string | undefined, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: [...keys.slideTree(workspaceId ?? ''), 'unfiled'] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<ContentsPage<PresentationSummary>>(
+        `/workspaces/${workspaceId}/presentations${qs({ unfiled: true, cursor: pageParam ?? undefined })}`,
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled: Boolean(workspaceId) && enabled,
+  });
+}
+
+/** The archived presentations, most recently touched first, a page at a time. */
+export function useArchivedPresentations(workspaceId: string | undefined, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: [...keys.slideTree(workspaceId ?? ''), 'archived'] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<ContentsPage<PresentationSummary>>(
+        `/workspaces/${workspaceId}/presentations${qs({ archived: true, cursor: pageParam ?? undefined })}`,
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled: Boolean(workspaceId) && enabled,
+  });
+}
+
 /** The tree a folder belongs to, which is what changes when it does. */
 function folderTreeKey(workspaceId: string, app: FolderApp) {
-  return app === 'sheets' ? keys.sheetTree(workspaceId) : keys.tree(workspaceId);
+  return app === 'sheets' ? keys.sheetTree(workspaceId) : app === 'slides' ? keys.slideTree(workspaceId) : keys.tree(workspaceId);
 }
 
 /** Folders in the documents tree, unless `app` says the spreadsheets one. */
@@ -508,7 +575,7 @@ export function useDeleteFolder(workspaceId: string, app: FolderApp = 'docs') {
       api.delete<{ deleted: string[] } | undefined>(`/folders/${id}${deleteContents ? '?contents=delete' : ''}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: folderTreeKey(workspaceId, app) });
-      if (app === 'sheets') return;
+      if (app !== 'docs') return;
       // Documents either became unfiled or are gone, which the flat listing and
       // the workspace's document count both show.
       qc.invalidateQueries({ queryKey: ['allDocuments', workspaceId] });
@@ -521,7 +588,7 @@ export function useDeleteFolder(workspaceId: string, app: FolderApp = 'docs') {
 
 /** Something that can be locked. */
 export interface AccessTarget {
-  kind: 'folder' | 'document' | 'spreadsheet' | 'channel' | 'project' | 'schedule';
+  kind: 'folder' | 'document' | 'spreadsheet' | 'presentation' | 'channel' | 'project' | 'schedule';
   id: string;
 }
 
@@ -529,6 +596,7 @@ const ACCESS_PATHS = {
   folder: 'folders',
   document: 'documents',
   spreadsheet: 'spreadsheets',
+  presentation: 'presentations',
   channel: 'channels',
   project: 'projects',
   schedule: 'schedules',
@@ -861,7 +929,7 @@ export function useDeleteDocument(workspaceId: string) {
 export function useLinkTargets(
   workspaceId: string | undefined,
   q: string,
-  options: { kinds?: ('documents' | 'spreadsheets')[]; limit?: number; enabled?: boolean } = {},
+  options: { kinds?: ('documents' | 'spreadsheets' | 'presentations')[]; limit?: number; enabled?: boolean } = {},
 ) {
   const kinds = (options.kinds ?? ['documents', 'spreadsheets']).join(',');
   const limit = options.limit ?? 20;
@@ -926,6 +994,133 @@ export function useDeleteSpreadsheet(workspaceId: string) {
     onSuccess: () => {
       return qc.invalidateQueries({ queryKey: keys.sheetTree(workspaceId) });
     },
+  });
+}
+
+// --- presentations -----------------------------------------------------------
+// The Slides app's records, laid out as the spreadsheet hooks above are.
+
+export function usePresentation(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.presentation(id ?? ''),
+    queryFn: () => api.get<PresentationSummary>(`/presentations/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+/** The slides of a presentation as a read-only snapshot: what the placeholder view draws until the editor lands. */
+export function usePresentationDeck(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.presentationDeck(id ?? ''),
+    queryFn: () => api.get<DeckSnapshot & { id: string; title: string }>(`/presentations/${id}/deck`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useCreatePresentation(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    // `themeId` starts the deck from a starter theme with a first Title slide; `templateId` from a saved template.
+    mutationFn: (input: { title?: string; folderId?: string | null; themeId?: string; templateId?: string } = {}) =>
+      api.post<PresentationSummary>(`/workspaces/${workspaceId}/presentations`, input),
+    onSuccess: (deck) => {
+      qc.setQueryData(keys.presentation(deck.id), deck);
+      void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+      // The same "open on the name, selected" welcome a new document gets.
+      rememberNewDocument(deck.id);
+    },
+  });
+}
+
+/** A new presentation from a canvas: one slide per frame, in frame order. */
+/** The workspace's saved presentation templates, by name: everyone who can see Slides sees them. */
+export function usePresentationTemplates(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: keys.presentationTemplates(workspaceId ?? ''),
+    queryFn: () => api.get<PresentationTemplateSummary[]>(`/workspaces/${workspaceId}/presentation-templates`),
+    enabled: !!workspaceId,
+  });
+}
+
+/** Saving a deck's look as a template, renaming and deleting templates, and getting one's look to put on a deck. */
+export function usePresentationTemplateActions(workspaceId: string) {
+  const qc = useQueryClient();
+  const settle = () => void qc.invalidateQueries({ queryKey: keys.presentationTemplates(workspaceId) });
+  return {
+    /** Rereads the list after a template is imported, which happens over several requests outside these (lib/slideTemplates.ts). */
+    imported: settle,
+    save: useMutation({
+      mutationFn: ({ presentationId, ...input }: { presentationId: string; name: string; description?: string }) =>
+        api.post<PresentationTemplateSummary>(`/presentations/${presentationId}/template`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; name?: string; description?: string }) =>
+        api.patch<PresentationTemplateSummary>(`/presentation-templates/${id}`, patch),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/presentation-templates/${id}`),
+      onSuccess: settle,
+    }),
+    /** The template's look, in the paths the server stores, for the editor to write into the deck. */
+    apply: useMutation({
+      mutationFn: async ({ presentationId, templateId }: { presentationId: string; templateId: string }) =>
+        toServer(await api.post<TemplateStyle>(`/presentations/${presentationId}/apply-template`, { templateId })),
+    }),
+  };
+}
+
+export function useCanvasToPresentation(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ documentId, ...input }: { documentId: string; title?: string; folderId?: string | null }) =>
+      api.post<PresentationSummary>(`/documents/${documentId}/presentation`, input),
+    onSuccess: (deck) => {
+      qc.setQueryData(keys.presentation(deck.id), deck);
+      void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+    },
+  });
+}
+
+export function useUpdatePresentation(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...patch
+    }: {
+      id: string;
+      title?: string;
+      icon?: string | null;
+      archived?: boolean;
+      /** Null takes it out of its folder. */
+      folderId?: string | null;
+    }) => api.patch<PresentationSummary>(`/presentations/${id}`, patch),
+    onSuccess: (deck) => {
+      qc.setQueryData(keys.presentation(deck.id), deck);
+      void qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+    },
+  });
+}
+
+export function useDuplicatePresentation(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...input }: { id: string; title?: string; folderId?: string | null }) =>
+      api.post<PresentationSummary>(`/presentations/${id}/duplicate`, input),
+    onSuccess: (deck) => {
+      qc.setQueryData(keys.presentation(deck.id), deck);
+      return qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) });
+    },
+  });
+}
+
+export function useDeletePresentation(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/presentations/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.slideTree(workspaceId) }),
   });
 }
 
@@ -1668,10 +1863,16 @@ export function useUploadFile(workspaceId: string) {
     mutationFn: async ({
       file,
       documentId,
+      presentationId,
+      templateId,
     }: {
       file: File;
       /** Recorded on the attachment so the file is not treated as orphaned. */
       documentId?: string;
+      /** A picture on a slide: served to whoever may open the presentation. */
+      presentationId?: string;
+      /** A picture of a presentation template being imported: served to the workspace. */
+      templateId?: string;
     }): Promise<UploadedFile> => {
       // Refused here as well as on the server, which cuts an oversized upload
       // off partway and cannot always get its explanation back to the browser.
@@ -1684,6 +1885,8 @@ export function useUploadFile(workspaceId: string) {
       // The document id must precede the file: the server reads fields that
       // arrived before the file part.
       if (documentId) body.append('documentId', documentId);
+      if (presentationId) body.append('presentationId', presentationId);
+      if (templateId) body.append('templateId', templateId);
       body.append('file', file);
       const res = await fetch(serverUrl(`/api/workspaces/${workspaceId}/uploads`), {
         method: 'POST',
@@ -1778,6 +1981,8 @@ export interface SearchResults {
   workItems?: WorkItemSearchHit[];
   /** Absent from servers that predate Schedules. */
   schedules?: ScheduleSearchHit[];
+  /** Absent from servers that predate Slides search. */
+  presentations?: PresentationSearchHit[];
   query: string;
 }
 
@@ -1825,6 +2030,48 @@ export function useDeleteComment(documentId: string) {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/comments/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.comments(documentId) }),
+  });
+}
+
+// --- slide comments --------------------------------------------------------
+
+/** A presentation's comment threads. Refetched now and then, so a collaborator's comment turns up without a reload. */
+export function useSlideComments(presentationId: string) {
+  return useQuery({
+    queryKey: keys.slideComments(presentationId),
+    queryFn: () => api.get<SlideCommentThreads>(`/presentations/${presentationId}/comments`),
+    refetchInterval: 20_000,
+  });
+}
+
+export function useSlideCommentActions(presentationId: string) {
+  const qc = useQueryClient();
+  const settle = () => qc.invalidateQueries({ queryKey: keys.slideComments(presentationId) });
+  return {
+    add: useMutation({
+      mutationFn: (input: { body: string; slideId: string; elementId?: string | null; parentId?: string | null }) =>
+        api.post(`/presentations/${presentationId}/comments`, input),
+      onSuccess: settle,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...patch }: { id: string; body?: string; resolved?: boolean }) =>
+        api.patch(`/slide-comments/${id}`, patch),
+      onSuccess: settle,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.delete(`/slide-comments/${id}`),
+      onSuccess: settle,
+    }),
+  };
+}
+
+/** Opening a presentation answers the slide mentions in it. */
+export function useMarkSlideMentionsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (presentationIds?: string[]) =>
+      api.post('/notifications/slide-mentions/read', presentationIds ? { presentationIds } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
   });
 }
 

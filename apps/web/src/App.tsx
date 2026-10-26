@@ -7,6 +7,7 @@ import {
   directPeople,
   isGroupDirect,
   parseMentionHref,
+  presentationPath,
   projectPath,
   type Channel,
   type PresenceStatus,
@@ -28,6 +29,7 @@ import {
   usePresence,
   useProject,
   useSchedule,
+  usePresentation,
   useSpreadsheet,
   useWorkItemListing,
   usePresenceSettings,
@@ -85,6 +87,8 @@ import {
 import { useToast } from './components/Toast';
 import PopoutWindow from './components/PopoutWindow';
 import SpreadsheetView from './components/sheet/SpreadsheetView';
+import PresentationView from './components/slides/PresentationView';
+import { LiveShowHost } from './components/slides/LiveFollower';
 import AccessApp, { isAccessSection } from './components/AccessApp';
 import ProjectsApp from './components/projects/ProjectsApp';
 import SchedulesApp from './components/schedules/SchedulesApp';
@@ -152,6 +156,8 @@ export default function App() {
           <Route path="/w/:workspaceId/c" element={<Workspace user={me.data.user} chat />} />
           <Route path="/w/:workspaceId/s/:sheetId" element={<Workspace user={me.data.user} sheets />} />
           <Route path="/w/:workspaceId/s" element={<Workspace user={me.data.user} sheets />} />
+          <Route path="/w/:workspaceId/sl/:presentationId" element={<Workspace user={me.data.user} slides />} />
+          <Route path="/w/:workspaceId/sl" element={<Workspace user={me.data.user} slides />} />
           <Route path="/w/:workspaceId/p/:projectId/:itemId" element={<Workspace user={me.data.user} projects />} />
           <Route path="/w/:workspaceId/p/:projectId" element={<Workspace user={me.data.user} projects />} />
           <Route path="/w/:workspaceId/p" element={<Workspace user={me.data.user} projects />} />
@@ -277,6 +283,8 @@ function RenamedToAccess() {
 function appHome(workspaceId: string, app: WorkspaceApp): string {
   return app === 'sheets'
     ? `/w/${workspaceId}/s`
+    : app === 'slides'
+      ? `/w/${workspaceId}/sl`
     : app === 'chat'
       ? `/w/${workspaceId}/c`
       : app === 'projects'
@@ -296,6 +304,7 @@ function Workspace({
   allDocuments = false,
   chat = false,
   sheets = false,
+  slides = false,
   projects = false,
   schedules = false,
   access = false,
@@ -305,6 +314,8 @@ function Workspace({
   chat?: boolean;
   /** The Sheets app: a list of spreadsheets, or one open. */
   sheets?: boolean;
+  /** The Slides app: a list of presentations, or one open. */
+  slides?: boolean;
   /** The Projects app: your work, or a project and perhaps one of its items. */
   projects?: boolean;
   /** The Schedules app: your shifts, or one schedule open. */
@@ -313,12 +324,13 @@ function Workspace({
   access?: boolean;
 }) {
   const userId = user.id;
-  const { workspaceId = '', documentId, channelId, sheetId, projectId, itemId, scheduleId, accessSection: accessParam } =
+  const { workspaceId = '', documentId, channelId, sheetId, presentationId, projectId, itemId, scheduleId, accessSection: accessParam } =
     useParams();
   const accessSection = isAccessSection(accessParam) ? accessParam : 'members';
   // Spreadsheets are their own records, fetched here only to name the header
   // and the tab; the grid itself loads inside the Sheets view.
   const openSheet = useSpreadsheet(sheets ? sheetId : undefined);
+  const openPresentation = usePresentation(slides ? presentationId : undefined);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -351,6 +363,8 @@ function Workspace({
     ? 'chat'
     : sheets
       ? 'sheets'
+      : slides
+        ? 'slides'
       : projects
         ? 'projects'
         : schedules
@@ -564,6 +578,10 @@ function Workspace({
       ? sheetId
         ? (openSheet.data?.title ?? '')
         : 'Spreadsheets'
+      : slides
+        ? presentationId
+          ? (openPresentation.data?.title ?? '')
+          : 'Presentations'
       : projects
         ? projectId
           ? (openProject.data?.name ?? '')
@@ -583,6 +601,8 @@ function Workspace({
     ? 'chat'
     : sheets
       ? 'sheet'
+      : slides
+        ? 'slides'
       : projects
         ? 'project'
         : schedules
@@ -596,6 +616,8 @@ function Workspace({
             : 'home';
   const tabEmoji = sheets
     ? (openSheet.data?.icon ?? undefined)
+    : slides
+      ? (openPresentation.data?.icon ?? undefined)
     : projects
       ? (openProject.data?.icon ?? undefined)
     : !chat && !allDocuments && documentId
@@ -708,6 +730,8 @@ function Workspace({
     ? 'document'
     : isNotFound(openSheet.error)
       ? 'spreadsheet'
+      : isNotFound(openPresentation.error)
+        ? 'presentation'
       : isNotFound(openProject.error)
         ? 'project'
         : chat && channelId && channels.isSuccess && directs.isSuccess && !activeChannel && shownChannel.current !== channelId
@@ -787,6 +811,7 @@ function Workspace({
               else if (next === 'sheets') navigate(sheetId ? `/w/${workspaceId}/s/${sheetId}` : `/w/${workspaceId}/s`);
               else if (next === 'projects') navigate(projectId ? `/w/${workspaceId}/p/${projectId}` : `/w/${workspaceId}/p`);
               else if (next === 'schedules') navigate(scheduleId ? `/w/${workspaceId}/sc/${scheduleId}` : `/w/${workspaceId}/sc`);
+              else if (next === 'slides') navigate(presentationId ? `/w/${workspaceId}/sl/${presentationId}` : `/w/${workspaceId}/sl`);
               else if (next === 'access') navigate(`/w/${workspaceId}/access`);
               else navigate(channelId ? `/w/${workspaceId}/c/${channelId}` : firstChannelPath);
             }}
@@ -804,6 +829,14 @@ function Workspace({
             onSheetDeleted={(id) => {
               if (id === sheetId) {
                 navigate(`/w/${workspaceId}/s`);
+                setMobilePane('menu');
+              }
+            }}
+            activePresentationId={presentationId ?? null}
+            onSelectPresentation={(id) => show(`/w/${workspaceId}/sl/${id}`)}
+            onPresentationDeleted={(id) => {
+              if (id === presentationId) {
+                navigate(`/w/${workspaceId}/sl`);
                 setMobilePane('menu');
               }
             }}
@@ -885,6 +918,10 @@ function Workspace({
                 ? sheetId
                   ? (openSheet.data?.title ?? '')
                   : 'Spreadsheets'
+                : slides
+                  ? presentationId
+                    ? (openPresentation.data?.title ?? '')
+                    : 'Presentations'
                 : projects
                   ? projectId
                     ? `Projects / ${openProject.data?.name ?? ''}`
@@ -902,7 +939,7 @@ function Workspace({
           {/* Writing and drawing are two views of one document, so moving
               between them belongs beside the document rather than inside a
               panel. */}
-          {!chat && !sheets && !projects && !schedules && !access && !allDocuments && document.data && (
+          {!chat && !sheets && !slides && !projects && !schedules && !access && !allDocuments && document.data && (
             <ModeSwitch
               mode={document.data.mode}
               disabled={document.data.permission !== 'edit'}
@@ -919,7 +956,7 @@ function Workspace({
             >
               <Icon name="people" />
             </IconButton>
-          ) : sheets || projects || schedules || access ? null : (
+          ) : sheets || slides || projects || schedules || access ? null : (
             <>
               <IconButton label="Search (⌘K)" onClick={() => setSearchOpen(true)}>
                 <Icon name="search" />
@@ -1016,6 +1053,7 @@ function Workspace({
                 onOpenWorkItem={(item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`)}
                 onOpenProject={(project) => navigate(projectPath(workspaceId, project.id, project.kind))}
                 onOpenSchedule={(schedule) => navigate(`/w/${workspaceId}/sc/${schedule.id}`)}
+                onOpenPresentation={(deck, slideId) => navigate(presentationPath(workspaceId, deck.id, slideId))}
               />
             ) : channelId && directs.isLoading ? (
               <Spinner />
@@ -1035,6 +1073,7 @@ function Workspace({
                   onOpenChannel: (id) => navigate(`/w/${workspaceId}/c/${id}`),
                   onOpenWorkItem: (item) => navigate(`/w/${workspaceId}/p/${item.projectId}/${item.id}`),
                   onOpenProject: (project) => navigate(projectPath(workspaceId, project.id, project.kind)),
+                  onOpenPresentation: (deck, slideId) => navigate(presentationPath(workspaceId, deck.id, slideId)),
                 }}
                 onOpenProject={(id) => navigate(`/w/${workspaceId}/p/${id}`)}
                 onOpenItem={(project, item) => navigate(`/w/${workspaceId}/p/${project}/${item}`)}
@@ -1080,6 +1119,18 @@ function Workspace({
               />
             ) : (
               <EmptyState icon="table" title="No spreadsheet open" />
+            )
+          ) : slides ? (
+            presentationId ? (
+              <PresentationView
+                key={presentationId}
+                workspaceId={workspaceId}
+                presentationId={presentationId}
+                self={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+                canEdit={openPresentation.data?.permission === 'edit'}
+              />
+            ) : (
+              <EmptyState icon="easel2" title="No presentation open" />
             )
           ) : allDocuments ? (
             <AllDocuments
@@ -1133,7 +1184,7 @@ function Workspace({
             onCall={(id, video) => void callMember(id, video)}
           />
         </SidePanel>
-      ) : sheets || projects || schedules || access ? null : (
+      ) : sheets || slides || projects || schedules || access ? null : (
         <SidePanel open={rightShown} width="w-72" mobile={mobile} onClose={() => setRightShown(false)}>
           <RightSidebar
             tab={rightTab}
@@ -1181,8 +1232,12 @@ function Workspace({
             appOn('projects') ? (hit) => show(`/w/${workspaceId}/p/${hit.projectId}/${hit.id}`) : undefined
           }
           onSelectSchedule={appOn('schedules') ? (hit) => show(`/w/${workspaceId}/sc/${hit.id}`) : undefined}
+          onSelectPresentation={appOn('slides') ? (hit) => show(presentationPath(workspaceId, hit.id, hit.slideId ?? undefined)) : undefined}
         />
       )}
+
+      {/* Follows a presenter's live slideshow, from a banner or a link, over whatever is open. */}
+      {workspaceId && <LiveShowHost />}
 
       {directCalls.incoming && (
         <IncomingCallCard

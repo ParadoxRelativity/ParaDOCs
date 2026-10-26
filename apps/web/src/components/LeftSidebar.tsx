@@ -52,6 +52,7 @@ import { useToast } from './Toast';
 import { useDocumentImport } from './ImportDocument';
 import { ChannelList } from './chat/ChannelList';
 import { SheetList } from './sheet/SheetList';
+import { PresentationList } from './slides/PresentationList';
 import { ProjectList } from './projects/ProjectList';
 import { ScheduleList } from './schedules/ScheduleList';
 import { AccessDialog, LockMark, type NamedAccessTarget } from './AccessDialog';
@@ -60,7 +61,7 @@ import DeleteFolderDialog, { DOCUMENT_NOUN } from './DeleteFolderDialog';
 import ManageTagsDialog from './ManageTagsDialog';
 
 /** The apps a workspace offers, each with its own half of the sidebar. */
-export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'projects' | 'schedules' | 'access';
+export type SidebarSection = 'docs' | 'chat' | 'sheets' | 'slides' | 'projects' | 'schedules' | 'access';
 
 interface Props {
   /** The signed-in account, shown at the foot of the sidebar. */
@@ -94,6 +95,11 @@ interface Props {
   onSelectSheet: (id: string) => void;
   /** A spreadsheet was deleted from the list, so anything showing it must move off. */
   onSheetDeleted: (id: string) => void;
+  /** The presentation open in the Slides app, if any. */
+  activePresentationId: string | null;
+  onSelectPresentation: (id: string) => void;
+  /** A presentation was deleted from the list, so anything showing it must move off. */
+  onPresentationDeleted: (id: string) => void;
   /** The project open in the Projects app, or null for My work. */
   activeProjectId: string | null;
   onSelectProject: (id: string) => void;
@@ -314,6 +320,7 @@ export default function LeftSidebar(props: Props) {
                 mentions: props.mentionTotal,
               },
               { id: 'sheets', label: 'Sheets', icon: 'table' },
+              { id: 'slides', label: 'Slides', icon: 'easel2' },
               { id: 'projects', label: 'Projects', icon: 'kanban' },
               { id: 'schedules', label: 'Schedules', icon: 'calendar-week' },
               { id: 'access', label: 'Access', icon: 'shield-lock' },
@@ -406,6 +413,15 @@ export default function LeftSidebar(props: Props) {
           myWorkCount={props.myWorkCount}
           onOpenMyWork={props.onOpenMyWork}
           onSelect={props.onSelectProject}
+        />
+      ) : props.section === 'slides' ? (
+        <PresentationList
+          workspaceId={workspaceId}
+          activePresentationId={props.activePresentationId}
+          can={props.can}
+          canManageAccess={props.canManageAccess}
+          onSelect={props.onSelectPresentation}
+          onDeleted={props.onPresentationDeleted}
         />
       ) : props.section === 'sheets' ? (
         <SheetList

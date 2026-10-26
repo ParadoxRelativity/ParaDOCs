@@ -5,6 +5,7 @@ import type { WorkspacePermission } from './permissions.js';
 import type { WorkItemNotification } from './projects.js';
 import type { ScheduleNotification } from './schedules.js';
 import type { SpreadsheetSummary } from './sheet.js';
+import type { SlideMentionNotification } from './slideComments.js';
 import type { ReleaseInfo } from './version.js';
 
 export interface User {
@@ -98,11 +99,11 @@ export interface AccessSettings {
  * The apps a workspace can turn on and off. Access is not among them: it is
  * where membership is managed, so every workspace has it.
  */
-export const WORKSPACE_APPS = ['docs', 'sheets', 'chat', 'projects', 'schedules'] as const;
+export const WORKSPACE_APPS = ['docs', 'sheets', 'slides', 'chat', 'projects', 'schedules'] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 /** Which app a folder belongs to. Each app that files things has a tree of its own. */
-export type FolderApp = Extract<WorkspaceApp, 'docs' | 'sheets'>;
+export type FolderApp = Extract<WorkspaceApp, 'docs' | 'sheets' | 'slides'>;
 
 export interface Workspace {
   id: string;
@@ -166,7 +167,7 @@ export interface InvitePreview {
 export interface Folder {
   id: string;
   workspaceId: string;
-  /** Which tree it is in: documents, or spreadsheets. */
+  /** Which tree it is in: documents, spreadsheets, or presentations. */
   app: FolderApp;
   parentId: string | null;
   name: string;
@@ -198,6 +199,12 @@ export interface FolderNode extends Folder {
 export interface SheetFolderNode extends Omit<FolderNode, 'children' | 'documentCount'> {
   children: SheetFolderNode[];
   spreadsheetCount: number;
+}
+
+/** A folder in the Slides tree, with how many presentations are filed in it. */
+export interface SlideFolderNode extends Omit<FolderNode, 'children' | 'documentCount'> {
+  children: SlideFolderNode[];
+  presentationCount: number;
 }
 
 /**
@@ -279,6 +286,25 @@ export interface SheetSearchHit {
   /** Highlighted snippet from the cells, with <mark> around matches. */
   snippet: string;
   rank: number;
+}
+
+/**
+ * A presentation that matched a search. When what matched is on a slide, which
+ * one, so the result can open the deck there and say so.
+ */
+export interface PresentationSearchHit {
+  id: string;
+  title: string;
+  icon: string | null;
+  updatedAt: string;
+  /** Highlighted snippet from the slide, with <mark> around matches. */
+  snippet: string;
+  rank: number;
+  /** The slide that matched, counted from 1, or null when only the title did. */
+  slide: number | null;
+  slideId: string | null;
+  /** The match is in that slide's speaker notes rather than on the slide. */
+  inNotes: boolean;
 }
 
 /** A work item that matched a search. */
@@ -382,9 +408,14 @@ export interface MessageNotification {
  * however many times your name appears in it.
  */
 export interface MentionNotification {
+  /** The document's id; for a deck (`app` is `slides`), the presentation's. */
   documentId: string;
   title: string;
   mode: DocumentMode;
+  /** Set for a tag in a Slides presentation. Absent from older servers. */
+  app?: 'slides';
+  /** Where the tag opens, when it is not the document's own address: a deck's slide. */
+  path?: string;
   workspace: NotificationWorkspace;
   /** Who was editing when the tag appeared. Null if that account is gone. */
   taggedBy: { id: string; name: string; avatarUrl: string | null } | null;
@@ -504,6 +535,8 @@ export interface Notifications {
   invites: InviteNotification[];
   messages: MessageNotification[];
   mentions: MentionNotification[];
+  /** Comments on slides that name you. Absent from older servers. */
+  slideMentions?: SlideMentionNotification[];
   /** Work items you were given a role on or named in. Absent from older servers. */
   workItems?: WorkItemNotification[];
   /** Null when there is none, or for anyone but a server administrator. Absent from older servers. */

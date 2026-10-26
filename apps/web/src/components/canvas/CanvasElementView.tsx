@@ -390,7 +390,7 @@ function Embed({ element, interactive }: { element: CanvasElement & { type: 'emb
   );
 }
 
-function EditableText({
+export function EditableText({
   value,
   editing,
   placeholder,

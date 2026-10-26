@@ -64,6 +64,11 @@ export function spreadsheetLevelSql(user: string, role: string, alias = 's'): st
   return `spreadsheet_access_level(${user}, ${role}, ${alias}.access, ${alias}.id, ${alias}.folder_id)`;
 }
 
+/** SQL for what `user`, with `role`, may do with the presentation aliased `alias`. */
+export function presentationLevelSql(user: string, role: string, alias = 'p'): string {
+  return `presentation_access_level(${user}, ${role}, ${alias}.access, ${alias}.id, ${alias}.folder_id)`;
+}
+
 /** SQL for what `user`, with `role`, may do with the project aliased `alias`. */
 export function projectLevelSql(user: string, role: string, alias = 'p'): string {
   return `project_access_level(${user}, ${role}, ${alias}.access, ${alias}.id)`;
@@ -142,6 +147,19 @@ export async function spreadsheetAccess(userId: string, spreadsheetId: string): 
        ${memberJoin('s.workspace_id')}
       WHERE s.id = $1 AND ${appEnabledSql('s.workspace_id', 'sheets')}`,
     [spreadsheetId, userId],
+  );
+  return resolved(rows[0]);
+}
+
+/** What someone may do with a presentation, or null when they may not see it or Slides is off. */
+export async function presentationAccess(userId: string, presentationId: string): Promise<ResourceAccess | null> {
+  if (!UUID.test(presentationId)) return null;
+  const { rows } = await query<AccessRow>(
+    `SELECT p.workspace_id, ${MEMBERSHIP_COLUMNS}, ${presentationLevelSql('$2', 'm.role_id')} AS level
+       FROM presentations p
+       ${memberJoin('p.workspace_id')}
+      WHERE p.id = $1 AND ${appEnabledSql('p.workspace_id', 'slides')}`,
+    [presentationId, userId],
   );
   return resolved(rows[0]);
 }
@@ -336,6 +354,19 @@ export async function assertSpreadsheetAccess(
   const access = await spreadsheetAccess(req.user.id, spreadsheetId);
   if (!access) throw notFound('Spreadsheet not found');
   if (need !== 'view') assertMayChange(access, `sheets.${need}`, 'sheets.edit', 'this spreadsheet');
+  return access;
+}
+
+/** The same for a presentation. */
+export async function assertPresentationAccess(
+  req: FastifyRequest,
+  presentationId: string,
+  need: 'view' | 'edit' | 'delete' = 'view',
+): Promise<ResourceAccess> {
+  if (!req.user) throw unauthorized();
+  const access = await presentationAccess(req.user.id, presentationId);
+  if (!access) throw notFound('Presentation not found');
+  if (need !== 'view') assertMayChange(access, `slides.${need}`, 'slides.edit', 'this presentation');
   return access;
 }
 

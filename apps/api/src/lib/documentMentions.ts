@@ -1,6 +1,6 @@
 import { blockMentions, canvasMentions, type CanvasElement } from '@paradocs/shared';
 import { query } from '../db/pool.js';
-import { documentLevelSql } from './access.js';
+import { documentLevelSql, presentationLevelSql } from './access.js';
 
 /**
  * Telling people they have been tagged.
@@ -48,6 +48,32 @@ export async function recordMentions(
         AND ${documentLevelSql('m.user_id', 'm.role_id')} > 0
      ON CONFLICT (document_id, user_id) DO NOTHING`,
     [documentId, candidates, taggedBy],
+  );
+}
+
+/**
+ * The same for a deck: people newly tagged on a slide, who can open the
+ * presentation. One row per person; `slideId` is where they were first named,
+ * so the notification opens the deck there.
+ */
+export async function recordPresentationMentions(
+  presentationId: string,
+  mentions: { userId: string; slideId: string }[],
+  taggedBy: string | null,
+): Promise<void> {
+  const candidates = mentions.filter((m) => m.userId !== taggedBy);
+  if (candidates.length === 0) return;
+
+  await query(
+    `INSERT INTO presentation_mentions (presentation_id, user_id, slide_id, created_by)
+     SELECT p.id, m.user_id, t.slide_id, $4
+       FROM presentations p
+       JOIN workspace_members m ON m.workspace_id = p.workspace_id
+       JOIN unnest($2::uuid[], $3::text[]) AS t(user_id, slide_id) ON t.user_id = m.user_id
+      WHERE p.id = $1
+        AND ${presentationLevelSql('m.user_id', 'm.role_id', 'p')} > 0
+     ON CONFLICT (presentation_id, user_id) DO NOTHING`,
+    [presentationId, candidates.map((m) => m.userId), candidates.map((m) => m.slideId), taggedBy],
   );
 }
 

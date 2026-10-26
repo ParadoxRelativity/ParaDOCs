@@ -1,8 +1,15 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { linkTargetsQuerySchema, searchQuerySchema, type LinkTargets } from '@paradocs/shared';
+import {
+  linkTargetsQuerySchema,
+  searchQuerySchema,
+  slideElementText,
+  type LinkTargets,
+  type PresentationSearchHit,
+} from '@paradocs/shared';
 import { query } from '../db/pool.js';
 import { parse } from '../lib/http.js';
-import { documentLevelSql, projectLevelSql, scheduleLevelSql, spreadsheetLevelSql } from '../lib/access.js';
+import { documentLevelSql, presentationLevelSql, projectLevelSql, scheduleLevelSql, spreadsheetLevelSql } from '../lib/access.js';
+import { loadDeck } from '../lib/deck.js';
 import { appEnabled } from '../lib/apps.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
 
@@ -78,6 +85,122 @@ async function searchSpreadsheets(
     params,
   );
   return rows;
+}
+
+/** How many presentations a search returns beside its documents. */
+const DECK_LIMIT = 20;
+
+/** The terms of a search, as the patterns that find them at the start of a word. */
+function termPatterns(input: string): RegExp[] {
+  return input
+    .split(/[^\p{L}\p{N}_]+/u)
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((t) => new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\p{L}\\p{N}_]*`, 'giu'));
+}
+
+/** About 160 characters of `text` around the first term found in it, the terms marked; null when none is there. */
+function markedExcerpt(text: string, patterns: RegExp[]): string | null {
+  let first = -1;
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    const found = pattern.exec(text);
+    if (found && (first === -1 || found.index < first)) first = found.index;
+  }
+  if (first === -1) return null;
+  const start = Math.max(0, first - 60);
+  let excerpt = text.slice(start, start + 160).replace(/\s+/g, ' ');
+  for (const pattern of patterns) excerpt = excerpt.replace(pattern, (m) => `<mark>${m}</mark>`);
+  return `${start > 0 ? '…' : ''}${excerpt.trim()}${start + 160 < text.length ? '…' : ''}`;
+}
+
+/**
+ * Where in a deck the typed words are: the first slide, counted from 1, whose
+ * text or speaker notes has one of them, with a marked excerpt. Slide text is
+ * looked for before notes on the same slide.
+ */
+function locateInDeck(
+  slides: { id: string; elements: Parameters<typeof slideElementText>[0][]; notes: string }[],
+  patterns: RegExp[],
+) {
+  for (const [index, slide] of slides.entries()) {
+    for (const [text, inNotes] of [[slide.elements.map(slideElementText).filter(Boolean).join('\n'), false], [slide.notes, true]] as const) {
+      const snippet = markedExcerpt(text, patterns);
+      if (snippet) return { slide: index + 1, slideId: slide.id, inNotes, snippet };
+    }
+  }
+  return null;
+}
+
+/** How many of a search's decks are opened to say which slide matched. */
+const LOCATE_LIMIT = 5;
+
+/**
+ * Presentations that match, by title and by the text and speaker notes on
+ * their slides, naming the slide the match is on. As with spreadsheets, a
+ * search narrowed by tag or folder has asked for documents, and nothing locked
+ * away from the reader turns up.
+ *
+ * The database finds and ranks the decks; the slide is found by reading the
+ * best few hits' decks, so a phrase only in the speaker notes finds the deck and says
+ * where. A match the typed words do not locate (stemming: "running" finds
+ * "run") falls back to the database's own excerpt and no slide.
+ */
+async function searchPresentations(
+  workspaceId: string,
+  reader: { userId: string; roleId: string },
+  input: { q?: string; tags?: string[]; folderId?: string; from?: string; to?: string; includeArchived?: boolean },
+  tsquery: string | null,
+): Promise<PresentationSearchHit[]> {
+  if (input.tags?.length || input.folderId) return [];
+
+  const params: unknown[] = [workspaceId, reader.userId, reader.roleId];
+  const where: string[] = ['p.workspace_id = $1', `${presentationLevelSql('$2', '$3')} > 0`];
+  if (!input.includeArchived) where.push('p.archived_at IS NULL');
+
+  let rankExpr = '0';
+  let snippetExpr = "left(p.search_text, 180)";
+  if (tsquery) {
+    params.push(tsquery);
+    const q = `$${params.length}`;
+    params.push(input.q!);
+    const rawQ = `$${params.length}`;
+    // Comments are found too. This search is already limited to decks the reader may open, so a comment is only ever found by someone who could read it.
+    where.push(`(p.search @@ to_tsquery('english', ${q}) OR p.title ILIKE '%' || ${rawQ} || '%'
+      OR EXISTS (SELECT 1 FROM slide_comments sc WHERE sc.presentation_id = p.id
+                  AND to_tsvector('english'::regconfig, sc.body) @@ to_tsquery('english', ${q})))`);
+    rankExpr = `ts_rank(p.search, to_tsquery('english', ${q}))`;
+    snippetExpr = `ts_headline('english', p.search_text, to_tsquery('english', ${q}),
+      'StartSel=<mark>, StopSel=</mark>, MaxWords=28, MinWords=10, ShortWord=2, MaxFragments=1')`;
+  }
+  if (input.from) {
+    params.push(input.from);
+    where.push(`p.updated_at >= $${params.length}::date`);
+  }
+  if (input.to) {
+    params.push(input.to);
+    where.push(`p.updated_at < ($${params.length}::date + interval '1 day')`);
+  }
+
+  const { rows } = await query<Omit<PresentationSearchHit, 'slide' | 'slideId' | 'inNotes'>>(
+    `SELECT p.id, p.title, p.icon, p.updated_at AS "updatedAt",
+            ${rankExpr} AS rank,
+            ${snippetExpr} AS snippet
+       FROM presentations p
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${tsquery ? 'rank DESC, ' : ''}p.updated_at DESC
+      LIMIT ${DECK_LIMIT}`,
+    params,
+  );
+  const patterns = input.q ? termPatterns(input.q) : [];
+  return Promise.all(
+    rows.map(async (row, index) => {
+      // Naming the slide means reading the whole deck, so only the best few hits get one.
+      const deck = patterns.length && index < LOCATE_LIMIT ? await loadDeck(row.id) : null;
+      const found = deck ? locateInDeck(deck.slides, patterns) : null;
+      return found ? { ...row, ...found } : { ...row, slide: null, slideId: null, inNotes: false };
+    }),
+  );
 }
 
 /** How many work items a search returns beside its documents. */
@@ -157,9 +280,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       const input = parse(linkTargetsQuerySchema, req.query ?? {});
       const kinds = new Set((input.kinds ?? '').split(','));
       const limit = input.limit ?? 20;
-      const [docsOn, sheetsOn] = await Promise.all([
+      const [docsOn, sheetsOn, slidesOn] = await Promise.all([
         appEnabled(req.params.id, 'docs'),
         appEnabled(req.params.id, 'sheets'),
+        appEnabled(req.params.id, 'slides'),
       ]);
       // Typed text is matched literally, not as a pattern.
       const q = input.q ? input.q.replace(/[\\%_]/g, (c) => `\\${c}`) : null;
@@ -168,7 +292,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       const order = (title: string, touched: string) =>
         `($4::text IS NOT NULL AND ${title} ILIKE $4 || '%') DESC, ${touched} DESC`;
 
-      const [documents, spreadsheets] = await Promise.all([
+      const [documents, spreadsheets, presentations] = await Promise.all([
         docsOn && kinds.has('documents')
           ? query<LinkTargets['documents'][number]>(
               `SELECT d.id, d.title, d.icon, d.mode FROM documents d
@@ -189,8 +313,18 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
               params,
             )
           : { rows: [] },
+        slidesOn && kinds.has('presentations')
+          ? query<NonNullable<LinkTargets['presentations']>[number]>(
+              `SELECT p.id, p.title, p.icon FROM presentations p
+                WHERE p.workspace_id = $1 AND p.archived_at IS NULL AND ${match('p.title')}
+                  AND ${presentationLevelSql('$2', '$3')} > 0
+                ORDER BY ${order('p.title', 'p.updated_at')}
+                LIMIT $5`,
+              params,
+            )
+          : { rows: [] },
       ]);
-      return { documents: documents.rows, spreadsheets: spreadsheets.rows };
+      return { documents: documents.rows, spreadsheets: spreadsheets.rows, presentations: presentations.rows };
     },
   );
 
@@ -199,9 +333,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
     async (req) => {
       const { roleId } = await assertWorkspaceAccess(req, req.params.id);
       // Each half answers only for an app the workspace has on.
-      const [docsOn, sheetsOn, projectsOn, schedulesOn] = await Promise.all([
+      const [docsOn, sheetsOn, slidesOn, projectsOn, schedulesOn] = await Promise.all([
         appEnabled(req.params.id, 'docs'),
         appEnabled(req.params.id, 'sheets'),
+        appEnabled(req.params.id, 'slides'),
         appEnabled(req.params.id, 'projects'),
         appEnabled(req.params.id, 'schedules'),
       ]);
@@ -298,11 +433,14 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       const sheets = sheetsOn
         ? await searchSpreadsheets(req.params.id, { userId: req.user!.id, roleId }, input, tsquery)
         : [];
+      const presentations = slidesOn
+        ? await searchPresentations(req.params.id, { userId: req.user!.id, roleId }, input, tsquery)
+        : [];
       const workItems = projectsOn
         ? await searchWorkItems(req.params.id, { userId: req.user!.id, roleId }, input, tsquery)
         : [];
       const schedules = schedulesOn ? await searchSchedules(req.params.id, { userId: req.user!.id, roleId }, input) : [];
-      return { hits: rows, sheets, workItems, schedules, query: input.q ?? '' };
+      return { hits: rows, sheets, presentations, workItems, schedules, query: input.q ?? '' };
     },
   );
 };

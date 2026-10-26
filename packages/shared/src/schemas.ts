@@ -23,6 +23,8 @@ export interface SpreadsheetLinkTarget {
 export interface LinkTargets {
   documents: DocumentLinkTarget[];
   spreadsheets: SpreadsheetLinkTarget[];
+  /** Absent from servers that predate Slides. */
+  presentations?: SpreadsheetLinkTarget[];
 }
 
 const uuid = z.string().uuid();
@@ -97,7 +99,7 @@ export const updateWorkspaceSchema = createWorkspaceSchema.partial().extend({
     .optional(),
 });
 
-export const folderAppSchema = z.enum(['docs', 'sheets']);
+export const folderAppSchema = z.enum(['docs', 'sheets', 'slides']);
 
 export const createFolderSchema = z.object({
   name: z.string().min(1).max(120),
@@ -201,8 +203,8 @@ export const searchQuerySchema = z.object({
  */
 export const linkTargetsQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
-  /** Comma-separated: `documents`, `spreadsheets`, or both. */
-  kinds: z.string().max(40).default('documents,spreadsheets'),
+  /** Comma-separated: `documents`, `spreadsheets`, `presentations`, or any of them. */
+  kinds: z.string().max(60).default('documents,spreadsheets'),
   limit: z.coerce.number().int().min(1).max(MAX_LINK_TARGETS).default(20),
 });
 
@@ -308,5 +310,32 @@ export const updateSpreadsheetSchema = z.object({
   icon: z.string().trim().max(8).nullish(),
   archived: z.boolean().optional(),
   /** Pass null to take it out of its folder; omit to leave it where it is. */
+  folderId: uuid.nullish(),
+});
+
+// --- presentations -----------------------------------------------------------
+
+export const createPresentationSchema = z.object({
+  title: z.string().trim().max(200).optional(),
+  icon: z.string().trim().max(8).nullish(),
+  /** A Slides folder to file it in. */
+  folderId: uuid.nullish(),
+  /** A starter theme (see STARTER_THEMES) to begin from, with a first Title slide. Omit for an empty deck. */
+  themeId: z.string().trim().max(64).optional(),
+  /** A workspace's saved presentation template to begin from instead: its look and one Title slide. */
+  templateId: uuid.optional(),
+});
+
+export const updatePresentationSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  icon: z.string().trim().max(8).nullish(),
+  archived: z.boolean().optional(),
+  /** Pass null to take it out of its folder; omit to leave it where it is. */
+  folderId: uuid.nullish(),
+});
+
+/** Copies are filed beside the original unless told otherwise. */
+export const duplicatePresentationSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
   folderId: uuid.nullish(),
 });

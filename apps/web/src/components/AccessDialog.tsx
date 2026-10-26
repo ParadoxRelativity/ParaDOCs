@@ -69,6 +69,7 @@ const KIND_NOUN = {
   folder: 'folder',
   document: 'document',
   spreadsheet: 'spreadsheet',
+  presentation: 'presentation',
   channel: 'channel',
   project: 'project',
   schedule: 'schedule',

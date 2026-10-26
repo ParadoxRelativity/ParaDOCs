@@ -1,6 +1,7 @@
 import { shell, type BaseWindow, type WebContents } from 'electron';
 import { bundlePath, paths } from './paths.js';
 import { readJson, writeJson } from './store.js';
+import { isPresenterOpen, presenterWindowOptions, trackPresenter } from './presenter.js';
 
 /**
  * What every page the app puts on screen has in common, whether it fills the
@@ -40,7 +41,13 @@ export function confineNavigation(contents: WebContents, allowedOrigin: string):
     openOutside(url);
   });
 
-  contents.setWindowOpenHandler(({ url }) => {
+  // The slideshow's presenter view is the one window a page may open (see presenter.ts).
+  contents.on('did-create-window', (window, details) => {
+    if (isPresenterOpen(details.url, details.frameName)) trackPresenter(contents, window);
+  });
+
+  contents.setWindowOpenHandler(({ url, frameName }) => {
+    if (isPresenterOpen(url, frameName)) return { action: 'allow', overrideBrowserWindowOptions: presenterWindowOptions() };
     openOutside(url);
     return { action: 'deny' };
   });

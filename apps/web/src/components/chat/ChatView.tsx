@@ -9,6 +9,7 @@ import {
   type Message,
   type MessageReferences,
   type ProjectReference,
+  type PresentationReference,
   type ScheduleReference,
   type WorkItemReference,
 } from '@paradocs/shared';
@@ -85,6 +86,7 @@ export function ChatView({
   onOpenWorkItem,
   onOpenProject,
   onOpenSchedule,
+  onOpenPresentation,
   onTyping,
 }: {
   workspaceId: string;
@@ -111,6 +113,7 @@ export function ChatView({
   onOpenWorkItem?: (item: WorkItemReference) => void;
   onOpenProject?: (project: ProjectReference) => void;
   onOpenSchedule?: (schedule: ScheduleReference) => void;
+  onOpenPresentation?: (presentation: PresentationReference, slideId?: string) => void;
   /** Tells everyone else in a channel that you are typing there, or have stopped. */
   onTyping?: (channelId: string, typing: boolean) => void;
 }) {
@@ -387,6 +390,7 @@ export function ChatView({
                   onOpenWorkItem={onOpenWorkItem}
                   onOpenProject={onOpenProject}
                   onOpenSchedule={onOpenSchedule}
+                  onOpenPresentation={onOpenPresentation}
                 />
               ),
             )}
@@ -533,6 +537,7 @@ function Row({
   onOpenWorkItem,
   onOpenProject,
   onOpenSchedule,
+  onOpenPresentation,
 }: {
   message: Message;
   previous: Message | undefined;
@@ -559,6 +564,7 @@ function Row({
   onOpenWorkItem?: (item: WorkItemReference) => void;
   onOpenProject?: (project: ProjectReference) => void;
   onOpenSchedule?: (schedule: ScheduleReference) => void;
+  onOpenPresentation?: (presentation: PresentationReference, slideId?: string) => void;
 }) {
   const mentionsMe = !message.deletedAt && mentions(message.body, selfId);
   // A server that predates files and reactions sends neither.
@@ -634,6 +640,7 @@ function Row({
               onOpenWorkItem={onOpenWorkItem}
               onOpenProject={onOpenProject}
                   onOpenSchedule={onOpenSchedule}
+                  onOpenPresentation={onOpenPresentation}
             />
             {message.editedAt && <span className="ml-1 text-xs text-[var(--color-muted)]">(edited)</span>}
           </div>

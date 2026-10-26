@@ -1028,7 +1028,32 @@ GitHub — check with `git ls-remote --tags origin`.
 
 `.github/workflows/release.yml` then runs a typecheck, refuses the build if the
 tag and `apps/desktop/package.json` disagree, and builds on macOS and Windows
-runners. Review the draft release, write the notes, and publish it.
+runners (the builds themselves live in `.github/workflows/build.yml`, which
+both this and the dev workflow call). Review the draft release, write the
+notes, and publish it.
+
+### Test builds from `dev`
+
+Work is merged into `dev` first. Every push to `dev` runs the **Dev build**
+workflow (`.github/workflows/dev-build.yml`), which makes the same builds as a
+release but releases nothing; it has no permission to create a release:
+
+- **Version.** The next version with a `-dev.<run>` suffix: `0.19.2-dev.17`
+  after `v0.19.1` has been tagged, or the version in `package.json` if that has
+  not been tagged yet. It never looks older than the release before it, so a
+  test server is not told that release is an update.
+- **Server image.** Pushed as `paradocs:dev` and `paradocs:0.19.2-dev.17`,
+  never `latest`. A test server sets `PARADOCS_TAG=dev` in `.env`, then runs
+  `docker compose pull && docker compose up -d` after each build.
+- **Desktop and Android.** The installers and the APK are artifacts on the
+  workflow run (Actions → Dev build → the run → Artifacts), kept for 14 days.
+  The desktop app installs as **ParaDOCs Dev**, beside the released app, with
+  its own settings and no auto-update (`apps/desktop/electron-builder.dev.yml`).
+  The APK has the same app ID as the released one, so it replaces it.
+
+A newer push to `dev` cancels a test build still running. Once a test build
+has been tried, open a pull request from `dev` into `main`, bump the version
+and tag as above.
 
 Signing is wired but optional: the workflow reads `CSC_LINK`,
 `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and

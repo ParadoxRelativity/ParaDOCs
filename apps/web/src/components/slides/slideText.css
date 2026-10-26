@@ -1,0 +1,72 @@
+/* Rich text on slides: shared by the editor (ProseMirror) and the read-only view, so they draw alike. */
+.slide-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-variant-ligatures: none;
+}
+.slide-text .slide-p {
+  position: relative;
+  margin: 0 0 0.3em;
+  min-height: 1em;
+}
+.slide-text .slide-p[data-bullet]::before {
+  position: absolute;
+  left: calc(var(--level, 0) * 1.1em);
+  width: 1.1em;
+}
+/* PowerPoint draws no bullet on an empty list item: imported lists often end with one. */
+.slide-text .slide-p[data-bullet][data-empty]::before {
+  content: none;
+}
+.slide-text .slide-p[data-bullet='bullet']::before {
+  content: '\2022';
+}
+.slide-text .slide-p[data-bullet='number']::before {
+  content: attr(data-num) '.';
+  width: 1.6em;
+}
+.slide-text .slide-p[data-bullet='number'] {
+  padding-left: calc((var(--level, 0) + 1) * 1.1em + 0.5em) !important;
+}
+.slide-text .slide-mention {
+  border-radius: 0.2em;
+  padding: 0 0.15em;
+  background: rgb(37 99 235 / 0.14);
+  color: var(--slide-link, #2563eb);
+}
+.slide-text a,
+.slide-text .slide-link {
+  color: var(--slide-link, #2563eb);
+  text-decoration: underline;
+}
+.slide-text .ProseMirror {
+  outline: none;
+  min-height: 1em;
+}
+.slide-text .ProseMirror-selectednode {
+  outline: 2px solid var(--slide-link, #2563eb);
+}
+.slide-text-empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0.4;
+  pointer-events: none;
+}
+/* A live value reads as the text around it; only while editing is it marked out as one. */
+.slide-text .slide-field-editing {
+  border-radius: 0.2em;
+  padding: 0 0.1em;
+  background: rgb(16 185 129 / 0.16);
+  box-shadow: inset 0 -0.08em 0 rgb(16 185 129 / 0.7);
+}
+.slide-text .slide-field-locked {
+  opacity: 0.55;
+  font-size: 0.8em;
+}
+.slide-text .slide-field-link {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.15em;
+}
