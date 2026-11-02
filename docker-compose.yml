@@ -201,7 +201,7 @@ services:
       # is stopped and cleaned up rather than left running.
       MAX_MB: ${CONVERTER_MAX_MB:-50}
       TIMEOUT_SECONDS: ${CONVERTER_TIMEOUT_SECONDS:-60}
-    init: true
+    # No `init: true`: the image runs its own tini (see converter/Dockerfile).
 
   # Voice, video and screen sharing.
   #
