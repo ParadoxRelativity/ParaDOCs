@@ -37,10 +37,13 @@ Then:
 docker compose up -d
 ```
 
-The first start downloads the converter image, `paradoxrelativity/paradocs-converter`,
-which is over a gigabyte. (If it has not been published for your release, build
-it from the `converter` folder of the repository: `docker build -t
-paradoxrelativity/paradocs-converter converter`.) `docker compose ps` should show `converter` as `healthy`. Import a
+The first start downloads the converter image, `paradoxrelativity/paradocs-converter`
+(also on `ghcr.io/paradoxrelativity/paradocs-converter`), which is over a
+gigabyte. Each release publishes it with the same tags as the app, for amd64
+and arm64, and `PARADOCS_TAG` picks the version of both. To run a converter you
+have changed, build it from the `converter` folder of the repository under that
+name (`docker build -t paradoxrelativity/paradocs-converter converter`) and
+start it with `docker compose up -d --pull never`. `docker compose ps` should show `converter` as `healthy`. Import a
 `.ppt` file in Slides to check it works. To turn it off again, remove both lines
 and run `docker compose up -d --remove-orphans`.
 

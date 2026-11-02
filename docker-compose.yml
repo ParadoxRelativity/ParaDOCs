@@ -178,9 +178,10 @@ services:
   # it), its filesystem is read-only apart from a scratch directory that is
   # emptied after every file, it has no privileges, and it is capped on
   # memory, processes and time. Files are never kept. See
-  # docs/slides-converter.md.
+  # docs/slides-converter.md. Published with the same tags as the app, so
+  # PARADOCS_TAG moves both together.
   converter:
-    image: paradoxrelativity/paradocs-converter:latest
+    image: paradoxrelativity/paradocs-converter:${PARADOCS_TAG:-latest}
     profiles: ['converter']
     restart: unless-stopped
     networks:

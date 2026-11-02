@@ -2,14 +2,16 @@
 #
 # Release (release.yml) calls it for a version tag: the desktop installers on
 # each platform, with the latest*.yml manifests the auto-updater reads, the
-# Android APK, and the server image pushed as X.Y.Z, X.Y and latest to the
-# GitHub Container Registry (ghcr.io/<owner>/<repo>) and, when Docker Hub
-# credentials are configured, to Docker Hub (paradoxrelativity/paradocs).
+# Android APK, and the server images pushed as X.Y.Z, X.Y and latest to the
+# GitHub Container Registry (ghcr.io/<owner>/<repo>, and <repo>-converter for
+# the optional presentation converter) and, when Docker Hub credentials are
+# configured, to Docker Hub (paradoxrelativity/paradocs and
+# paradoxrelativity/paradocs-converter).
 # Release then puts the installers and APK on a draft GitHub Release.
 #
 # Dev build (dev-build.yml) calls it for each push to the dev branch. Nothing
 # is released: the installers and APK are kept as workflow artifacts on the
-# run, and the server image is pushed as `dev` and as its own version, never
+# run, and the server images are pushed as `dev` and as their version, never
 # as latest. The version is the next one up with a -dev.<run> suffix, so a
 # test build never looks older than the release it was built after. The
 # desktop app installs as "ParaDOCs Dev", beside the real one, with updates
@@ -504,16 +506,29 @@ jobs:
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
   image:
-    name: Server image
+    name: ${{ matrix.name }}
     needs: verify
     runs-on: ubuntu-latest
+    # The server, and the optional presentation converter (converter/,
+    # docs/slides-converter.md) that docker-compose.yml runs beside it. Both get
+    # the same tags, so PARADOCS_TAG picks matching versions of the two.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Server image
+            context: .
+            suffix: ''
+          - name: Converter image
+            context: converter
+            suffix: -converter
     # Pushing an image needs packages, which the calling workflow grants.
     permissions:
       contents: read
       packages: write
     env:
       # The Docker Hub repository the image is pushed to, alongside ghcr.io.
-      DOCKERHUB_IMAGE: docker.io/paradoxrelativity/paradocs
+      DOCKERHUB_IMAGE: docker.io/paradoxrelativity/paradocs${{ matrix.suffix }}
     steps:
       - uses: actions/checkout@v4
 
@@ -529,8 +544,9 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          SUFFIX: ${{ matrix.suffix }}
         run: |
-          names="ghcr.io/${GITHUB_REPOSITORY,,}"
+          names="ghcr.io/${GITHUB_REPOSITORY,,}${SUFFIX}"
           if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
             names="$names,$DOCKERHUB_IMAGE"
             echo "dockerhub=true" >> "$GITHUB_OUTPUT"
@@ -544,7 +560,9 @@ jobs:
       # arm64 alongside amd64, for Raspberry Pis, ARM VPSes and the NAS boxes
       # people self-host on. The Dockerfile builds the web client natively and
       # only installs runtime dependencies per architecture, so emulation is
-      # confined to the short part of the build.
+      # confined to the short part of the build. (The converter's arm64 build
+      # installs LibreOffice under emulation, which is slow but needs no
+      # compiling.)
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -584,7 +602,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -592,5 +610,7 @@ jobs:
           # Empty for a release, which reads its version from package.json.
           build-args: |
             PARADOCS_VERSION=${{ needs.verify.outputs.channel == 'dev' && needs.verify.outputs.version || '' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Each image keeps its own layers, so one does not evict the other's.
+          # The server keeps the default scope, and with it the cache it has.
+          cache-from: type=gha,scope=${{ matrix.suffix == '' && 'buildkit' || 'converter' }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix == '' && 'buildkit' || 'converter' }}
