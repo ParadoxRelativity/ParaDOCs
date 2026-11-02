@@ -16,6 +16,11 @@ container, off until you switch it on.
 With the converter off, choosing a `.ppt` or `.key` file in Slides says so and
 offers to import a PDF of it instead. Nothing breaks.
 
+The converter also draws Windows metafile pictures (`.emf`, `.wmf`), which
+PowerPoint often uses for charts and diagrams and which browsers cannot show,
+into PNGs as a deck is imported. Without it, the browser draws them itself:
+most come out right, but some newer effects (EMF+) may be missing.
+
 ## Turning it on
 
 In the folder with your `docker-compose.yml` and `.env`, add to `.env`:
@@ -32,10 +37,13 @@ Then:
 docker compose up -d
 ```
 
-The first start downloads the converter image, `paradoxrelativity/paradocs-converter`,
-which is over a gigabyte. (If it has not been published for your release, build
-it from the `converter` folder of the repository: `docker build -t
-paradoxrelativity/paradocs-converter converter`.) `docker compose ps` should show `converter` as `healthy`. Import a
+The first start downloads the converter image, `paradoxrelativity/paradocs-converter`
+(also on `ghcr.io/paradoxrelativity/paradocs-converter`), which is over a
+gigabyte. Each release publishes it with the same tags as the app, for amd64
+and arm64, and `PARADOCS_TAG` picks the version of both. To run a converter you
+have changed, build it from the `converter` folder of the repository under that
+name (`docker build -t paradoxrelativity/paradocs-converter converter`) and
+start it with `docker compose up -d --pull never`. `docker compose ps` should show `converter` as `healthy`. Import a
 `.ppt` file in Slides to check it works. To turn it off again, remove both lines
 and run `docker compose up -d --remove-orphans`.
 

@@ -222,13 +222,17 @@ describe('Keynote export', () => {
     expect(rotated.rotation).toBe(-20);
     expect(rotated.paragraphs![0].runs[0].marks).toMatchObject({ italic: true });
 
-    expect(reportFeatures(deck)).toEqual(expect.arrayContaining(['Charts', 'Pictures and media in .emf format', 'Freeform shapes', 'Links to slides, files and actions']));
+    expect(reportFeatures(deck)).toEqual(expect.arrayContaining(['Charts', 'Pictures in .emf and .wmf format', 'Freeform shapes', 'Links to slides, files and actions']));
     const dropped = deck.report.items.filter((i) => i.kind === 'dropped').map((i) => i.feature);
-    expect(dropped).toEqual(expect.arrayContaining(['Charts', 'Pictures and media in .emf format']));
+    expect(dropped).toEqual(expect.arrayContaining(['Charts']));
+    // The EMF is kept, to be turned into a PNG as it is uploaded.
+    expect(deck.report.items.find((i) => i.feature === 'Pictures in .emf and .wmf format')?.kind).toBe('approximated');
     // The chart's place is marked rather than silently empty.
     expect(deck.slides[1].elements.some((e) => e.type === 'shape' && (e as { text?: string }).text === 'Chart (not imported)')).toBe(true);
-    // Only the PNG made it into the media list; the EMF did not.
-    expect(deck.media.map((m) => m.name)).toEqual(['image2.png']);
+    expect(deck.media.map((m) => [m.name, m.mimeType])).toEqual([
+      ['image1.emf', 'image/emf'],
+      ['image2.png', 'image/png'],
+    ]);
   });
 
   it('draws freeform shapes to pictures when the host can', async () => {
@@ -243,7 +247,8 @@ describe('Keynote export', () => {
     expect(deck.media.some((m) => m.name.startsWith('shape-'))).toBe(true);
     const freeform = deck.report.items.find((i) => i.feature === 'Freeform shapes')!;
     expect(freeform.detail).toContain('pictures');
-    expect(deck.slides[1].elements.filter((e) => e.type === 'image')).toHaveLength(2);
+    // The drawn freeform, the PNG and the EMF.
+    expect(deck.slides[1].elements.filter((e) => e.type === 'image')).toHaveLength(3);
   });
 });
 

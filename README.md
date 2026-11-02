@@ -1068,9 +1068,10 @@ application whose signature it cannot verify. The app reports this rather than
 failing silently. Windows updates itself unsigned, with a SmartScreen warning on
 first install.
 
-**The server image** is built by the same tag for both `linux/amd64` and
-`linux/arm64`, and pushed with the same tags to Docker Hub and the GitHub
-Container Registry:
+**The server image**, and beside it the optional presentation converter
+(`paradoxrelativity/paradocs-converter`, see docs/slides-converter.md), is built
+by the same tag for both `linux/amd64` and `linux/arm64`, and pushed with the
+same tags to Docker Hub and the GitHub Container Registry:
 
 ```
 paradoxrelativity/paradocs:0.1.1           # Docker Hub: the exact release
@@ -1091,9 +1092,10 @@ and variables → Actions*:
   tokens*. Use a token, not the account password.
 
 Without them the job still pushes to ghcr.io, and the run shows a warning that
-Docker Hub was skipped. Create the `paradoxrelativity/paradocs` repository on
-Docker Hub before the first release and make it **public**: the compose file
-pulls it without logging in. If `paradoxrelativity` is an
+Docker Hub was skipped. Create the `paradoxrelativity/paradocs` and
+`paradoxrelativity/paradocs-converter` repositories on Docker Hub before the
+first release and make them **public**: the compose file pulls them without
+logging in. If `paradoxrelativity` is an
 organisation, the account behind the token needs write access to the repository.
 
 Running the workflow by hand from the Actions tab pushes only
@@ -1102,8 +1104,8 @@ moving `latest`. Unlike the desktop installers, a pushed image is visible as
 soon as the job finishes — there is no draft step — so `latest` moves when the
 tag is pushed, not when the release is published.
 
-On ghcr.io, the first push creates the package as **private**, even for a
-public repository. To let a server pull it without logging in, open the package under
+On ghcr.io, the first push creates each package (`paradocs`, and
+`paradocs-converter`) as **private**, even for a public repository. To let a server pull it without logging in, open the package under
 your GitHub profile's *Packages*, then *Package settings* → *Change
 visibility* → *Public*. This only has to be done once.
 

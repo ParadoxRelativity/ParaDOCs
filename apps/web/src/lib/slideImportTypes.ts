@@ -29,6 +29,9 @@ export interface ImportedMedia {
   data: Uint8Array;
 }
 
+/** A Windows metafile (.emf, .wmf): imported like any picture, but turned into a PNG before it is uploaded (lib/windowsPictures.ts). */
+export const isWindowsPicture = (mimeType: string): boolean => mimeType === 'image/emf' || mimeType === 'image/wmf';
+
 export interface ImportedSlide {
   /** Index into {@link ImportedDeck.layouts}; null for the deck's blank layout. */
   layout: number | null;
