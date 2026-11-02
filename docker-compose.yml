@@ -191,8 +191,11 @@ services:
       - /tmp:size=512m,mode=1777
     cap_drop:
       - ALL
-    security_opt:
-      - no-new-privileges:true
+    # Not `no-new-privileges`: with every capability dropped and the image's
+    # setuid programs stripped (converter/Dockerfile), there is nothing for it
+    # to stop, and on some hosts (AppArmor on older kernels, some NAS builds
+    # of Docker) it stops the container starting at all: "exec ...: operation
+    # not permitted".
     mem_limit: ${CONVERTER_MEMORY:-2g}
     cpus: ${CONVERTER_CPUS:-2}
     pids_limit: 256
