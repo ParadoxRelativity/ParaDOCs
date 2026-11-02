@@ -80,8 +80,12 @@ LibreOffice is parsing files that came from anywhere, so the converter is built
 on the assumption that a file could be hostile.
 
 - **A separate container**, running as an unprivileged user with all Linux
-  capabilities dropped and `no-new-privileges`. Its filesystem is read-only
-  except a small scratch directory.
+  capabilities dropped. Its filesystem is read-only except a small scratch
+  directory, and the image has no setuid programs, so nothing in it can gain
+  privileges. (It does not set `no-new-privileges`, which would add nothing to
+  that, and some hosts refuse to start a container with it. If the
+  converter's log says `exec ...: operation not permitted`, your
+  `docker-compose.yml` still sets it: take the current one.)
 - **No network.** It sits on an internal Docker network shared only with the
   app, so it cannot reach the internet, the database or anything else, and
   nothing outside can reach it.

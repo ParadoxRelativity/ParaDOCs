@@ -21,6 +21,11 @@ RUN apt-get update \
     fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
+# No setuid or setgid programs (su, passwd, mount and the like come with the
+# base image), so nothing in the container can gain privileges. This does the
+# job of `no-new-privileges`, which some hosts will not start a container with.
+RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} +
+
 COPY server.mjs /app/server.mjs
 
 # Not root. HOME is a writable path because the container's filesystem is
@@ -31,8 +36,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 # tini, from the image, reaps whatever LibreOffice leaves behind and passes
-# signals on. Not Docker's `init: true`: that runs a binary mounted from the
-# host, which some hosts will not let this locked-down user execute ("exec
-# /sbin/docker-init: operation not permitted").
+# signals on, without depending on the compose file asking for `init: true`.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "/app/server.mjs"]
