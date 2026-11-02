@@ -9,9 +9,10 @@ FROM node:22-slim
 
 # Impress and Draw (which opens metafile pictures) alone, not the whole suite,
 # and the fonts decks most often use or have metric-compatible stand-ins for,
-# so text wraps as it did in the original.
+# so text wraps as it did in the original. tini runs as process 1, below.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
+    tini \
     libreoffice-impress \
     libreoffice-draw \
     fonts-liberation \
@@ -29,4 +30,9 @@ ENV HOME=/tmp
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+# tini, from the image, reaps whatever LibreOffice leaves behind and passes
+# signals on. Not Docker's `init: true`: that runs a binary mounted from the
+# host, which some hosts will not let this locked-down user execute ("exec
+# /sbin/docker-init: operation not permitted").
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "/app/server.mjs"]
