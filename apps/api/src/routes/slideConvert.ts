@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 import { HttpError, badRequest } from '../lib/http.js';
 import { assertWorkspaceAccess } from '../plugins/session.js';
@@ -11,6 +11,8 @@ import { assertWorkspaceAccess } from '../plugins/session.js';
  * docs/slides-converter.md). This route only passes a file along: the
  * sidecar converts it and the browser then imports the .pptx it gets back
  * exactly as if the person had chosen one, so there is one mapping path.
+ * The same converter also draws a deck's Windows metafile pictures (.emf,
+ * .wmf) to PNGs for the browser's import (apps/web/src/lib/windowsPictures.ts).
  *
  * Nothing is stored here. The file is held in memory for the length of the
  * request, and the sidecar keeps nothing either.
@@ -19,7 +21,18 @@ import { assertWorkspaceAccess } from '../plugins/session.js';
 /** Formats the converter is offered, as lower-case extensions. .odp is a fallback for ones the browser parser cannot read. */
 export const CONVERTIBLE_EXTENSIONS = ['.ppt', '.pps', '.pot', '.key', '.odp'];
 
+/** Windows metafile pictures (.emf, .wmf) in an imported deck, which the converter draws to PNGs, as browsers cannot show them. */
+export const PICTURE_EXTENSIONS = ['.emf', '.wmf'];
+
 export const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+/** A requested PNG side in pixels: a whole number from 1 to 4000, else none. */
+const pixelSide = (value: unknown): number | undefined => {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 4000 ? n : undefined;
+};
 
 const extensionOf = (name: string) => {
   const dot = name.lastIndexOf('.');
@@ -60,8 +73,16 @@ export const slideConvertRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post<{ Params: { id: string } }>('/workspaces/:id/presentations/convert', async (req, reply) => {
-    await assertWorkspaceAccess(req, req.params.id, 'slides.create', 'slides');
+  /**
+   * Reads the one uploaded file, checks it has an extension in `extensions`,
+   * passes it to the converter and returns what comes back. `fail` is the
+   * message for a file the converter could not read; `valid` checks its output.
+   */
+  async function convertUpload(
+    req: FastifyRequest,
+    extensions: string[],
+    options: { query?: string; fail: string; valid: (out: Buffer) => boolean; invalid: string },
+  ): Promise<Buffer> {
     const settings = config.converter;
     if (!settings.enabled) {
       throw new HttpError(
@@ -73,9 +94,9 @@ export const slideConvertRoutes: FastifyPluginAsync = async (app) => {
     const file = await req.file({ limits: { fileSize: settings.maxBytes, files: 1 } });
     if (!file) throw badRequest('No file was uploaded');
     const extension = extensionOf(file.filename);
-    if (!CONVERTIBLE_EXTENSIONS.includes(extension)) {
+    if (!extensions.includes(extension)) {
       file.file.resume();
-      throw badRequest(`${file.filename} is not a format the converter reads (${CONVERTIBLE_EXTENSIONS.join(', ')})`);
+      throw badRequest(`${file.filename} is not a format the converter reads (${extensions.join(', ')})`);
     }
     const tooLarge = () =>
       new HttpError(413, `That file is larger than the converter accepts (${Math.floor(settings.maxBytes / 1024 / 1024)} MB)`, 'file_too_large');
@@ -95,7 +116,7 @@ export const slideConvertRoutes: FastifyPluginAsync = async (app) => {
     }
     running += 1;
     try {
-      const res = await fetch(`${settings.url}/convert?extension=${encodeURIComponent(extension)}`, {
+      const res = await fetch(`${settings.url}/convert?extension=${encodeURIComponent(extension)}${options.query ?? ''}`, {
         method: 'POST',
         headers: { 'content-type': 'application/octet-stream' },
         body: new Uint8Array(data),
@@ -105,18 +126,11 @@ export const slideConvertRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!res.ok) {
         await res.body?.cancel().catch(() => undefined);
-        throw new HttpError(
-          422,
-          'The converter could not read that file. If it came from Keynote, export it to .pptx from Keynote, or import it as a PDF.',
-          'conversion_failed',
-        );
+        throw new HttpError(422, options.fail, 'conversion_failed');
       }
       const converted = await readLimited(res, settings.maxBytes * 2);
-      // A .pptx is a zip; anything else means the converter did not do its job.
-      if (converted.length < 4 || converted.readUInt32LE(0) !== 0x04034b50) {
-        throw new HttpError(422, 'The converter did not produce a presentation from that file', 'conversion_failed');
-      }
-      return reply.header('Cache-Control', 'no-store').type(PPTX_MIME).send(converted);
+      if (!options.valid(converted)) throw new HttpError(422, options.invalid, 'conversion_failed');
+      return converted;
     } catch (err) {
       if (err instanceof HttpError) throw err;
       const name = (err as { name?: string }).name;
@@ -128,5 +142,37 @@ export const slideConvertRoutes: FastifyPluginAsync = async (app) => {
     } finally {
       running -= 1;
     }
+  }
+
+  app.post<{ Params: { id: string } }>('/workspaces/:id/presentations/convert', async (req, reply) => {
+    await assertWorkspaceAccess(req, req.params.id, 'slides.create', 'slides');
+    const converted = await convertUpload(req, CONVERTIBLE_EXTENSIONS, {
+      fail: 'The converter could not read that file. If it came from Keynote, export it to .pptx from Keynote, or import it as a PDF.',
+      // A .pptx is a zip; anything else means the converter did not do its job.
+      valid: (out) => out.length >= 4 && out.readUInt32LE(0) === 0x04034b50,
+      invalid: 'The converter did not produce a presentation from that file',
+    });
+    return reply.header('Cache-Control', 'no-store').type(PPTX_MIME).send(converted);
   });
+
+  /**
+   * A Windows metafile picture from an imported deck, drawn to a PNG. The
+   * browser asks for the size it wants (`width`, `height` in pixels), from the
+   * picture's own header, so a chart is not imported at its tiny printed size.
+   */
+  app.post<{ Params: { id: string }; Querystring: { width?: string; height?: string } }>(
+    '/workspaces/:id/presentations/convert-picture',
+    async (req, reply) => {
+      await assertWorkspaceAccess(req, req.params.id, 'slides.create', 'slides');
+      const width = pixelSide(req.query.width);
+      const height = pixelSide(req.query.height);
+      const converted = await convertUpload(req, PICTURE_EXTENSIONS, {
+        query: width && height ? `&width=${width}&height=${height}` : '',
+        fail: 'The converter could not read that picture',
+        valid: (out) => out.subarray(0, 4).equals(PNG_SIGNATURE),
+        invalid: 'The converter did not produce a picture from that file',
+      });
+      return reply.header('Cache-Control', 'no-store').type('image/png').send(converted);
+    },
+  );
 };
