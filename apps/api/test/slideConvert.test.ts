@@ -16,7 +16,7 @@ describe('presentation converter route', () => {
   let sidecar: http.Server;
   let sidecarUrl: string;
   let config: typeof import('../src/config.js').config;
-  const received: { extension: string | null; bytes: number }[] = [];
+  const received: { extension: string | null; bytes: number; width?: string | null; height?: string | null }[] = [];
   let behaviour: (req: http.IncomingMessage, res: http.ServerResponse) => void;
 
   /** What a real .pptx starts with: a zip's local file header. */
@@ -31,11 +31,11 @@ describe('presentation converter route', () => {
     ]);
     return { body, contentType: `multipart/form-data; boundary=${boundary}` };
   };
-  const convert = async (user: TestUser | null, name: string, data: Buffer) => {
+  const convert = async (user: TestUser | null, name: string, data: Buffer, route = 'convert') => {
     const { body, contentType } = multipart(name, data);
     return api.app.inject({
       method: 'POST',
-      url: `/api/workspaces/${ws}/presentations/convert`,
+      url: `/api/workspaces/${ws}/presentations/${route}`,
       headers: { ...(user ? { authorization: `Bearer ${user.token}` } : {}), 'content-type': contentType },
       payload: body,
     });
@@ -52,7 +52,12 @@ describe('presentation converter route', () => {
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
-        received.push({ extension: new URL(req.url ?? '', 'http://x').searchParams.get('extension'), bytes: Buffer.concat(chunks).length });
+        const query = new URL(req.url ?? '', 'http://x').searchParams;
+        received.push({
+          extension: query.get('extension'),
+          bytes: Buffer.concat(chunks).length,
+          ...(query.has('width') ? { width: query.get('width'), height: query.get('height') } : {}),
+        });
         behaviour(req, res);
       });
     });
@@ -152,6 +157,34 @@ describe('presentation converter route', () => {
     expect((await convert(editor, 'bad.ppt', Buffer.from('x'))).json().code).toBe('conversion_failed');
     behaviour = (_req, res) => res.writeHead(200).end('<html>not a zip</html>');
     expect((await convert(editor, 'bad.ppt', Buffer.from('x'))).statusCode).toBe(422);
+  });
+
+  it('draws a metafile picture to a PNG at the size asked for', async () => {
+    const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('picture')]);
+    enable();
+    behaviour = (_req, res) => res.writeHead(200, { 'content-type': 'image/png' }).end(PNG);
+    const res = await convert(editor, 'image1.emf', Buffer.from('metafile'), 'convert-picture?width=960&height=480');
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('image/png');
+    expect(Buffer.compare(res.rawPayload, PNG)).toBe(0);
+    expect(received).toEqual([{ extension: '.emf', bytes: 8, width: '960', height: '480' }]);
+
+    // A size out of range is left out; the sidecar then draws it at its printed size.
+    received.length = 0;
+    expect((await convert(editor, 'image2.wmf', Buffer.from('x'), 'convert-picture?width=0&height=99999')).statusCode).toBe(200);
+    expect(received).toEqual([{ extension: '.wmf', bytes: 1 }]);
+
+    // Only pictures, and only a PNG back.
+    expect((await convert(editor, 'old.ppt', Buffer.from('x'), 'convert-picture')).statusCode).toBe(400);
+    behaviour = (_req, res) => res.writeHead(200).end(PPTX);
+    expect((await convert(editor, 'image1.emf', Buffer.from('x'), 'convert-picture')).statusCode).toBe(422);
+    expect((await convert(viewer, 'image1.emf', Buffer.from('x'), 'convert-picture')).statusCode).toBe(403);
+  });
+
+  it('has no picture converter when the converter is off', async () => {
+    const res = await convert(editor, 'image1.emf', Buffer.from('x'), 'convert-picture');
+    expect(res.statusCode).toBe(501);
+    expect(res.json().code).toBe('converter_disabled');
   });
 
   it('says so when the converter is not reachable', async () => {

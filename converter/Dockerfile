@@ -1,16 +1,19 @@
 # The optional presentation converter: LibreOffice Impress behind a small HTTP
 # server, turning .ppt, .pps, .pot, Keynote and .odp files into .pptx for
-# ParaDOCs Slides. Run by the `converter` profile of docker-compose.yml, and
-# not part of the main image, so a server without it stays small.
+# ParaDOCs Slides, and drawing decks' .emf and .wmf pictures to PNGs. Run by
+# the `converter` profile of docker-compose.yml, and not part of the main
+# image, so a server without it stays small.
 #
 #   docker build -t paradoxrelativity/paradocs-converter converter
 FROM node:22-slim
 
-# Impress alone, not the whole suite, and the fonts decks most often use or
-# have metric-compatible stand-ins for, so text wraps as it did in the original.
+# Impress and Draw (which opens metafile pictures) alone, not the whole suite,
+# and the fonts decks most often use or have metric-compatible stand-ins for,
+# so text wraps as it did in the original.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     libreoffice-impress \
+    libreoffice-draw \
     fonts-liberation \
     fonts-crosextra-carlito \
     fonts-crosextra-caladea \

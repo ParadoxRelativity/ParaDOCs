@@ -16,6 +16,11 @@ container, off until you switch it on.
 With the converter off, choosing a `.ppt` or `.key` file in Slides says so and
 offers to import a PDF of it instead. Nothing breaks.
 
+The converter also draws Windows metafile pictures (`.emf`, `.wmf`), which
+PowerPoint often uses for charts and diagrams and which browsers cannot show,
+into PNGs as a deck is imported. Without it, the browser draws them itself:
+most come out right, but some newer effects (EMF+) may be missing.
+
 ## Turning it on
 
 In the folder with your `docker-compose.yml` and `.env`, add to `.env`:

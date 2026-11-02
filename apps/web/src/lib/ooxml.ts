@@ -181,6 +181,9 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   webp: 'image/webp',
   bmp: 'image/bmp',
   svg: 'image/svg+xml',
+  // Windows metafiles, which no browser shows: kept so the upload step can turn them into PNGs (lib/windowsPictures.ts).
+  emf: 'image/emf',
+  wmf: 'image/wmf',
   mp4: 'video/mp4',
   m4v: 'video/mp4',
   mov: 'video/quicktime',

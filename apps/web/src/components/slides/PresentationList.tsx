@@ -26,6 +26,7 @@ import {
   useSlideConverter,
 } from '../../lib/slideConvert';
 import { encodeImport, rememberImport, resolveMedia, uploadImportMedia } from '../../lib/slideImport';
+import { convertingWindowsPictures } from '../../lib/windowsPictures';
 import { api } from '../../api/client';
 import type { Can } from '../../lib/permissions';
 import { MODIFIER, asksForNewTab, openTab } from '../../lib/tabs';
@@ -178,7 +179,7 @@ export function PresentationList({
       const created = await create.mutateAsync({ title: deck.title.slice(0, 200), folderId });
       const { urls, failed } = await uploadImportMedia(
         deck,
-        (picture) => upload.mutateAsync({ file: picture, presentationId: created.id }),
+        convertingWindowsPictures(workspaceId, (picture) => upload.mutateAsync({ file: picture, presentationId: created.id })),
         progress,
       );
       const resolved = resolveMedia(deck, urls, failed);

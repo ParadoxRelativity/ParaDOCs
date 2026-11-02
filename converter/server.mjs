@@ -3,6 +3,8 @@
 //
 //   POST /convert?extension=.ppt   body: the file's bytes
 //   200  the converted .pptx       4xx/5xx  an error, no body worth reading
+//   POST /convert?extension=.emf&width=1600&height=900
+//   200  the picture as a PNG, that many pixels if given (.emf, .wmf)
 //   GET  /health                   200 when it is up
 //
 // It treats every file as hostile. Each request gets its own throwaway
@@ -25,7 +27,22 @@ const MAX_BYTES = Math.floor(Number(process.env.MAX_MB || 50) * 1024 * 1024);
 const TIMEOUT_MS = Math.floor(Number(process.env.TIMEOUT_SECONDS || 55) * 1000);
 const MAX_QUEUE = Number(process.env.MAX_QUEUE || 2);
 const SOFFICE = process.env.SOFFICE_BIN || 'soffice';
-const EXTENSIONS = new Set(['.ppt', '.pps', '.pot', '.key', '.odp']);
+// What each extension becomes: presentations a .pptx, Windows metafile pictures a PNG.
+const TARGETS = new Map([
+  ['.ppt', 'pptx'],
+  ['.pps', 'pptx'],
+  ['.pot', 'pptx'],
+  ['.key', 'pptx'],
+  ['.odp', 'pptx'],
+  ['.emf', 'png'],
+  ['.wmf', 'png'],
+]);
+
+/** A requested PNG side in pixels, or undefined when it is not a whole number from 1 to 4000. */
+const pixelSide = (value) => {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 4000 ? n : undefined;
+};
 
 let busy = false;
 const waiting = [];
@@ -103,7 +120,13 @@ function runSoffice(args, signal) {
   });
 }
 
-async function convert(data, extension, signal) {
+async function convert(data, extension, size, signal) {
+  const target = TARGETS.get(extension);
+  // A picture is drawn at the size asked for; without one, at its printed size.
+  const format =
+    target === 'png' && size
+      ? `png:draw_png_Export:${JSON.stringify({ PixelWidth: { type: 'long', value: String(size.width) }, PixelHeight: { type: 'long', value: String(size.height) } })}`
+      : target;
   const dir = await mkdtemp(join(tmpdir(), 'convert-'));
   try {
     const input = join(dir, `input${extension}`);
@@ -116,12 +139,12 @@ async function convert(data, extension, signal) {
       '--nofirststartwizard',
       `-env:UserInstallation=file://${join(dir, 'profile')}`,
       '--convert-to',
-      'pptx',
+      format,
       '--outdir',
       dir,
       input,
     ], signal);
-    return await readFile(join(dir, 'input.pptx'));
+    return await readFile(join(dir, `input.${target}`));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -136,7 +159,10 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/health') return fail(200, 'ok');
   if (req.method !== 'POST' || url.pathname !== '/convert') return fail(404, 'not found');
   const extension = (url.searchParams.get('extension') || '').toLowerCase();
-  if (!EXTENSIONS.has(extension)) return fail(400, 'unsupported extension');
+  if (!TARGETS.has(extension)) return fail(400, 'unsupported extension');
+  const width = pixelSide(url.searchParams.get('width'));
+  const height = pixelSide(url.searchParams.get('height'));
+  const size = width && height ? { width, height } : null;
   try {
     const data = await readBody(req);
     if (data.length === 0) return fail(400, 'empty body');
@@ -145,14 +171,14 @@ const server = createServer(async (req, res) => {
     res.on('close', () => {
       if (!res.writableEnded) gone.abort();
     });
-    const queued = exclusive(() => convert(data, extension, gone.signal), gone.signal);
+    const queued = exclusive(() => convert(data, extension, size, gone.signal), gone.signal);
     if (!queued) return fail(503, 'busy');
-    const pptx = await queued;
+    const converted = await queued;
     res.writeHead(200, {
-      'content-type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'content-length': pptx.length,
+      'content-type': TARGETS.get(extension) === 'png' ? 'image/png' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'content-length': converted.length,
     });
-    res.end(pptx);
+    res.end(converted);
   } catch (err) {
     fail(err?.status ?? 500, err?.status ? err.message : 'conversion failed');
   }

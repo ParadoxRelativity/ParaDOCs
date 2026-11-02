@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from 'react';
 import { deleteLayout, deleteSlide, readSlideOrder, slideMapName } from '@paradocs/shared';
 import { readPowerPointSlides } from '../../lib/powerPointClipboard';
 import { insertImport, resolveMedia, uploadImportMedia, type PasteFormatting } from '../../lib/slideImport';
+import { convertingWindowsPictures } from '../../lib/windowsPictures';
 import { importSlideFile } from '../../lib/slideImportClient';
 import type { ImportedDeck, ImportReportItem } from '../../lib/slideImportTypes';
 import { uploadSlideFile } from '../../lib/slideUploads';
@@ -78,7 +79,7 @@ export function usePowerPointPaste(ctx: SlideEditorContext, onPasted: (slideIds:
         const progress = (p: { message: string }) => setStatus(p.message);
         setStatus('Reading the slides from PowerPoint…');
         const parsed = await importSlideFile(new File([bytes as BlobPart], 'PowerPoint slides.pptx'), progress, deck.settings.size);
-        const { urls, failed } = await uploadImportMedia(parsed, (file) => uploadSlideFile(workspaceId, presentationId, file), progress);
+        const { urls, failed } = await uploadImportMedia(parsed, convertingWindowsPictures(workspaceId, (file) => uploadSlideFile(workspaceId, presentationId, file)), progress);
         const resolved = resolveMedia(parsed, urls, failed);
         if (resolved.slides.length === 0) throw new Error('The clipboard held no slides');
         const result = insert(resolved, index, savedFormatting());

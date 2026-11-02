@@ -13,7 +13,7 @@ import {
   type TableCell,
 } from '@paradocs/shared';
 import { PackageError, attr, child, descendants, extensionOf, kids, localName, mimeOf, numAttr, type XmlParser, type ZipFiles } from './ooxml';
-import { ReportBuilder, mediaUrl, type ImportProgress, type ImportedDeck, type ImportedMedia, type ImportedSlide } from './slideImportTypes';
+import { ReportBuilder, isWindowsPicture, mediaUrl, type ImportProgress, type ImportedDeck, type ImportedMedia, type ImportedSlide } from './slideImportTypes';
 import { randomId } from './util';
 
 /**
@@ -148,6 +148,7 @@ async function addMedia(ctx: Ctx, href: string): Promise<string | null> {
   if (!data) return fail('Pictures and media missing from the file');
   const key = `m${ctx.media.length + 1}`;
   ctx.media.push({ key, name: href.split('/').pop() ?? key, mimeType, data });
+  if (isWindowsPicture(mimeType)) ctx.report.approximated('Pictures in .emf and .wmf format', ctx.slideNo, 'turned into ordinary pictures');
   const url = mediaUrl(key);
   ctx.mediaByPath.set(href, url);
   return url;

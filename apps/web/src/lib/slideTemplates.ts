@@ -3,6 +3,7 @@ import { api } from '../api/client';
 import { importSlideFile } from './slideImportClient';
 import { encodeTemplateImport, resolveMedia, uploadImportMedia } from './slideImport';
 import { isTemplateImportFile, type ImportProgress, type ImportReport } from './slideImportTypes';
+import { convertingWindowsPictures } from './windowsPictures';
 
 /**
  * Importing a presentation template (PARA-110) from a PowerPoint template
@@ -27,7 +28,7 @@ export async function importTemplateFile(
   const deck = await importSlideFile(file, onProgress, undefined, true);
   const { id } = await api.post<{ id: string }>(`/workspaces/${workspaceId}/presentation-templates`, input);
   try {
-    const { urls, failed } = await uploadImportMedia(deck, (picture) => upload(picture, id), onProgress);
+    const { urls, failed } = await uploadImportMedia(deck, convertingWindowsPictures(workspaceId, (picture) => upload(picture, id)), onProgress);
     const resolved = resolveMedia(deck, urls, failed);
     onProgress?.({ stage: 'applying', done: 0, total: 1, message: 'Saving the template…' });
     const update = encodeTemplateImport(resolved);
