@@ -101,4 +101,37 @@ describe('convertingWindowsPictures', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(upload).not.toHaveBeenCalled();
   });
+
+  it('sends pictures to the converter one at a time, as an import uploads several at once', async () => {
+    let running = 0;
+    let most = 0;
+    const fetch = vi.fn(async () => {
+      running += 1;
+      most = Math.max(most, running);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      running -= 1;
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const uploaded: string[] = [];
+    const convert = convertingWindowsPictures('ws-queue', async (file) => uploaded.push(file.type));
+    await Promise.all([convert(emf()), convert(emf()), convert(emf())]);
+    expect(most).toBe(1);
+    expect(uploaded).toEqual(['image/png', 'image/png', 'image/png']);
+  });
+
+  it('offers a picture again when the converter is busy, rather than drawing it in the browser', async () => {
+    const answers = [503, 503, 200];
+    const fetch = vi.fn(async () => {
+      const status = answers.shift()!;
+      return status === 200
+        ? new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { status })
+        : new Response(JSON.stringify({ code: 'converter_busy' }), { status, headers: { 'retry-after': '0.01' } });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const uploaded: File[] = [];
+    await convertingWindowsPictures('ws-busy', async (file) => uploaded.push(file))(emf());
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(uploaded.map((f) => f.type)).toEqual(['image/png']);
+  });
 });

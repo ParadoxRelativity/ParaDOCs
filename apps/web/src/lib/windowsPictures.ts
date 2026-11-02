@@ -73,28 +73,54 @@ export function metafileSize(data: Uint8Array, mimeType: string): MetafileSize |
 /** Workspaces whose server has no converter (or none answering), so later pictures go straight to the browser. */
 const noConverter = new Set<string>();
 
+/**
+ * Server conversions, one at a time. The converter works through pictures one
+ * by one anyway, and the server turns away more than a couple at once as busy:
+ * sent alongside each other (an import uploads three files at a time), some
+ * were refused and went to the browser's renderer instead.
+ */
+let serverTurn: Promise<unknown> = Promise.resolve();
+
+function inTurn<T>(task: () => Promise<T>): Promise<T> {
+  const run = serverTurn.then(task, task);
+  serverTurn = run.catch(() => undefined);
+  return run;
+}
+
+/** How often a picture is offered again to a converter that says it is busy (another person importing). */
+const BUSY_TRIES = 5;
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** The server's converter's PNG; null when there is no converter or it could not read this one. */
-async function convertOnServer(workspaceId: string, file: File, size: MetafileSize | null): Promise<Blob | null> {
-  if (noConverter.has(workspaceId)) return null;
-  const body = new FormData();
-  body.append('file', file);
-  const query = size ? `?width=${size.pixelWidth}&height=${size.pixelHeight}` : '';
-  try {
-    const res = await fetch(serverUrl(`/api/workspaces/${workspaceId}/presentations/convert-picture${query}`), {
-      method: 'POST',
-      credentials: 'include',
-      headers: authHeaders(),
-      body,
-    });
-    if (res.ok) return await res.blob();
-    // No converter, or an older server without this route.
-    if (res.status === 501 || res.status === 404) noConverter.add(workspaceId);
-    else await res.body?.cancel().catch(() => undefined);
-    return null;
-  } catch {
-    noConverter.add(workspaceId);
-    return null;
-  }
+function convertOnServer(workspaceId: string, file: File, size: MetafileSize | null): Promise<Blob | null> {
+  return inTurn(async () => {
+    const query = size ? `?width=${size.pixelWidth}&height=${size.pixelHeight}` : '';
+    for (let attempt = 1; ; attempt += 1) {
+      if (noConverter.has(workspaceId)) return null;
+      const body = new FormData();
+      body.append('file', file);
+      let res: Response;
+      try {
+        res = await fetch(serverUrl(`/api/workspaces/${workspaceId}/presentations/convert-picture${query}`), {
+          method: 'POST',
+          credentials: 'include',
+          headers: authHeaders(),
+          body,
+        });
+      } catch {
+        noConverter.add(workspaceId);
+        return null;
+      }
+      if (res.ok) return await res.blob();
+      await res.body?.cancel().catch(() => undefined);
+      // No converter, or an older server without this route.
+      if (res.status === 501 || res.status === 404) noConverter.add(workspaceId);
+      if (res.status !== 503 || attempt >= BUSY_TRIES) return null;
+      const after = Number(res.headers.get('retry-after'));
+      await wait(Math.min(Number.isFinite(after) && after > 0 ? after : 2, 10) * 1000);
+    }
+  });
 }
 
 interface MetafileModule {
