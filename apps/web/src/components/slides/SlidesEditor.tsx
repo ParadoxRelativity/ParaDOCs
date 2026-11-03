@@ -17,7 +17,8 @@ import { useBackHandler } from '../../lib/back';
 import { useIsMobile } from '../../lib/mobile';
 import { usePeerSlideStates, usePublishSlideState } from '../../lib/slidesPresence';
 import { useSlidesDeck } from '../../lib/slidesStore';
-import { cx } from '../../lib/util';
+import { claimNewDocument } from '../../lib/newDocuments';
+import { cx, useAutosave } from '../../lib/util';
 import { useMembers } from '../../api/hooks';
 import { Button, IconButton } from '../ui';
 import Icon from '../Icon';
@@ -95,6 +96,7 @@ interface Props {
   session: CollabSession;
   peers: Peer[];
   status: CollabStatus;
+  onRename: (title: string) => void;
 }
 
 /**
@@ -106,7 +108,7 @@ interface Props {
  * lib/slidesStore. What later stories add comes in through the registries in
  * slideExtensions.tsx rather than edits to this file.
  */
-export default function SlidesEditor({ presentation, workspaceId, canEdit, session, peers, status }: Props) {
+export default function SlidesEditor({ presentation, workspaceId, canEdit, session, peers, status, onRename }: Props) {
   const { deck, history, actions } = useSlidesDeck(session.ydoc);
   const members = useMembers(workspaceId).data ?? EMPTY_MEMBERS;
   const mobile = useIsMobile();
@@ -124,10 +126,27 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // The slideshow is local to this person: it reads the deck and writes nothing to it.
   const [show, setShow] = useState<{ startId: string | null } | null>(null);
+  const [title, setTitle] = useState(presentation.title);
   const root = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
   const lastIndex = useRef(0);
   const slideParam = useSearchParams()[0].get('slide');
   const appliedParam = useRef<string | null>(null);
+
+  useEffect(() => setTitle(presentation.title), [presentation.id, presentation.title]);
+
+  // The name lives on the presentation's record, not in the Y.Doc, so it saves over REST.
+  const titleSave = useAutosave<string>((value) => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== presentation.title) onRename(trimmed);
+  }, 600);
+
+  // A deck made a moment ago opens on its name, the way a new document does.
+  useEffect(() => {
+    if (!canEdit || !claimNewDocument(presentation.id)) return;
+    titleRef.current?.focus();
+    titleRef.current?.select();
+  }, [presentation.id, canEdit]);
 
   const slide = slides.find((s) => s.id === currentId) ?? null;
   const currentIndex = slide ? slides.indexOf(slide) : -1;
@@ -461,6 +480,27 @@ export default function SlidesEditor({ presentation, workspaceId, canEdit, sessi
     >
       {/* Toolbar */}
       <div className="scroll-thin flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-1">
+        <input
+          ref={titleRef}
+          aria-label="Presentation name"
+          value={title}
+          readOnly={!canEdit}
+          onChange={(event) => {
+            setTitle(event.target.value);
+            titleSave.schedule(event.target.value);
+          }}
+          onBlur={() => {
+            titleSave.flush();
+            // Left empty, it goes back to the name it had rather than saving nothing.
+            if (!title.trim()) setTitle(presentation.title);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+          }}
+          placeholder="Untitled presentation"
+          className="w-40 shrink-0 truncate border-0 bg-transparent px-1 text-sm font-semibold outline-none sm:w-56"
+        />
+        <Divider />
         {canEdit && (
           <>
             <IconButton label="Undo (Ctrl+Z)" onClick={actions.undo} disabled={!history.canUndo}>

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { slidesCollabName } from '@paradocs/shared';
-import { useMarkMentionsRead, useNotifications, usePresentation } from '../../api/hooks';
+import { useMarkMentionsRead, useNotifications, usePresentation, useUpdatePresentation } from '../../api/hooks';
 import { useCollaboration } from '../../lib/collaboration';
 import { EmptyState, Spinner } from '../ui';
 import LiveShowBanner from './LiveShowBanner';
@@ -25,6 +25,7 @@ export default function PresentationView({
   canEdit: boolean;
 }) {
   const record = usePresentation(presentationId);
+  const rename = useUpdatePresentation(workspaceId);
   const { session, peers, status } = useCollaboration(slidesCollabName(presentationId), self);
 
   // Opening a deck you were tagged in answers the tag, however you got here.
@@ -64,6 +65,7 @@ export default function PresentationView({
           session={session}
           peers={peers}
           status={status}
+          onRename={(title) => rename.mutate({ id: presentationId, title })}
         />
       </div>
     </div>
