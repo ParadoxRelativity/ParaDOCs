@@ -44,6 +44,7 @@ const ADMIN_USER_COLUMNS = `u.id, u.email, u.name,
   u.is_server_admin AS "isServerAdmin",
   (u.disabled_at IS NOT NULL) AS disabled,
   u.created_at AS "createdAt",
+  u.created_by_issuer AS "createdBySso",
   (SELECT max(s.created_at) FROM sessions s WHERE s.user_id = u.id) AS "lastSignInAt",
   (SELECT count(*)::int FROM workspace_members m WHERE m.user_id = u.id) AS "workspaceCount",
   u.account_request AS "accountRequest",
@@ -143,10 +144,24 @@ function accountId(id: string): string {
   return id;
 }
 
+/** Puts the provider's name in place of the issuer ADMIN_USER_COLUMNS reads for createdBySso. */
+async function nameProviders(users: AdminUser[]): Promise<AdminUser[]> {
+  if (!users.some((u) => u.createdBySso)) return users;
+  // The issuer stored is the one the provider reports, which may differ from
+  // the address typed in by a trailing slash.
+  const key = (issuer: string) => issuer.replace(/\/+$/, '');
+  const names = new Map<string, string>();
+  // Listed first wins, should two providers share an issuer.
+  for (const p of await listProviders()) if (!names.has(key(p.issuer))) names.set(key(p.issuer), p.name);
+  return users.map((u) =>
+    u.createdBySso ? { ...u, createdBySso: names.get(key(u.createdBySso)) ?? u.createdBySso } : u,
+  );
+}
+
 async function loadUser(id: string): Promise<AdminUser> {
   const { rows } = await query<AdminUser>(`SELECT ${ADMIN_USER_COLUMNS} FROM users u WHERE u.id = $1`, [id]);
   if (!rows[0]) throw notFound('Account not found');
-  return rows[0];
+  return (await nameProviders(rows))[0];
 }
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
@@ -392,7 +407,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           [pattern],
         ),
       ]);
-      return { users, total: counted[0].total, requests: counted[0].requests };
+      return { users: await nameProviders(users), total: counted[0].total, requests: counted[0].requests };
     });
 
     /**
