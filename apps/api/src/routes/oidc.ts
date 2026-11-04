@@ -287,6 +287,7 @@ async function accountFor(
       email: identity.email,
       name: identity.name ?? identity.email.split('@')[0],
       passwordHash: null,
+      createdByIssuer: identity.issuer,
     });
     await link(user.id);
     log.info({ userId: user.id, provider: provider.slug }, 'account created by single sign-on');

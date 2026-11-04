@@ -58,6 +58,12 @@ export interface AdminUser {
   isServerAdmin: boolean;
   disabled: boolean;
   createdAt: string;
+  /**
+   * The single sign-on provider that made the account, by name, or by issuer
+   * when no provider with that issuer is set up any more. Null for an account
+   * made any other way.
+   */
+  createdBySso: string | null;
   /** When they last signed in to the app, if their session is still around. */
   lastSignInAt: string | null;
   workspaceCount: number;

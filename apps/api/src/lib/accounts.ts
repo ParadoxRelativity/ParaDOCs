@@ -10,15 +10,22 @@ import { addDefaultVoiceChannel } from '../routes/voice.js';
  */
 export async function createAccount(
   client: DbClient,
-  input: { email: string; name: string; passwordHash: string | null; isServerAdmin?: boolean },
+  input: {
+    email: string;
+    name: string;
+    passwordHash: string | null;
+    isServerAdmin?: boolean;
+    /** The issuer of the single sign-on provider making the account, if one is. */
+    createdByIssuer?: string;
+  },
 ): Promise<{ id: string; email: string; name: string }> {
   const dup = await client.query('SELECT 1 FROM users WHERE lower(email) = lower($1)', [input.email]);
   if (dup.rowCount) throw conflict('An account with that email already exists');
 
   const { rows } = await client.query<{ id: string; email: string; name: string }>(
-    `INSERT INTO users (email, password_hash, name, is_server_admin)
-     VALUES ($1, $2, $3, $4) RETURNING id, email, name`,
-    [input.email, input.passwordHash, input.name, input.isServerAdmin ?? false],
+    `INSERT INTO users (email, password_hash, name, is_server_admin, created_by_issuer)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name`,
+    [input.email, input.passwordHash, input.name, input.isServerAdmin ?? false, input.createdByIssuer ?? null],
   );
   const created = rows[0];
 
