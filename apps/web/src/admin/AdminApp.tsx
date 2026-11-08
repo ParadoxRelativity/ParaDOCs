@@ -111,14 +111,25 @@ function Switch({
   );
 }
 
-function Badge({ tone, children }: { tone: 'accent' | 'muted' | 'danger'; children: ReactNode }) {
+function Badge({
+  tone,
+  title,
+  children,
+}: {
+  tone: 'accent' | 'muted' | 'danger';
+  title?: string;
+  children: ReactNode;
+}) {
   const tones = {
     accent: 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]',
     muted: 'border border-[var(--color-line)] text-[var(--color-muted)]',
     danger: 'bg-red-500/10 text-red-500',
   };
   return (
-    <span className={cx('rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide', tones[tone])}>
+    <span
+      title={title}
+      className={cx('rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide', tones[tone])}
+    >
       {children}
     </span>
   );
@@ -598,6 +609,9 @@ function AccountsPanel({ selfId }: { selfId: string }) {
   const query = useDebounced(search.trim(), 250);
   const [requestedOnly, setRequestedOnly] = useState(false);
   const users = useAdminUsers(query, requestedOnly);
+  const providers = useOidcProviders().data?.providers;
+  // With one provider, "SSO" says which; otherwise the badge names it.
+  const soleProvider = providers?.length === 1 ? providers[0].name : null;
   const requests = users.data?.requests ?? 0;
   const [creating, setCreating] = useState(false);
   const [managingId, setManagingId] = useState<string | null>(null);
@@ -678,6 +692,11 @@ function AccountsPanel({ selfId }: { selfId: string }) {
                     {u.id === selfId && <Badge tone="muted">You</Badge>}
                     {u.isServerAdmin && <Badge tone="accent">Admin</Badge>}
                     {u.disabled && <Badge tone="danger">Disabled</Badge>}
+                    {u.createdBySso && (
+                      <Badge tone="muted" title={`Created by single sign-on through ${u.createdBySso}`}>
+                        {u.createdBySso === soleProvider ? 'SSO' : `SSO · ${u.createdBySso}`}
+                      </Badge>
+                    )}
                     {u.accountRequest && (
                       <Badge tone="danger">{u.accountRequest === 'disable' ? 'Disable requested' : 'Deletion requested'}</Badge>
                     )}
@@ -827,7 +846,8 @@ function ManageAccountDialog({ user, self, onClose }: { user: AdminUser; self: b
     >
       <div className="scroll-thin max-h-[65vh] overflow-y-auto pr-1">
         <p className="mb-4 text-xs text-[var(--color-muted)]">
-          Created {formatDateTime(user.createdAt)} · member of {user.workspaceCount} workspace
+          Created {formatDateTime(user.createdAt)}
+          {user.createdBySso && ` by single sign-on through ${user.createdBySso}`} · member of {user.workspaceCount} workspace
           {user.workspaceCount === 1 ? '' : 's'} ·{' '}
           {user.lastSignInAt ? `last signed in ${formatRelative(user.lastSignInAt)}` : 'no active sessions'}
         </p>
