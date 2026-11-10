@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { memberRef, parseMessage, type WorkspaceMember } from '@paradocs/shared';
 import { cx } from '../../lib/util';
-import Avatar from '../Avatar';
+import { PresenceAvatar, STATUS_LABEL, useStatusOf } from '../Presence';
 
 /**
  * Tagging people in canvas text.
@@ -91,6 +91,8 @@ export function MentionPicker({
   onDismiss: () => void;
 }) {
   const needle = query.trim().toLowerCase();
+  // Canvas and slide text know no workspace of their own; the address does.
+  const statusOf = useStatusOf();
   const matches = useMemo(
     () =>
       members
@@ -144,22 +146,33 @@ export function MentionPicker({
       // close the very editor this list is for.
       onMouseDown={(event) => event.preventDefault()}
     >
-      {matches.map((member, index) => (
-        <button
-          key={member.id}
-          role="option"
-          aria-selected={index === active}
-          onMouseEnter={() => setActive(index)}
-          onClick={() => onPick(member)}
-          className={cx(
-            'flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm',
-            index === active ? 'bg-[var(--color-surface)]' : 'hover:bg-[var(--color-surface)]',
-          )}
-        >
-          <Avatar name={member.name} url={member.avatarUrl} seed={member.id} size="sm" />
-          <span className="min-w-0 flex-1 truncate">{member.name}</span>
-        </button>
-      ))}
+      {matches.map((member, index) => {
+        const status = statusOf(member.id);
+        return (
+          <button
+            key={member.id}
+            role="option"
+            aria-selected={index === active}
+            onMouseEnter={() => setActive(index)}
+            onClick={() => onPick(member)}
+            className={cx(
+              'flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm',
+              index === active ? 'bg-[var(--color-surface)]' : 'hover:bg-[var(--color-surface)]',
+            )}
+          >
+            <PresenceAvatar
+              name={member.name}
+              url={member.avatarUrl}
+              seed={member.id}
+              size="sm"
+              status={status}
+              ring={index === active ? 'var(--color-surface)' : 'var(--color-raised)'}
+            />
+            <span className="min-w-0 flex-1 truncate">{member.name}</span>
+            {status && <span className="shrink-0 text-xs text-[var(--color-muted)]">{STATUS_LABEL[status]}</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }

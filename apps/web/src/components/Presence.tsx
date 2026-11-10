@@ -1,5 +1,7 @@
+import { useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import type { PresenceStatus } from '@paradocs/shared';
-import { usePresenceSettings, useUpdatePresenceSettings } from '../api/hooks';
+import { usePresence, usePresenceSettings, useUpdatePresenceSettings } from '../api/hooks';
 import { cx } from '../lib/util';
 import Avatar from './Avatar';
 import Icon from './Icon';
@@ -68,6 +70,27 @@ export function PresenceAvatar({
       )}
     </span>
   );
+}
+
+/**
+ * Whether each person in a workspace is around, for showing beside their name
+ * wherever someone is being picked. Without a workspace — passed, or in the
+ * address — nobody's status is known, and pickers simply show none.
+ *
+ * Reads the same cache the chat socket keeps current, so it costs nothing
+ * where the workspace is already open.
+ */
+export function useStatusOf(workspaceId?: string): (userId: string) => PresenceStatus | undefined {
+  const params = useParams();
+  const { data } = usePresence(workspaceId ?? params.workspaceId);
+  // Stable until someone's status changes, so a memoized list can depend on it.
+  return useCallback((userId: string) => (data ? (data[userId] ?? 'offline') : undefined), [data]);
+}
+
+/** A picker row's hint with the person's status in front of it, so it reads without the dot's color. */
+export function withStatus(hint: string, status: PresenceStatus | undefined): string {
+  if (!status) return hint;
+  return hint ? `${STATUS_LABEL[status]} · ${hint}` : STATUS_LABEL[status];
 }
 
 export const AWAY_AFTER_CHOICES: { minutes: number; label: string }[] = [

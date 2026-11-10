@@ -41,6 +41,7 @@ import { replaceShortcodes, searchEmoji, type EmojiOption } from '../../lib/emoj
 import { cx, formatBytes, useDebounced } from '../../lib/util';
 import Icon, { DocumentIcon, PresentationIcon, SpreadsheetIcon } from '../Icon';
 import { useToast } from '../Toast';
+import { PresenceAvatar, useStatusOf, withStatus } from '../Presence';
 import { IconButton } from '../ui';
 import { EmojiPicker } from './EmojiPicker';
 import { fileIcon } from './MessageAttachments';
@@ -214,6 +215,7 @@ export const MessageComposer = forwardRef<
   });
   const projects = useProjects(trigger?.kind === 'workItem' && projectsOn ? workspaceId : undefined);
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
+  const statusOf = useStatusOf(workspaceId);
   // Schedules are few enough to send whole, and offered after documents and spreadsheets.
   const schedulesOn = useAppEnabled(workspaceId, 'schedules');
   const schedules = useSchedules(trigger?.kind === 'document' && schedulesOn ? workspaceId : undefined);
@@ -260,8 +262,19 @@ export const MessageComposer = forwardRef<
         .slice(0, PICKER_LIMIT - here.length)
         .map((m) => ({
           id: m.userId,
+          icon: (
+            <PresenceAvatar
+              name={m.name}
+              url={m.avatarUrl}
+              seed={m.userId}
+              size="xs"
+              status={statusOf(m.userId)}
+              ring="var(--color-raised)"
+              className="align-middle"
+            />
+          ),
           label: `@${m.name}`,
-          hint: m.isSelf ? 'you' : m.email,
+          hint: withStatus(m.isSelf ? 'you' : m.email, statusOf(m.userId)),
           insert: `@${m.name}`,
           token: memberRef(m.userId),
         }));
@@ -338,7 +351,7 @@ export const MessageComposer = forwardRef<
     // A presentation or schedule named exactly as typed still makes the list when documents fill it.
     const others = [...presentationOptions, ...scheduleOptions];
     return [...linked, ...others].slice(0, PICKER_LIMIT + Math.min(2, others.length));
-  }, [trigger, channels, direct, targets.data, workItems.data, projects.data, members.data, schedules.data, emojiOptions]);
+  }, [trigger, channels, direct, targets.data, workItems.data, projects.data, members.data, statusOf, schedules.data, emojiOptions]);
 
   // Grow with the text, up to a limit, and shrink back once it is sent.
   useLayoutEffect(() => {
