@@ -20,7 +20,7 @@ import {
   useWorkItemListing,
 } from '../../api/hooks';
 import { cx, useDebounced } from '../../lib/util';
-import Avatar from '../Avatar';
+import { PresenceAvatar, useStatusOf, withStatus } from '../Presence';
 import Icon, { DocumentIcon, PresentationIcon, SpreadsheetIcon } from '../Icon';
 import { INSERTED_REF, WORK_ITEM_TRIGGER, matchProjects, projectLabel } from '../chat/MessageComposer';
 import { Button } from '../ui';
@@ -165,6 +165,7 @@ export default function ReferenceEditor({
   const linking = trigger?.kind === 'link';
   const itemSearch = trigger?.kind === 'item';
   const members = useMembers(trigger?.kind === 'member' ? workspaceId : undefined);
+  const statusOf = useStatusOf(workspaceId);
   const channels = useChannels(trigger?.kind === 'channel' && chatOn ? workspaceId : undefined);
   // Searched on the server as the name is typed, so nothing is out of reach
   // however many documents and spreadsheets the workspace holds.
@@ -188,9 +189,18 @@ export default function ReferenceEditor({
         .slice(0, LIMIT)
         .map((m) => ({
           id: m.userId,
-          icon: <Avatar name={m.name} url={m.avatarUrl} seed={m.userId} size="xs" />,
+          icon: (
+            <PresenceAvatar
+              name={m.name}
+              url={m.avatarUrl}
+              seed={m.userId}
+              size="xs"
+              status={statusOf(m.userId)}
+              ring="var(--color-raised)"
+            />
+          ),
           label: m.name,
-          hint: m.isSelf ? 'you' : m.email,
+          hint: withStatus(m.isSelf ? 'you' : m.email, statusOf(m.userId)),
           insert: `@${m.name}`,
           token: memberRef(m.userId),
         }));
@@ -248,7 +258,7 @@ export default function ReferenceEditor({
       token: presentationRef(p.id),
     }));
     return [...docs, ...sheets, ...decks].slice(0, LIMIT);
-  }, [trigger, members.data, channels.data, targets.data, workItems.data, projects.data]);
+  }, [trigger, members.data, statusOf, channels.data, targets.data, workItems.data, projects.data]);
 
   useLayoutEffect(() => {
     const el = input.current;

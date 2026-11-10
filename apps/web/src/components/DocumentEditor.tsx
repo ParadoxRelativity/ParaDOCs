@@ -15,6 +15,7 @@ import DocumentMeta from './DocumentMeta';
 import CanvasEditor from './canvas/CanvasEditor';
 import { Spinner } from './ui';
 import Avatar from './Avatar';
+import { PresenceAvatar, useStatusOf, withStatus } from './Presence';
 import { documentSchema, type DocumentBlockEditor } from './documentSchema';
 import Icon from './Icon';
 import SheetRefPicker, { type PickedSheetRef } from './sheet/SheetRefPicker';
@@ -146,6 +147,7 @@ function EditorSurface({
   const [projectPicker, setProjectPicker] = useState(false);
   const channels = useChannels(chatOn ? workspaceId : undefined);
   const members = useMembers(workspaceId);
+  const statusOf = useStatusOf(workspaceId);
 
   // The slash menu's spreadsheet items ask which cell or chart first.
   const [sheetPicker, setSheetPicker] = useState<'cell' | 'chart' | null>(null);
@@ -383,7 +385,16 @@ function EditorSurface({
                   .slice(0, 8)
                   .map((member) => ({
                     title: mentionLabel(member.name),
-                    subtext: member.isSelf ? 'You' : member.email,
+                    subtext: withStatus(member.isSelf ? 'You' : member.email, statusOf(member.userId)),
+                    icon: (
+                      <PresenceAvatar
+                        name={member.name}
+                        url={member.avatarUrl}
+                        seed={member.userId}
+                        size="sm"
+                        status={statusOf(member.userId)}
+                      />
+                    ),
                     group: 'People',
                     onItemClick: () => {
                       editor.insertInlineContent([
