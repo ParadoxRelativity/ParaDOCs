@@ -12,7 +12,7 @@ import type {
 } from '@paradocs/shared';
 import { AppLauncher, type AppEntry } from './AppLauncher';
 import { Popover } from './Popover';
-import { PresenceAvatar, STATUS_LABEL, StatusMenu } from './Presence';
+import { PresenceAvatar, STATUS_LABEL, StatusDot, StatusMenu } from './Presence';
 import {
   useAppEnabled,
   useCreateDocument,
@@ -24,6 +24,7 @@ import {
   useTags,
   useTeams,
   useFolderDocuments,
+  useMembers,
   useNotifications,
   useTree,
   type WorkspaceSummary,
@@ -587,12 +588,16 @@ export default function LeftSidebar(props: Props) {
         </div>
       )}
 
-      <AccountFooter
-        user={props.user}
-        status={props.selfStatus}
-        onOpenSettings={() => props.onOpenSettings('account')}
-        onSignOut={props.onSignOut}
-      />
+      {/* Who is around and who you are, together at the foot of every app. */}
+      <div className="border-t border-[var(--color-line)]">
+        <OnlineCount workspaceId={props.workspaceId} presence={props.presence} selfStatus={props.selfStatus} />
+        <AccountFooter
+          user={props.user}
+          status={props.selfStatus}
+          onOpenSettings={() => props.onOpenSettings('account')}
+          onSignOut={props.onSignOut}
+        />
+      </div>
 
       {workspaceDialogOpen && (
         <NewWorkspaceDialog
@@ -1219,6 +1224,83 @@ function OtherConnection({ connection, onChosen }: { connection: DesktopConnecti
  * The signed-in account at the foot of the sidebar. The picture carries your
  * status and opens the menu to change it; the name opens Settings.
  */
+/**
+ * How many of the workspace's people are around, at the foot of every app,
+ * and who they are a click away. Around means connected — away and busy
+ * included — the way the chat members list counts it.
+ */
+function OnlineCount({
+  workspaceId,
+  presence,
+  selfStatus,
+}: {
+  workspaceId: string;
+  presence: Record<string, PresenceStatus>;
+  /** Your own status as this window sees it, which is ahead of the server's echo. */
+  selfStatus: PresenceStatus;
+}) {
+  const members = useMembers(workspaceId);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  if (!members.data) return null;
+
+  // A disabled account can never be around, so it is not counted as someone who might be.
+  const everyone = members.data
+    .filter((m) => !m.disabled)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const statusOf = (m: (typeof everyone)[number]): PresenceStatus =>
+    m.isSelf ? selfStatus : (presence[m.userId] ?? 'offline');
+  const around = everyone.filter((m) => statusOf(m) !== 'offline');
+  const offline = everyone.length - around.length;
+
+  return (
+    <div className="px-2 pt-1.5">
+      <button
+        onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}
+        aria-expanded={anchor !== null}
+        title="Who is online"
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-[var(--color-muted)] hover:bg-[var(--color-line)]/50"
+      >
+        <StatusDot status={around.length > 0 ? 'online' : 'offline'} />
+        <span className="min-w-0 flex-1 truncate">
+          <span className="font-medium text-[var(--color-ink)]">{around.length}</span> online
+          <span aria-hidden> · </span>
+          {offline} offline
+        </span>
+      </button>
+
+      {anchor && (
+        <Popover anchor={anchor} placement="above" onClose={() => setAnchor(null)} className="w-64 p-1.5">
+          <div className="px-2 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
+            Online · {around.length}
+          </div>
+          <div className="scroll-thin max-h-72 overflow-y-auto">
+            {around.map((m) => (
+              <div key={m.userId} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm">
+                <PresenceAvatar
+                  name={m.name}
+                  url={m.avatarUrl}
+                  seed={m.userId}
+                  size="sm"
+                  status={statusOf(m)}
+                  ring="var(--color-raised)"
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {m.name}
+                  {m.isSelf && <span className="text-[var(--color-muted)]"> (you)</span>}
+                </span>
+                <span className="shrink-0 text-xs text-[var(--color-muted)]">{STATUS_LABEL[statusOf(m)]}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-1 border-t border-[var(--color-line)] px-2 pt-1.5 text-xs text-[var(--color-muted)]">
+            {offline === 1 ? '1 person offline' : `${offline} people offline`}
+          </div>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
 function AccountFooter({
   user,
   status,
@@ -1233,7 +1315,7 @@ function AccountFooter({
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
 
   return (
-    <div className="flex items-center gap-1 border-t border-[var(--color-line)] p-2">
+    <div className="flex items-center gap-1 p-2">
       <button
         onClick={(e) => setMenuAnchor(menuAnchor ? null : e.currentTarget)}
         aria-expanded={menuAnchor !== null}
